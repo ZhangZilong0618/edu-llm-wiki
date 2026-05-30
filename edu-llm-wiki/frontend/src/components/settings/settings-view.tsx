@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { api, type LlmSettings, type EmbeddingSettings } from "@/lib/api"
-import { Eye, EyeOff, Save, Check } from "lucide-react"
+import { Eye, EyeOff, Save, Check, Loader } from "lucide-react"
+import { toast } from "@/components/ui/toast"
 
 const PROVIDERS = [
   { value: "openai", label: "OpenAI", baseUrl: "" },
@@ -40,6 +41,7 @@ export function SettingsView() {
   })
   const [showKey, setShowKey] = useState(false)
   const [llmSaved, setLlmSaved] = useState(false)
+  const [llmTesting, setLlmTesting] = useState(false)
 
   // Embedding
   const [emb, setEmb] = useState<EmbeddingSettings>({
@@ -63,9 +65,21 @@ export function SettingsView() {
   }, [])
 
   const saveLlm = async () => {
-    await api.saveLlmSettings(llm)
-    setLlmSaved(true)
-    setTimeout(() => setLlmSaved(false), 2000)
+    setLlmTesting(true)
+    toast({ type: "loading", message: "Testing connection..." })
+    try {
+      const result = await api.testLlmConnection(llm)
+      if (result.ok) {
+        toast({ type: "success", message: result.message })
+        setLlmSaved(true)
+        setTimeout(() => setLlmSaved(false), 2000)
+      } else {
+        toast({ type: "error", message: result.message })
+      }
+    } catch (e: any) {
+      toast({ type: "error", message: e.message || "Connection test failed" })
+    }
+    setLlmTesting(false)
   }
 
   const saveEmb = async () => {
@@ -181,10 +195,11 @@ export function SettingsView() {
 
           <button
             onClick={saveLlm}
-            className="flex items-center gap-2 px-4 py-1.5 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm hover:opacity-90 transition-opacity"
+            disabled={llmTesting}
+            className="flex items-center gap-2 px-4 py-1.5 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm hover:opacity-90 transition-opacity disabled:opacity-50"
           >
-            {llmSaved ? <Check size={14} /> : <Save size={14} />}
-            {llmSaved ? "Saved" : "Save LLM Config"}
+            {llmTesting ? <Loader size={14} className="animate-spin" /> : llmSaved ? <Check size={14} /> : <Save size={14} />}
+            {llmTesting ? "Testing..." : llmSaved ? "Saved" : "Save & Test Connection"}
           </button>
         </section>
 

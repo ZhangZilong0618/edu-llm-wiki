@@ -79,6 +79,8 @@ export const api = {
   getLlmSettings: () => request<LlmSettings>(`${BASE}/settings/llm`),
   saveLlmSettings: (data: LlmSettings) =>
     request<{ status: string }>(`${BASE}/settings/llm`, { method: "PUT", body: JSON.stringify(data) }),
+  testLlmConnection: (data: LlmSettings) =>
+    request<{ ok: boolean; message: string }>(`${BASE}/settings/llm/test`, { method: "POST", body: JSON.stringify(data) }),
   getEmbeddingSettings: () => request<EmbeddingSettings>(`${BASE}/settings/embedding`),
   saveEmbeddingSettings: (data: EmbeddingSettings) =>
     request<{ status: string }>(`${BASE}/settings/embedding`, { method: "PUT", body: JSON.stringify(data) }),

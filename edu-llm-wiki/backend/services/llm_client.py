@@ -107,3 +107,49 @@ async def chat_complete(
 
     resp = await client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content
+
+
+async def test_connection(data) -> tuple[bool, str]:
+    """Test LLM connection with a minimal request. Returns (ok, message)."""
+    provider = data.llm_provider
+    base_url = data.llm_base_url or None
+    api_key = data.llm_api_key or "ollama"
+    model = data.llm_model
+    max_tokens = data.llm_max_tokens
+    temperature = data.llm_temperature
+
+    try:
+        if provider == "anthropic":
+            client = AsyncAnthropic(api_key=api_key, base_url=base_url)
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=min(max_tokens, 50),
+                system="Reply with exactly: OK",
+                messages=[{"role": "user", "content": "Say OK"}],
+                temperature=temperature,
+            )
+            content = resp.content[0].text if resp.content else ""
+            return True, f"Connected — model responded: {content[:80]}"
+        else:
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Reply with exactly: OK"},
+                    {"role": "user", "content": "Say OK"},
+                ],
+                max_tokens=min(max_tokens, 50),
+                temperature=temperature,
+            )
+            content = resp.choices[0].message.content or ""
+            return True, f"Connected — model responded: {content[:80]}"
+    except Exception as e:
+        msg = str(e)
+        # Extract useful info from common errors
+        if "401" in msg or "Unauthorized" in msg:
+            return False, "Authentication failed — check your API key"
+        if "404" in msg or "Not Found" in msg:
+            return False, f"Model '{model}' not found — check model name"
+        if "Connection" in msg or "refused" in msg or "timeout" in msg:
+            return False, f"Connection failed — check Base URL: {msg[:120]}"
+        return False, msg[:200]

@@ -130,6 +130,24 @@ async def save_llm_settings(data: LlmSettings):
     return {"status": "saved"}
 
 
+@router.post("/llm/test")
+async def test_llm_connection(data: LlmSettings):
+    """Save settings and test the LLM connection with a minimal request."""
+    updates = {
+        "LLM_PROVIDER": data.llm_provider,
+        "LLM_API_KEY": data.llm_api_key,
+        "LLM_MODEL": data.llm_model,
+        "LLM_BASE_URL": data.llm_base_url,
+        "LLM_MAX_TOKENS": str(data.llm_max_tokens),
+        "LLM_TEMPERATURE": str(data.llm_temperature),
+    }
+    _write_env(updates)
+
+    from services.llm_client import test_connection
+    ok, message = await test_connection(data)
+    return {"ok": ok, "message": message}
+
+
 @router.get("/embedding")
 async def get_embedding_settings():
     """Get embedding configuration."""
