@@ -10,7 +10,8 @@ def get_llm_client():
     provider = settings.llm_provider
 
     if provider == "anthropic":
-        return AsyncAnthropic(api_key=settings.llm_api_key)
+        base_url = settings.llm_base_url or None
+        return AsyncAnthropic(api_key=settings.llm_api_key, base_url=base_url)
 
     # OpenAI, Ollama, Custom (all OpenAI-compatible)
     base_url = settings.llm_base_url or None

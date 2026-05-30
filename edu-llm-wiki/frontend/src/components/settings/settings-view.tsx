@@ -3,13 +3,30 @@ import { api, type LlmSettings, type EmbeddingSettings } from "@/lib/api"
 import { Eye, EyeOff, Save, Check } from "lucide-react"
 
 const PROVIDERS = [
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "google", label: "Google Gemini" },
-  { value: "azure", label: "Azure OpenAI" },
-  { value: "ollama", label: "Ollama (Local)" },
-  { value: "custom", label: "Custom (OpenAI-compatible)" },
+  { value: "openai", label: "OpenAI", baseUrl: "" },
+  { value: "anthropic", label: "Anthropic", baseUrl: "" },
+  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1" },
+  { value: "google", label: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/" },
+  { value: "azure", label: "Azure OpenAI", baseUrl: "" },
+  { value: "groq", label: "Groq", baseUrl: "https://api.groq.com/openai/v1" },
+  { value: "together", label: "Together AI", baseUrl: "https://api.together.xyz/v1" },
+  { value: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
+  { value: "ollama", label: "Ollama (Local)", baseUrl: "http://localhost:11434/v1" },
+  { value: "custom", label: "Custom (OpenAI-compatible)", baseUrl: "" },
 ]
+
+const DEFAULT_MODELS: Record<string, string> = {
+  openai: "gpt-4o-mini",
+  anthropic: "claude-sonnet-4-6",
+  deepseek: "deepseek-chat",
+  google: "gemini-2.0-flash",
+  azure: "gpt-4o-mini",
+  groq: "llama-4-maverick-17b-128e-instruct",
+  together: "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+  openrouter: "openai/gpt-4o-mini",
+  ollama: "llama3.2",
+  custom: "gpt-4o-mini",
+}
 
 export function SettingsView() {
   // LLM
@@ -63,7 +80,7 @@ export function SettingsView() {
     setTimeout(() => setPurposeSaved(false), 2000)
   }
 
-  const needsCustomUrl = ["ollama", "custom"].includes(llm.llm_provider)
+  const needsCustomUrl = ["google", "azure", "deepseek", "groq", "together", "openrouter", "ollama", "custom"].includes(llm.llm_provider)
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -78,7 +95,15 @@ export function SettingsView() {
             <label className="text-xs font-medium text-[var(--muted-foreground)]">Provider</label>
             <select
               value={llm.llm_provider}
-              onChange={(e) => setLlm({ ...llm, llm_provider: e.target.value })}
+              onChange={(e) => {
+                const p = PROVIDERS.find((x) => x.value === e.target.value)
+                setLlm({
+                  ...llm,
+                  llm_provider: e.target.value,
+                  llm_base_url: p?.baseUrl ?? "",
+                  llm_model: DEFAULT_MODELS[e.target.value] ?? "gpt-4o-mini",
+                })
+              }}
               className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
             >
               {PROVIDERS.map((p) => (
@@ -124,7 +149,7 @@ export function SettingsView() {
                 type="text"
                 value={llm.llm_base_url}
                 onChange={(e) => setLlm({ ...llm, llm_base_url: e.target.value })}
-                placeholder={llm.llm_provider === "ollama" ? "http://localhost:11434/v1" : "https://api.example.com/v1"}
+                placeholder={PROVIDERS.find((p) => p.value === llm.llm_provider)?.baseUrl || "https://api.example.com/v1"}
                 className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
               />
             </div>
