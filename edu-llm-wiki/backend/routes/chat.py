@@ -14,7 +14,7 @@ SYSTEM_PROMPT = """You are an expert educational assistant with access to a know
 
 ## Instructions
 - Answer questions based on the provided wiki pages and your knowledge.
-- When citing wiki pages, use the format: [{number}] where number corresponds to the page number in the context.
+- When citing wiki pages, use the format: [{{number}}] where number corresponds to the page number in the context.
 - Be precise and educational. Explain concepts clearly.
 - If the wiki content doesn't fully answer the question, supplement with your knowledge but clearly distinguish.
 - Use LaTeX for mathematical formulas: inline $...$ and block $$...$$.
