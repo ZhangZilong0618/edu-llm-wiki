@@ -117,6 +117,21 @@ Example:
 """
 
 
+def _repair_json(text: str) -> str:
+    """Repair truncated/malformed JSON from LLM output."""
+    # Remove trailing commas before closing brackets/braces
+    import re
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    # If last char is inside an unterminated string, close it
+    if text.count('"') % 2 != 0:
+        text += '"'
+    # Close open brackets/braces by counting
+    open_count = text.count("{") - text.count("}")
+    close_count = text.count("[") - text.count("]")
+    text += "}" * open_count + "]" * close_count
+    return text
+
+
 async def read_context() -> str:
     """Read purpose.md and index.md for context."""
     from storage.wiki_store import wiki_path
@@ -169,7 +184,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
                 content=content, context=context[:3000]
             )}],
             temperature=0.2,
-            max_tokens=4096,
+            max_tokens=8192,
         )
         # Strip markdown code fences if present
         analysis_raw = analysis_raw.strip()
@@ -177,6 +192,8 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
             analysis_raw = analysis_raw.split("```")[1]
             if analysis_raw.startswith("json"):
                 analysis_raw = analysis_raw[4:]
+        # Repair truncated JSON by closing open structures
+        analysis_raw = _repair_json(analysis_raw)
         analysis = json.loads(analysis_raw)
     except Exception as e:
         return {"source": source_relative_path, "status": "error",
@@ -205,6 +222,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
             gen_raw = gen_raw.split("```")[1]
             if gen_raw.startswith("json"):
                 gen_raw = gen_raw[4:]
+        gen_raw = _repair_json(gen_raw)
         pages = json.loads(gen_raw)
     except Exception as e:
         return {"source": source_relative_path, "status": "error",
