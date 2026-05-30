@@ -6,7 +6,7 @@ import { toast } from "@/components/ui/toast"
 const PROVIDERS = [
   { value: "openai", label: "OpenAI", baseUrl: "" },
   { value: "anthropic", label: "Anthropic", baseUrl: "" },
-  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1" },
+  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com" },
   { value: "google", label: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/" },
   { value: "azure", label: "Azure OpenAI", baseUrl: "" },
   { value: "groq", label: "Groq", baseUrl: "https://api.groq.com/openai/v1" },
@@ -19,7 +19,7 @@ const PROVIDERS = [
 const DEFAULT_MODELS: Record<string, string> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-sonnet-4-6",
-  deepseek: "deepseek-chat",
+  deepseek: "deepseek-v4-flash",
   google: "gemini-2.0-flash",
   azure: "gpt-4o-mini",
   groq: "llama-4-maverick-17b-128e-instruct",
