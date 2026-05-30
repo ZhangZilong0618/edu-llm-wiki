@@ -42,6 +42,7 @@ export function SettingsView() {
   const [showKey, setShowKey] = useState(false)
   const [llmSaved, setLlmSaved] = useState(false)
   const [llmTesting, setLlmTesting] = useState(false)
+  const updateLlm = (patch: Partial<LlmSettings>) => { setLlm((p) => ({ ...p, ...patch })); setLlmSaved(false) }
 
   // Embedding
   const [emb, setEmb] = useState<EmbeddingSettings>({
@@ -51,11 +52,13 @@ export function SettingsView() {
     embedding_model: "nomic-embed-text",
   })
   const [embSaved, setEmbSaved] = useState(false)
+  const updateEmb = (patch: Partial<EmbeddingSettings>) => { setEmb((p) => ({ ...p, ...patch })); setEmbSaved(false) }
 
   // Purpose / Schema
   const [purpose, setPurpose] = useState("")
   const [schema, setSchema] = useState("")
   const [purposeSaved, setPurposeSaved] = useState(false)
+  const [schemaSaved, setSchemaSaved] = useState(false)
 
   useEffect(() => {
     api.getLlmSettings().then(setLlm).catch(console.error)
@@ -72,7 +75,6 @@ export function SettingsView() {
       if (result.ok) {
         toast({ type: "success", message: result.message })
         setLlmSaved(true)
-        setTimeout(() => setLlmSaved(false), 2000)
       } else {
         toast({ type: "error", message: result.message })
       }
@@ -85,13 +87,16 @@ export function SettingsView() {
   const saveEmb = async () => {
     await api.saveEmbeddingSettings(emb)
     setEmbSaved(true)
-    setTimeout(() => setEmbSaved(false), 2000)
   }
 
   const savePurpose = async () => {
     await api.updatePurpose(purpose)
     setPurposeSaved(true)
-    setTimeout(() => setPurposeSaved(false), 2000)
+  }
+
+  const saveSchema = async () => {
+    await api.updateSchema(schema)
+    setSchemaSaved(true)
   }
 
   const needsCustomUrl = ["google", "azure", "deepseek", "groq", "together", "openrouter", "ollama", "custom"].includes(llm.llm_provider)
@@ -111,8 +116,7 @@ export function SettingsView() {
               value={llm.llm_provider}
               onChange={(e) => {
                 const p = PROVIDERS.find((x) => x.value === e.target.value)
-                setLlm({
-                  ...llm,
+                updateLlm({
                   llm_provider: e.target.value,
                   llm_base_url: p?.baseUrl ?? "",
                   llm_model: DEFAULT_MODELS[e.target.value] ?? "gpt-4o-mini",
@@ -132,7 +136,7 @@ export function SettingsView() {
               <input
                 type={showKey ? "text" : "password"}
                 value={llm.llm_api_key}
-                onChange={(e) => setLlm({ ...llm, llm_api_key: e.target.value })}
+                onChange={(e) => updateLlm({ llm_api_key: e.target.value })}
                 placeholder="sk-..."
                 className="w-full rounded-lg border px-3 py-2 pr-10 text-sm bg-[var(--background)] font-mono"
               />
@@ -150,7 +154,7 @@ export function SettingsView() {
             <input
               type="text"
               value={llm.llm_model}
-              onChange={(e) => setLlm({ ...llm, llm_model: e.target.value })}
+              onChange={(e) => updateLlm({ llm_model: e.target.value })}
               placeholder="gpt-4o-mini"
               className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
             />
@@ -162,7 +166,7 @@ export function SettingsView() {
               <input
                 type="text"
                 value={llm.llm_base_url}
-                onChange={(e) => setLlm({ ...llm, llm_base_url: e.target.value })}
+                onChange={(e) => updateLlm({ llm_base_url: e.target.value })}
                 placeholder={PROVIDERS.find((p) => p.value === llm.llm_provider)?.baseUrl || "https://api.example.com/v1"}
                 className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
               />
@@ -175,7 +179,7 @@ export function SettingsView() {
               <input
                 type="number"
                 value={llm.llm_max_tokens}
-                onChange={(e) => setLlm({ ...llm, llm_max_tokens: parseInt(e.target.value) || 8192 })}
+                onChange={(e) => updateLlm({ llm_max_tokens: parseInt(e.target.value) || 8192 })}
                 className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
               />
             </div>
@@ -187,7 +191,7 @@ export function SettingsView() {
                 min="0"
                 max="2"
                 value={llm.llm_temperature}
-                onChange={(e) => setLlm({ ...llm, llm_temperature: parseFloat(e.target.value) || 0.3 })}
+                onChange={(e) => updateLlm({ llm_temperature: parseFloat(e.target.value) || 0.3 })}
                 className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
               />
             </div>
@@ -211,7 +215,7 @@ export function SettingsView() {
             <input
               type="checkbox"
               checked={emb.embedding_enabled}
-              onChange={(e) => setEmb({ ...emb, embedding_enabled: e.target.checked })}
+              onChange={(e) => updateEmb({ embedding_enabled: e.target.checked })}
               className="w-4 h-4 rounded"
             />
             Enable vector semantic search
@@ -224,7 +228,7 @@ export function SettingsView() {
                 <input
                   type="text"
                   value={emb.embedding_endpoint}
-                  onChange={(e) => setEmb({ ...emb, embedding_endpoint: e.target.value })}
+                  onChange={(e) => updateEmb({ embedding_endpoint: e.target.value })}
                   className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
                 />
               </div>
@@ -233,7 +237,7 @@ export function SettingsView() {
                 <input
                   type="text"
                   value={emb.embedding_model}
-                  onChange={(e) => setEmb({ ...emb, embedding_model: e.target.value })}
+                  onChange={(e) => updateEmb({ embedding_model: e.target.value })}
                   className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
                 />
               </div>
@@ -242,7 +246,7 @@ export function SettingsView() {
                 <input
                   type="password"
                   value={emb.embedding_api_key}
-                  onChange={(e) => setEmb({ ...emb, embedding_api_key: e.target.value })}
+                  onChange={(e) => updateEmb({ embedding_api_key: e.target.value })}
                   className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
                 />
               </div>
@@ -266,7 +270,7 @@ export function SettingsView() {
           </h3>
           <textarea
             value={purpose}
-            onChange={(e) => setPurpose(e.target.value)}
+            onChange={(e) => { setPurpose(e.target.value); setPurposeSaved(false) }}
             className="w-full h-36 rounded-lg border px-3 py-2 text-sm font-mono bg-[var(--background)] resize-y"
           />
           <button
@@ -286,15 +290,15 @@ export function SettingsView() {
           </h3>
           <textarea
             value={schema}
-            onChange={(e) => setSchema(e.target.value)}
+            onChange={(e) => { setSchema(e.target.value); setSchemaSaved(false) }}
             className="w-full h-36 rounded-lg border px-3 py-2 text-sm font-mono bg-[var(--background)] resize-y"
           />
           <button
-            onClick={async () => { await api.updateSchema(schema); setSchema(true as any); setTimeout(() => setSchema(schema), 2000) }}
+            onClick={saveSchema}
             className="flex items-center gap-2 px-4 py-1.5 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm hover:opacity-90 transition-opacity"
           >
-            <Save size={14} />
-            Save Schema
+            {schemaSaved ? <Check size={14} /> : <Save size={14} />}
+            {schemaSaved ? "Saved" : "Save Schema"}
           </button>
         </section>
       </div>
