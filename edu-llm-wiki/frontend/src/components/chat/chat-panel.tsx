@@ -1,9 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 import { api } from "@/lib/api"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
-import remarkMath from "remark-math"
-import rehypeKatex from "rehype-katex"
+import { Markdown } from "@/components/markdown"
 import { Send, Loader2 } from "lucide-react"
 
 interface Message {
@@ -84,13 +81,8 @@ export function ChatPanel() {
               }`}
             >
               {msg.role === "assistant" ? (
-                <div className="markdown-body text-sm">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
+                <div className="text-sm">
+                  <Markdown>{msg.content}</Markdown>
                 </div>
               ) : (
                 <p className="whitespace-pre-wrap">{msg.content}</p>

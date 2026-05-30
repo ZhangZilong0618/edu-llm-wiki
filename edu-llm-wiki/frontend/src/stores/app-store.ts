@@ -10,6 +10,7 @@ interface AppState {
   // Selected page for preview
   selectedPage: WikiPage | null
   setSelectedPage: (page: WikiPage | null) => void
+  selectPage: (path: string) => Promise<void>
 
   // Search
   searchQuery: string
@@ -32,12 +33,21 @@ interface AppState {
   setWikiPages: (pages: { path: string; title: string; type: string; summary: string }[]) => void
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   activeView: "wiki",
   setActiveView: (view) => set({ activeView: view }),
 
   selectedPage: null,
   setSelectedPage: (page) => set({ selectedPage: page }),
+  selectPage: async (path: string) => {
+    try {
+      const { api } = await import("@/lib/api")
+      const page = await api.getPage(path)
+      set({ selectedPage: page })
+    } catch {
+      set({ selectedPage: null })
+    }
+  },
 
   searchQuery: "",
   setSearchQuery: (q) => set({ searchQuery: q }),

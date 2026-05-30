@@ -1,8 +1,5 @@
 import { useAppStore } from "@/stores/app-store"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
-import remarkMath from "remark-math"
-import rehypeKatex from "rehype-katex"
+import { Markdown } from "@/components/markdown"
 
 export function PreviewPanel() {
   const selectedPage = useAppStore((s) => s.selectedPage)
@@ -37,13 +34,8 @@ export function PreviewPanel() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 markdown-body">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
-        >
-          {selectedPage.content || "*No content*"}
-        </ReactMarkdown>
+      <div className="flex-1 overflow-y-auto p-4">
+        <Markdown>{selectedPage.content || "*No content*"}</Markdown>
       </div>
     </div>
   )
