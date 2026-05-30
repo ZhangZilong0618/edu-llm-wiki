@@ -1,22 +1,27 @@
 import json
 from typing import AsyncIterator
+import httpx
 from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
 from config import settings
+
+# Shared HTTP client that ignores system proxy settings.
+# The system ALL_PROXY=socks://... breaks httpx (no SOCKS support).
+_http_client = httpx.AsyncClient(trust_env=False)
+
+
+def _client_for(provider: str, api_key: str, base_url: str | None):
+    if provider == "anthropic":
+        return AsyncAnthropic(api_key=api_key, base_url=base_url, http_client=_http_client)
+    return AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=_http_client)
 
 
 def get_llm_client():
     """Return the appropriate LLM client based on provider config."""
     provider = settings.llm_provider
-
-    if provider == "anthropic":
-        base_url = settings.llm_base_url or None
-        return AsyncAnthropic(api_key=settings.llm_api_key, base_url=base_url)
-
-    # OpenAI, Ollama, Custom (all OpenAI-compatible)
+    api_key = settings.llm_api_key or "ollama"
     base_url = settings.llm_base_url or None
-    api_key = settings.llm_api_key or "ollama"  # ollama doesn't need a real key
-    return AsyncOpenAI(api_key=api_key, base_url=base_url)
+    return _client_for(provider, api_key, base_url)
 
 
 async def stream_chat(
@@ -119,8 +124,8 @@ async def test_connection(data) -> tuple[bool, str]:
     temperature = data.llm_temperature
 
     try:
+        client = _client_for(provider, api_key, base_url)
         if provider == "anthropic":
-            client = AsyncAnthropic(api_key=api_key, base_url=base_url)
             resp = await client.messages.create(
                 model=model,
                 max_tokens=min(max_tokens, 50),
@@ -131,7 +136,6 @@ async def test_connection(data) -> tuple[bool, str]:
             content = resp.content[0].text if resp.content else ""
             return True, f"Connected — model responded: {content[:80]}"
         else:
-            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
             resp = await client.chat.completions.create(
                 model=model,
                 messages=[
@@ -145,7 +149,6 @@ async def test_connection(data) -> tuple[bool, str]:
             return True, f"Connected — model responded: {content[:80]}"
     except Exception as e:
         msg = str(e)
-        # Extract useful info from common errors
         if "401" in msg or "Unauthorized" in msg:
             return False, "Authentication failed — check your API key"
         if "404" in msg or "Not Found" in msg:
