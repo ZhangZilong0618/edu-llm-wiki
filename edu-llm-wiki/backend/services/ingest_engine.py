@@ -184,10 +184,11 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
 
     # Step 2: Generation
     try:
-        purpose = (wiki_path := Path(settings.wiki_dir), wiki_path / "purpose.md")
-        schema = (wiki_path := Path(settings.wiki_dir), wiki_path / "schema.md")
-        purpose_text = purpose[0].read_text(encoding="utf-8")[:3000] if purpose[0].exists() else "Not defined yet"
-        schema_text = schema[0].read_text(encoding="utf-8")[:3000] if schema[0].exists() else "Not defined yet"
+        wiki_path = Path(settings.wiki_dir)
+        purpose_path = wiki_path / "purpose.md"
+        schema_path = wiki_path / "schema.md"
+        purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
+        schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
 
         gen_raw = await chat_complete(
             system_prompt="You are an expert educational content creator. Output ONLY valid JSON array.",
