@@ -3,7 +3,7 @@ import type { WikiPage, SearchResponse, GraphData, GraphInsight, ChatResponse, I
 const BASE = "/api"
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${url}`, {
+  const res = await fetch(url, {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   })
