@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import hashlib
 import yaml
 from pathlib import Path
@@ -10,24 +11,24 @@ from typing import Optional
 from config import settings
 
 
-def wiki_path() -> Path:
-    return Path(settings.wiki_dir)
+def wiki_path(project_id: str = "default") -> Path:
+    return Path(settings.projects_dir) / project_id / "wiki"
 
 
-def sources_path() -> Path:
-    return Path(settings.sources_dir)
+def sources_path(project_id: str = "default") -> Path:
+    return Path(settings.projects_dir) / project_id / "sources"
 
 
-def ensure_dirs():
+def ensure_dirs(project_id: str = "default"):
     """Create wiki directory structure."""
     dirs = [
         "concepts", "formulas", "principles", "exercises", "sources",
         "synthesis", "queries", "media"
     ]
-    wp = wiki_path()
+    wp = wiki_path(project_id)
     for d in dirs:
         (wp / d).mkdir(parents=True, exist_ok=True)
-    sources_path().mkdir(parents=True, exist_ok=True)
+    sources_path(project_id).mkdir(parents=True, exist_ok=True)
 
     # Create purpose.md if not exists
     purpose = wp / "purpose.md"
@@ -117,9 +118,10 @@ def make_frontmatter(fm: dict) -> str:
 
 
 def write_wiki_page(relative_path: str, title: str, page_type: str, content: str,
-                    sources: list[str] | None = None, tags: list[str] | None = None) -> str:
+                    sources: list[str] | None = None, tags: list[str] | None = None,
+                    *, project_id: str = "default") -> str:
     """Write a wiki page. Returns the absolute path."""
-    wp = wiki_path()
+    wp = wiki_path(project_id)
     full_path = wp / relative_path
     full_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -145,9 +147,9 @@ def write_wiki_page(relative_path: str, title: str, page_type: str, content: str
     return str(full_path)
 
 
-def read_wiki_page(relative_path: str) -> dict | None:
+def read_wiki_page(relative_path: str, *, project_id: str = "default") -> dict | None:
     """Read a wiki page. Returns {path, title, type, content, sources, tags, created, updated} or None."""
-    wp = wiki_path()
+    wp = wiki_path(project_id)
     full_path = wp / relative_path
     if not full_path.exists():
         return None
@@ -167,9 +169,9 @@ def read_wiki_page(relative_path: str) -> dict | None:
     }
 
 
-def list_wiki_pages(page_type: str | None = None) -> list[dict]:
+def list_wiki_pages(page_type: str | None = None, *, project_id: str = "default") -> list[dict]:
     """List all wiki pages, optionally filtered by type."""
-    wp = wiki_path()
+    wp = wiki_path(project_id)
     pages = []
 
     for md_file in wp.rglob("*.md"):
@@ -190,21 +192,21 @@ def list_wiki_pages(page_type: str | None = None) -> list[dict]:
     return pages
 
 
-def delete_wiki_page(relative_path: str) -> bool:
+def delete_wiki_page(relative_path: str, *, project_id: str = "default") -> bool:
     """Delete a wiki page. Returns True if deleted, False if not found."""
-    full_path = wiki_path() / relative_path
+    full_path = wiki_path(project_id) / relative_path
     if full_path.exists():
         full_path.unlink()
         # Clean up dead wikilinks in remaining pages
         page_id = relative_path.replace(".md", "")
-        _cleanup_dead_links(page_id)
+        _cleanup_dead_links(page_id, project_id=project_id)
         return True
     return False
 
 
-def _cleanup_dead_links(deleted_page_id: str):
+def _cleanup_dead_links(deleted_page_id: str, *, project_id: str = "default"):
     """Remove dead [[wikilinks]] from all wiki pages."""
-    wp = wiki_path()
+    wp = wiki_path(project_id)
     link_pattern = re.compile(rf'\[\[{re.escape(deleted_page_id)}(?:\|[^\]]+)?\]\]')
 
     for md_file in wp.rglob("*.md"):
@@ -223,26 +225,26 @@ def compute_source_hash(file_path: str) -> str:
     return h.hexdigest()
 
 
-def get_ingest_cache(source_path: str) -> str | None:
+def get_ingest_cache(source_path: str, *, project_id: str = "default") -> str | None:
     """Get cached hash for a source file. Returns hash or None."""
-    cache_dir = wiki_path() / ".cache"
+    cache_dir = wiki_path(project_id) / ".cache"
     cache_file = cache_dir / (hashlib.md5(source_path.encode()).hexdigest() + ".hash")
     if cache_file.exists():
         return cache_file.read_text().strip()
     return None
 
 
-def set_ingest_cache(source_path: str, content_hash: str):
+def set_ingest_cache(source_path: str, content_hash: str, *, project_id: str = "default"):
     """Cache the hash for a processed source file."""
-    cache_dir = wiki_path() / ".cache"
+    cache_dir = wiki_path(project_id) / ".cache"
     cache_dir.mkdir(exist_ok=True)
     cache_file = cache_dir / (hashlib.md5(source_path.encode()).hexdigest() + ".hash")
     cache_file.write_text(content_hash)
 
 
-def update_index(new_pages: list[dict]):
+def update_index(new_pages: list[dict], *, project_id: str = "default"):
     """Update index.md with new/modified pages."""
-    index_path = wiki_path() / "index.md"
+    index_path = wiki_path(project_id) / "index.md"
     if not index_path.exists():
         return
 
@@ -278,3 +280,39 @@ def update_index(new_pages: list[dict]):
     new_body = "\n".join(sections) if sections else body
     text = make_frontmatter(fm) + "\n# 知识库索引\n\n" + new_body
     index_path.write_text(text, encoding="utf-8")
+
+
+# --- Project management ---
+
+_PROJECT_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+def list_projects() -> list[dict]:
+    """List all projects in the projects directory."""
+    proj_dir = Path(settings.projects_dir)
+    if not proj_dir.exists():
+        return []
+    projects = []
+    for d in sorted(proj_dir.iterdir()):
+        if d.is_dir():
+            projects.append({"name": d.name, "title": d.name})
+    return projects
+
+
+def create_project(name: str) -> dict:
+    """Create a new project with full directory structure."""
+    if not _PROJECT_NAME_RE.match(name):
+        raise ValueError("Project name must be alphanumeric (letters, numbers, hyphens, underscores)")
+    ensure_dirs(project_id=name)
+    return {"name": name, "title": name}
+
+
+def delete_project(name: str) -> bool:
+    """Delete a project and all its data. Cannot delete the default project."""
+    if name == "default":
+        raise ValueError("Cannot delete the default project")
+    proj_path = Path(settings.projects_dir) / name
+    if proj_path.exists():
+        shutil.rmtree(proj_path)
+        return True
+    return False

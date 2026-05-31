@@ -1,5 +1,6 @@
 import { cn } from "@/lib/cn"
 import { useAppStore, type ActiveView } from "@/stores/app-store"
+import { ProjectSelector } from "./project-selector"
 import {
   BookOpen, FolderOpen, Search, GitGraph, ShieldCheck, Settings
 } from "lucide-react"
@@ -19,6 +20,8 @@ export function IconSidebar() {
 
   return (
     <div className="flex flex-col gap-0.5 py-3 px-2 w-40 border-r bg-[var(--sidebar)] shrink-0">
+      <ProjectSelector />
+      <div className="border-t border-[var(--border)] my-1" />
       {items.map((item) => (
         <button
           key={item.id}

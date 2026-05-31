@@ -12,15 +12,16 @@ import { ChatPanel } from "@/components/chat/chat-panel"
 
 export function AppLayout() {
   const activeView = useAppStore((s) => s.activeView)
+  const currentProject = useAppStore((s) => s.currentProject)
 
   const renderSidebar = () => {
     switch (activeView) {
       case "sources":
-        return <SourcesView />
+        return <SourcesView key={currentProject} />
       case "search":
-        return <SearchView />
+        return <SearchView key={currentProject} />
       default:
-        return <KnowledgeTree />
+        return <KnowledgeTree key={currentProject} />
     }
   }
 
@@ -41,14 +42,14 @@ export function AppLayout() {
           {activeView === "settings" ? (
             <SettingsView />
           ) : activeView === "graph" ? (
-            <GraphView />
+            <GraphView key={currentProject} />
           ) : activeView === "lint" ? (
             <div className="p-4">
               <h2 className="text-lg font-semibold mb-4">Knowledge Base Health Check</h2>
               <LintView />
             </div>
           ) : (
-            <ChatPanel />
+            <ChatPanel key={currentProject} />
           )}
         </Panel>
 

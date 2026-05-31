@@ -50,7 +50,7 @@ def tokenize_query(query: str) -> list[str]:
     return list(dict.fromkeys(tokens))  # unique, order preserving
 
 
-def keyword_search(query: str, top_k: int = 20) -> list[dict]:
+def keyword_search(query: str, top_k: int = 20, *, project_id: str = "default") -> list[dict]:
     """Phase 1: Keyword-based search over wiki pages."""
     tokens = tokenize_query(query)
     if not tokens:
@@ -60,11 +60,11 @@ def keyword_search(query: str, top_k: int = 20) -> list[dict]:
     title_matches = set()
     snippets = {}
 
-    for page in list_wiki_pages():
+    for page in list_wiki_pages(project_id=project_id):
         path = page["path"]
         content = ""
         try:
-            page_data = read_wiki_page(path)
+            page_data = read_wiki_page(path, project_id=project_id)
             if page_data:
                 content = page_data.get("content", "")
         except Exception:
@@ -94,7 +94,7 @@ def keyword_search(query: str, top_k: int = 20) -> list[dict]:
     ranked = sorted(scores.items(), key=lambda x: -x[1])
     results = []
     for path, score in ranked[:top_k]:
-        page = next((p for p in list_wiki_pages() if p["path"] == path), None)
+        page = next((p for p in list_wiki_pages(project_id=project_id) if p["path"] == path), None)
         if page:
             results.append({
                 "path": path,
@@ -134,11 +134,11 @@ def _generate_snippet(content: str, tokens: list[str]) -> str:
     return snippet
 
 
-async def graph_expand(results: list[dict], depth: int = 1) -> list[dict]:
+async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str = "default") -> list[dict]:
     """Phase 2: Expand search results using graph relevance (wikilinks)."""
     from services.graph_engine import build_graph
 
-    graph = build_graph()
+    graph = build_graph(project_id=project_id)
     nodes_by_id = {n["id"]: n for n in graph["nodes"]}
 
     # Build adjacency
@@ -160,7 +160,7 @@ async def graph_expand(results: list[dict], depth: int = 1) -> list[dict]:
                     seen_paths.add(neighbor_path)
                     node = nodes_by_id[neighbor]
                     # Read page content for snippet
-                    page = read_wiki_page(neighbor_path)
+                    page = read_wiki_page(neighbor_path, project_id=project_id)
                     content = page.get("content", "") if page else ""
                     new_results.append({
                         "path": neighbor_path,
@@ -174,10 +174,10 @@ async def graph_expand(results: list[dict], depth: int = 1) -> list[dict]:
     return sorted(new_results, key=lambda x: -x["score"])
 
 
-async def search(query: str, include_vector: bool = False, top_k: int = 20) -> dict:
+async def search(query: str, include_vector: bool = False, top_k: int = 20, *, project_id: str = "default") -> dict:
     """Full search pipeline: keyword + optional vector + graph expansion."""
     # Phase 1: Keyword search
-    results = keyword_search(query, top_k)
+    results = keyword_search(query, top_k, project_id=project_id)
 
     # Phase 1.5: Vector search (if enabled)
     vector_hits = 0
@@ -200,7 +200,7 @@ async def search(query: str, include_vector: bool = False, top_k: int = 20) -> d
 
     # Phase 2: Graph expansion (1-hop from top results)
     try:
-        results = await graph_expand(results, depth=1)
+        results = await graph_expand(results, depth=1, project_id=project_id)
     except Exception:
         pass
 

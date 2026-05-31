@@ -7,6 +7,12 @@ interface AppState {
   activeView: ActiveView
   setActiveView: (view: ActiveView) => void
 
+  // Project management
+  projects: { name: string; title: string }[]
+  setProjects: (list: { name: string; title: string }[]) => void
+  currentProject: string
+  setCurrentProject: (name: string) => void
+
   // Selected page for preview
   selectedPage: WikiPage | null
   setSelectedPage: (page: WikiPage | null) => void
@@ -36,6 +42,11 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   activeView: "wiki",
   setActiveView: (view) => set({ activeView: view }),
+
+  projects: [],
+  setProjects: (list) => set({ projects: list }),
+  currentProject: "default",
+  setCurrentProject: (name) => set({ currentProject: name }),
 
   selectedPage: null,
   setSelectedPage: (page) => set({ selectedPage: page }),

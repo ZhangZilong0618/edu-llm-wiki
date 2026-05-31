@@ -6,12 +6,10 @@ Step 2 (Generation): LLM takes analysis -> generates wiki pages with cross-refer
 
 import json
 import asyncio
-from pathlib import Path
-from config import settings
 from services.llm_client import chat_complete
 from services.file_parser import parse_file
 from storage.wiki_store import (
-    write_wiki_page, compute_source_hash, get_ingest_cache, set_ingest_cache,
+    write_wiki_page, wiki_path, compute_source_hash, get_ingest_cache, set_ingest_cache,
     update_index, sources_path, ensure_dirs, read_wiki_page,
 )
 
@@ -132,25 +130,25 @@ def _repair_json(text: str) -> str:
     return text
 
 
-async def read_context() -> str:
+async def read_context(project_id: str = "default") -> str:
     """Read purpose.md and index.md for context."""
     from storage.wiki_store import wiki_path
     context_parts = []
     for fname in ["purpose.md", "index.md", "schema.md"]:
-        fpath = wiki_path() / fname
+        fpath = wiki_path(project_id) / fname
         if fpath.exists():
             content = fpath.read_text(encoding="utf-8")
             context_parts.append(f"## {fname}\n\n{content[:2000]}")
     return "\n\n".join(context_parts)
 
 
-async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
+async def run_ingest(source_relative_path: str, force: bool = False, *, project_id: str = "default") -> dict:
     """Run the two-step ingest pipeline for a single source file.
 
     Returns: {source, status, wiki_pages_created, wiki_pages_updated, concepts_extracted, error}
     """
-    ensure_dirs()
-    sp = sources_path()
+    ensure_dirs(project_id=project_id)
+    sp = sources_path(project_id)
     source_path = sp / source_relative_path
 
     if not source_path.exists():
@@ -159,7 +157,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
     # Step 0: Check cache
     content_hash = compute_source_hash(str(source_path))
     if not force:
-        cached = get_ingest_cache(source_relative_path)
+        cached = get_ingest_cache(source_relative_path, project_id=project_id)
         if cached == content_hash:
             return {"source": source_relative_path, "status": "cached",
                     "wiki_pages_created": [], "wiki_pages_updated": []}
@@ -177,7 +175,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
 
     # Step 1: Analysis
     try:
-        context = await read_context()
+        context = await read_context(project_id=project_id)
         analysis_raw = await chat_complete(
             system_prompt="You are an expert educational content analyzer. Output ONLY valid JSON.",
             messages=[{"role": "user", "content": ANALYSIS_PROMPT.format(
@@ -201,9 +199,9 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
 
     # Step 2: Generation
     try:
-        wiki_path = Path(settings.wiki_dir)
-        purpose_path = wiki_path / "purpose.md"
-        schema_path = wiki_path / "schema.md"
+        wp = wiki_path(project_id)
+        purpose_path = wp / "purpose.md"
+        schema_path = wp / "schema.md"
         purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
         schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
 
@@ -236,7 +234,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
     for page in pages:
         try:
             path = page["path"]
-            existing = read_wiki_page(path)
+            existing = read_wiki_page(path, project_id=project_id)
             write_wiki_page(
                 relative_path=path,
                 title=page["title"],
@@ -244,6 +242,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
                 content=page.get("content", ""),
                 sources=page.get("sources", [source_relative_path]),
                 tags=page.get("tags", []),
+                project_id=project_id,
             )
             if existing:
                 updated.append(path)
@@ -263,6 +262,7 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
         page_type="source",
         content=analysis.get("summary", f"# {source_relative_path}\n\nContent analysis pending."),
         sources=[source_relative_path],
+        project_id=project_id,
     )
 
     if source_summary:
@@ -271,10 +271,10 @@ async def run_ingest(source_relative_path: str, force: bool = False) -> dict:
     # Update index
     all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
                for p in pages]
-    update_index(all_new)
+    update_index(all_new, project_id=project_id)
 
     # Save cache
-    set_ingest_cache(source_relative_path, content_hash)
+    set_ingest_cache(source_relative_path, content_hash, project_id=project_id)
 
     return {
         "source": source_relative_path,

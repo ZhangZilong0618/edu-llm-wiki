@@ -7,8 +7,7 @@ class Settings(BaseSettings):
 
     # Project
     data_dir: str = str(Path(__file__).parent.parent / "data")
-    wiki_dir: str = str(Path(data_dir) / "wiki")
-    sources_dir: str = str(Path(data_dir) / "sources")
+    projects_dir: str = str(Path(data_dir) / "projects")
 
     # LLM
     llm_provider: str = "openai"  # openai | anthropic | ollama | custom

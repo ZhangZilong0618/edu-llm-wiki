@@ -1,11 +1,12 @@
 """API routes for chat Q&A."""
 
 import json
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from models.chat import ChatRequest, ChatResponse, ChatMessage, CitedPage
 from services.llm_client import stream_chat
 from services.search_engine import search
+from storage.wiki_store import wiki_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -49,7 +50,7 @@ def _build_context(search_results: list[dict], max_chars: int = 20000) -> tuple[
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, project_id: str = Query("default")):
     """Chat with the knowledge base. Non-streaming."""
     # Search for relevant context
     last_user_msg = ""
@@ -58,12 +59,11 @@ async def chat(req: ChatRequest):
             last_user_msg = msg.content
             break
 
-    search_results = await search(last_user_msg, top_k=10)
+    search_results = await search(last_user_msg, top_k=10, project_id=project_id)
     wiki_context, cited = _build_context(search_results["results"], max_chars=20000)
 
     # Read purpose
-    from storage.wiki_store import wiki_path
-    purpose = (wiki_path() / "purpose.md").read_text(encoding="utf-8")[:2000] if (wiki_path() / "purpose.md").exists() else "Not defined"
+    purpose = (wiki_path(project_id) / "purpose.md").read_text(encoding="utf-8")[:2000] if (wiki_path(project_id) / "purpose.md").exists() else "Not defined"
 
     # Build messages
     system = SYSTEM_PROMPT.format(wiki_context=wiki_context, purpose=purpose)
@@ -81,7 +81,7 @@ async def chat(req: ChatRequest):
 
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
     """Chat with the knowledge base. Streaming response."""
     last_user_msg = ""
     for msg in reversed(req.messages):
@@ -89,11 +89,10 @@ async def chat_stream(req: ChatRequest):
             last_user_msg = msg.content
             break
 
-    search_results = await search(last_user_msg, top_k=10)
+    search_results = await search(last_user_msg, top_k=10, project_id=project_id)
     wiki_context, cited = _build_context(search_results["results"], max_chars=20000)
 
-    from storage.wiki_store import wiki_path
-    purpose = (wiki_path() / "purpose.md").read_text(encoding="utf-8")[:2000] if (wiki_path() / "purpose.md").exists() else "Not defined"
+    purpose = (wiki_path(project_id) / "purpose.md").read_text(encoding="utf-8")[:2000] if (wiki_path(project_id) / "purpose.md").exists() else "Not defined"
 
     system = SYSTEM_PROMPT.format(wiki_context=wiki_context, purpose=purpose)
     messages = [{"role": m.role, "content": m.content} for m in req.messages]

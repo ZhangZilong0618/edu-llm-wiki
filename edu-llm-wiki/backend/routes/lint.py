@@ -1,6 +1,6 @@
 """API routes for knowledge base health check (lint)."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from services.llm_client import chat_complete
 from storage.wiki_store import wiki_path, list_wiki_pages, read_wiki_page
 
@@ -43,15 +43,15 @@ CRITICAL: Output ONLY the JSON object, no other text.
 
 
 @router.post("/run")
-async def run_lint():
+async def run_lint(project_id: str = Query("default")):
     """Run a health check on the knowledge base."""
-    pages = list_wiki_pages()
+    pages = list_wiki_pages(project_id=project_id)
     pages_text = "\n".join([
         f"- [{p['type']}] {p['title']} ({p['path']}) - {p.get('summary', '')[:100]}"
         for p in pages
     ])
 
-    purpose = (wiki_path() / "purpose.md").read_text(encoding="utf-8")[:2000] if (wiki_path() / "purpose.md").exists() else "Not defined"
+    purpose = (wiki_path(project_id) / "purpose.md").read_text(encoding="utf-8")[:2000] if (wiki_path(project_id) / "purpose.md").exists() else "Not defined"
 
     import json
     result = await chat_complete(

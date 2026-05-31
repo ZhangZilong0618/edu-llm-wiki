@@ -79,6 +79,11 @@ export interface FileEntry {
   modified: number
 }
 
+export interface Project {
+  name: string
+  title: string
+}
+
 export interface IngestResult {
   source: string
   status: string

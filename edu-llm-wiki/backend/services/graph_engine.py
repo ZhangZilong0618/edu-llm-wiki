@@ -25,11 +25,11 @@ except ImportError:
 WIKILINK_RE = re.compile(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]')
 
 
-def build_graph() -> dict:
+def build_graph(*, project_id: str = "default") -> dict:
     """Build the knowledge graph from wiki pages. Returns GraphData-compatible dict."""
     nodes = []
     edges = []
-    pages = list_wiki_pages()
+    pages = list_wiki_pages(project_id=project_id)
 
     # Build node id -> page info mapping
     page_map = {}
@@ -49,7 +49,7 @@ def build_graph() -> dict:
         })
 
     # Extract wikilinks to build edges
-    wp = wiki_path()
+    wp = wiki_path(project_id)
     link_graph = defaultdict(set)
     source_map = defaultdict(set)  # source_path -> set of node_ids
 
@@ -238,9 +238,9 @@ def generate_insights(nodes: list, edges: list, communities: list,
     return insights
 
 
-def get_node_neighborhood(node_id: str, depth: int = 1) -> dict:
+def get_node_neighborhood(node_id: str, depth: int = 1, *, project_id: str = "default") -> dict:
     """Get a node and its neighbors up to specified depth."""
-    graph = build_graph()
+    graph = build_graph(project_id=project_id)
     nodes_by_id = {n["id"]: n for n in graph["nodes"]}
 
     if node_id not in nodes_by_id:
