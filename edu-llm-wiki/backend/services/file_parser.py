@@ -1,7 +1,6 @@
 """Multi-format document parser."""
 
 from pathlib import Path
-import re
 
 
 async def parse_file(file_path: str) -> str:
@@ -37,8 +36,8 @@ async def _parse_pdf(path: Path) -> str:
                 if text:
                     text_parts.append(f"## Page {i + 1}\n\n{text}")
         return "\n\n".join(text_parts) if text_parts else ""
-    except ImportError:
-        raise ImportError("pdfplumber is required: pip install pdfplumber")
+    except ImportError as e:
+        raise ImportError("pdfplumber is required: pip install pdfplumber") from e
 
 
 async def _parse_docx(path: Path) -> str:
@@ -53,8 +52,8 @@ async def _parse_docx(path: Path) -> str:
             else:
                 parts.append(para.text)
         return "\n\n".join(parts)
-    except ImportError:
-        raise ImportError("python-docx is required: pip install python-docx")
+    except ImportError as e:
+        raise ImportError("python-docx is required: pip install python-docx") from e
 
 
 async def _parse_pptx(path: Path) -> str:
@@ -71,8 +70,8 @@ async def _parse_pptx(path: Path) -> str:
                             slide_parts.append(para.text)
             parts.append("\n".join(slide_parts))
         return "\n\n".join(parts)
-    except ImportError:
-        raise ImportError("python-pptx is required: pip install python-pptx")
+    except ImportError as e:
+        raise ImportError("python-pptx is required: pip install python-pptx") from e
 
 
 async def _parse_excel(path: Path) -> str:
@@ -93,5 +92,5 @@ async def _parse_excel(path: Path) -> str:
                     parts.append(f"| {row} |")
             parts.append("")
         return "\n".join(parts)
-    except ImportError:
-        raise ImportError("openpyxl is required: pip install openpyxl")
+    except ImportError as e:
+        raise ImportError("openpyxl is required: pip install openpyxl") from e

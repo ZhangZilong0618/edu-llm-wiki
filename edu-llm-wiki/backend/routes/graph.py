@@ -1,7 +1,8 @@
 """API routes for knowledge graph."""
 
 from fastapi import APIRouter, Query
-from models.graph import GraphData, GraphInsight
+
+from models.graph import GraphData
 from services.graph_engine import build_graph, get_node_neighborhood
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])

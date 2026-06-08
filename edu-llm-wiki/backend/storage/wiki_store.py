@@ -1,14 +1,14 @@
 """Wiki store: read/write markdown files with YAML frontmatter."""
 
-import os
-import re
-import json
-import shutil
 import hashlib
-import yaml
-from pathlib import Path
+import json
+import re
+import shutil
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+
+import yaml
+
 from config import settings
 
 

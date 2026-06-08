@@ -1,10 +1,13 @@
 """API routes for conversation history."""
 
-import uuid
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
 from storage.wiki_store import (
-    list_conversations, get_conversation, save_conversation, delete_conversation,
+    delete_conversation,
+    get_conversation,
+    list_conversations,
+    save_conversation,
 )
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])

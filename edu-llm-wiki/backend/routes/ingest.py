@@ -1,14 +1,15 @@
 """API routes for document ingestion."""
 
 import json
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+import os
+
+import aiofiles
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+
 from models.wiki import IngestRequest, IngestResult
 from services.ingest_engine import run_ingest, run_ingest_streaming
-from services.file_parser import parse_file
-from storage.wiki_store import sources_path, ensure_dirs
-import aiofiles
-import os
+from storage.wiki_store import ensure_dirs, sources_path
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
 
@@ -80,14 +81,13 @@ async def delete_source(filename: str, project_id: str = Query("default")):
 @router.post("/import-folder")
 async def import_folder(folder_path: str, project_id: str = Query("default")):
     """Import all supported files from a folder recursively."""
-    import glob
     supported = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".md", ".txt"}
     imported = []
     folder = os.path.abspath(folder_path)
     if not os.path.isdir(folder):
         raise HTTPException(status_code=400, detail="Invalid folder path")
 
-    for root, dirs, files in os.walk(folder):
+    for root, _dirs, files in os.walk(folder):
         for fname in files:
             ext = os.path.splitext(fname)[1].lower()
             if ext in supported:

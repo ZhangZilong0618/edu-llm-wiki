@@ -1,0 +1,75 @@
+[project]
+name = "edu-llm-wiki-backend"
+version = "0.1.0"
+description = "AI-powered educational knowledge base system - Backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "python-multipart>=0.0.18",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+    "aiofiles>=24.0.0",
+    "pdfplumber>=0.11.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "networkx>=3.4.0",
+    "openai>=1.59.0",
+    "anthropic>=0.42.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "SIM108", # ternary operator (readability preference)
+    "SIM102", # nested if -> single if (readability preference)
+    "SIM103", # return condition directly (readability preference)
+    "SIM105", # contextlib.suppress (readability preference)
+    "N802",   # function name should be lowercase (some API conventions)
+    "N803",   # argument name should be lowercase
+    "N806",   # variable in function should be lowercase
+    "UP007",  # use X | Y for union types (keep Optional for clarity)
+    "B008",   # FastAPI File()/Query() in argument defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+no_error_summary = true
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

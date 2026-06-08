@@ -1,9 +1,15 @@
 """API routes for wiki page CRUD and lint."""
 
 from fastapi import APIRouter, HTTPException, Query
-from models.wiki import WikiPage, WikiPageCreate, WikiPageUpdate
+
+from models.wiki import WikiPageCreate, WikiPageUpdate
 from storage.wiki_store import (
-    list_wiki_pages, read_wiki_page, write_wiki_page, delete_wiki_page, update_index, ensure_dirs, wiki_path
+    delete_wiki_page,
+    ensure_dirs,
+    list_wiki_pages,
+    read_wiki_page,
+    wiki_path,
+    write_wiki_page,
 )
 
 router = APIRouter(prefix="/api/wiki", tags=["wiki"])
@@ -54,7 +60,7 @@ async def update_page(relative_path: str, update: WikiPageUpdate, project_id: st
     if not existing:
         raise HTTPException(status_code=404, detail="Page not found")
 
-    full_path = write_wiki_page(
+    write_wiki_page(
         relative_path=relative_path,
         title=update.title or existing["title"],
         page_type=existing["page_type"],

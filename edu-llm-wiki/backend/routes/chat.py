@@ -1,14 +1,16 @@
 """API routes for chat Q&A with graph-enhanced RAG pipeline."""
 
-import re
 import json
+import re
+
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
-from models.chat import ChatRequest, ChatResponse, ChatMessage, CitedPage
-from services.llm_client import stream_chat, chat_complete
-from services.search_engine import search, keyword_search, graph_expand
+
+from models.chat import ChatRequest, ChatResponse, CitedPage
 from services.context_budget import compute_budget
-from storage.wiki_store import wiki_path, sources_path, list_wiki_pages, read_wiki_page
+from services.llm_client import chat_complete, stream_chat
+from services.search_engine import graph_expand, keyword_search
+from storage.wiki_store import read_wiki_page, wiki_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -201,7 +203,7 @@ async def _run_rag_pipeline(
             f"[{i + 1}] {p['title']} ({p['path']})"
             for i, p in enumerate(relevant_pages)
         )
-        for i, p in enumerate(relevant_pages):
+        for _, p in enumerate(relevant_pages):
             cited.append({
                 "path": p["path"],
                 "title": p["title"],

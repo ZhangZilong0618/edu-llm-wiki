@@ -1,1 +1,1 @@
-from . import ingest, search, graph, chat, wiki, lint, projects, conversations
+from . import chat, conversations, graph, ingest, lint, projects, search, wiki

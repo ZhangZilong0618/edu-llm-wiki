@@ -1,6 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
+
+from pydantic import BaseModel
 
 
 class WikiPage(BaseModel):
@@ -23,10 +22,10 @@ class WikiPageCreate(BaseModel):
 
 
 class WikiPageUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    sources: Optional[list[str]] = None
-    tags: Optional[list[str]] = None
+    title: str | None = None
+    content: str | None = None
+    sources: list[str] | None = None
+    tags: list[str] | None = None
 
 
 class WikiIndex(BaseModel):

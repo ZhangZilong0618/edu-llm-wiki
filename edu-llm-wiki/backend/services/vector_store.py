@@ -5,8 +5,8 @@ One-time model download (~80 MB) on first use.
 """
 
 import os
-import json
 from pathlib import Path
+
 from config import settings
 
 # Lazy-loaded globals
@@ -107,7 +107,6 @@ def index_single_page(page: dict, *, project_id: str = "default"):
     t = db.open_table(table_name)
     # Delete existing if present
     try:
-        import lancedb as _lb
         t.delete(f"path = '{page['path']}'")
     except Exception:
         pass

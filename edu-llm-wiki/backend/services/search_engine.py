@@ -6,12 +6,11 @@ Phase 2: Graph expansion (1-2 hop)
 """
 
 import re
-import math
 from collections import defaultdict
 from pathlib import Path
-from config import settings
-from storage.wiki_store import wiki_path, sources_path, list_wiki_pages, read_wiki_page
 
+from config import settings
+from storage.wiki_store import list_wiki_pages, read_wiki_page
 
 # Stop words for Chinese and English
 STOP_WORDS = {
@@ -29,7 +28,7 @@ def tokenize_query(query: str) -> list[str]:
     """Tokenize query with CJK-aware bigram splitting."""
     raw_tokens = query.lower().split()
     # Also split on Chinese punctuation
-    raw_tokens = re.split(r'[\s,，。！？、；：""''（）()\-_/\\·~～…]+', query.lower())
+    raw_tokens = re.split(r'[\s,，。！？、；：""''（）()\\-_/\\·~～…]+', query.lower())
     raw_tokens = [t for t in raw_tokens if len(t) > 1]
     raw_tokens = [t for t in raw_tokens if t not in STOP_WORDS]
 

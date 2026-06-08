@@ -1,6 +1,7 @@
 """API routes for search."""
 
 from fastapi import APIRouter, Query
+
 from models.search import SearchResponse
 from services.search_engine import search
 

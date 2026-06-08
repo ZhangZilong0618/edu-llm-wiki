@@ -2,12 +2,13 @@
 
 import shutil
 from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from config import settings
-from storage.wiki_store import ensure_dirs, wiki_path, sources_path
-from routes import ingest, search, graph, chat, wiki, lint, projects, conversations, settings_api
 
+from config import settings
+from routes import chat, conversations, graph, ingest, lint, projects, search, settings_api, wiki
+from storage.wiki_store import ensure_dirs
 
 app = FastAPI(
     title="Edu-LLM-Wiki",
@@ -45,9 +46,9 @@ async def startup():
 
 def _ensure_vector_indices():
     """Build vector index for any project that doesn't have one yet."""
-    from services.vector_store import table_exists, index_pages
+
+    from services.vector_store import index_pages, table_exists
     from storage.wiki_store import list_projects, list_wiki_pages, read_wiki_page
-    import asyncio
 
     try:
         for proj in list_projects():

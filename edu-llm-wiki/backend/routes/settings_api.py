@@ -1,9 +1,10 @@
 """API for reading/writing LLM settings to .env file."""
 
-import re
 from pathlib import Path
+
 from fastapi import APIRouter
 from pydantic import BaseModel
+
 from config import settings as app_settings
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])

@@ -8,13 +8,11 @@ Builds a graph from wiki pages:
 - Graph insights: isolated nodes, bridges, surprising connections
 """
 
-import re
 import math
-import json
+import re
 from collections import defaultdict
-from pathlib import Path
-from config import settings
-from storage.wiki_store import wiki_path, list_wiki_pages, parse_frontmatter
+
+from storage.wiki_store import list_wiki_pages, parse_frontmatter, wiki_path
 
 try:
     import networkx as nx
@@ -115,7 +113,7 @@ def build_graph(*, project_id: str = "default") -> dict:
         for tgt_id in targets:
             edge_set.add((min(src_id, tgt_id), max(src_id, tgt_id)))
 
-    for src_path, node_set in source_map.items():
+    for _src_path, node_set in source_map.items():
         node_list = list(node_set)
         for i in range(len(node_list)):
             for j in range(i + 1, len(node_list)):
@@ -212,7 +210,6 @@ def generate_insights(nodes: list, edges: list, communities: list,
                       page_map: dict) -> list[dict]:
     """Generate graph insights: isolated nodes, bridges, gaps."""
     insights = []
-    node_ids = {n["id"] for n in nodes}
 
     # Build adjacency
     adjacency = defaultdict(set)

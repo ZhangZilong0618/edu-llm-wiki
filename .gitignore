@@ -3,18 +3,7 @@ node_modules/
 
 # Build outputs
 dist/
-dist-ssr/
-# RC artifacts pulled from CI for local Windows / Intel Mac verification.
-# These are pre-release binaries downloaded via `gh run download`, never
-# meant for the repo.
-dist-rc/
 *.tsbuildinfo
-
-# Rust build artifacts
-src-tauri/target/
-
-# Tauri generated files
-src-tauri/gen/
 
 # Environment files
 .env
@@ -24,9 +13,6 @@ src-tauri/gen/
 # Internal docs (not shipped)
 docs/
 AGENTS.md
-
-# Benchmark and test data (local only)
-tests/
 
 # Editor directories and files
 .vscode/*
@@ -45,6 +31,33 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# mypy / ruff / pytest
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Runtime data (generated at runtime, not source)
+edu-llm-wiki/data/
 
 # Brainstorm assets (not tracked in source control)
 .superpowers/

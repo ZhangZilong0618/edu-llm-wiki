@@ -1,8 +1,9 @@
 """API routes for knowledge base health check (lint)."""
 
 from fastapi import APIRouter, Query
+
 from services.llm_client import chat_complete
-from storage.wiki_store import wiki_path, list_wiki_pages, read_wiki_page
+from storage.wiki_store import list_wiki_pages, wiki_path
 
 router = APIRouter(prefix="/api/lint", tags=["lint"])
 

@@ -5,12 +5,19 @@ Step 2 (Generation): LLM takes analysis -> generates wiki pages with cross-refer
 """
 
 import json
-import asyncio
-from services.llm_client import chat_complete
+
 from services.file_parser import parse_file
+from services.llm_client import chat_complete
 from storage.wiki_store import (
-    write_wiki_page, wiki_path, compute_source_hash, get_ingest_cache, set_ingest_cache,
-    update_index, sources_path, ensure_dirs, read_wiki_page,
+    compute_source_hash,
+    ensure_dirs,
+    get_ingest_cache,
+    read_wiki_page,
+    set_ingest_cache,
+    sources_path,
+    update_index,
+    wiki_path,
+    write_wiki_page,
 )
 
 
@@ -200,11 +207,14 @@ def _repair_json(text: str) -> str:
     esc = False
     for ch in text:
         if esc:
-            esc = False; continue
+            esc = False
+            continue
         if ch == "\\" and in_str:
-            esc = True; continue
+            esc = True
+            continue
         if ch == '"':
-            in_str = not in_str; continue
+            in_str = not in_str
+            continue
         if in_str:
             continue
         if ch in "{[":
@@ -344,7 +354,7 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
 
             if page.get("page_type") == "concept":
                 concepts.append(page["title"])
-        except Exception as write_err:
+        except Exception:
             continue
 
     # Always create source summary
@@ -383,7 +393,6 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
 
 async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, project_id: str = "default"):
     """Streaming version of run_ingest — yields progress events as SSE dicts."""
-    from typing import AsyncGenerator
 
     async def emit(event: str, **kwargs):
         return {"event": event, **kwargs}

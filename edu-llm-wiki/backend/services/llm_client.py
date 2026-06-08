@@ -1,8 +1,9 @@
-import json
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+
 import httpx
-from openai import AsyncOpenAI
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+
 from config import settings
 
 # Shared HTTP client that ignores system proxy settings.
