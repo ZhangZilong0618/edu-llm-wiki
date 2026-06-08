@@ -17,11 +17,9 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 8192
     llm_temperature: float = 0.3
 
-    # Embedding (optional)
-    embedding_enabled: bool = False
-    embedding_endpoint: str = "http://localhost:11434/v1/embeddings"
-    embedding_api_key: str = ""
-    embedding_model: str = "nomic-embed-text"
+    # Embedding (for vector search — uses local sentence-transformers)
+    embedding_enabled: bool = True
+    embedding_model: str = "all-MiniLM-L6-v2"  # local model, ~80MB, 384-dim
 
     # Server
     host: str = "127.0.0.1"

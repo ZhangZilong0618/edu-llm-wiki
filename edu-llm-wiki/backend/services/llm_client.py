@@ -7,7 +7,7 @@ from config import settings
 
 # Shared HTTP client that ignores system proxy settings.
 # The system ALL_PROXY=socks://... breaks httpx (no SOCKS support).
-_http_client = httpx.AsyncClient(trust_env=False)
+_http_client = httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(180.0, connect=10.0))
 
 
 def _client_for(provider: str, api_key: str, base_url: str | None):

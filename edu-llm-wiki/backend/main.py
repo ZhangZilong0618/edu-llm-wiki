@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from storage.wiki_store import ensure_dirs, wiki_path, sources_path
-from routes import ingest, search, graph, chat, wiki, lint, projects, settings_api
+from routes import ingest, search, graph, chat, wiki, lint, projects, conversations, settings_api
 
 
 app = FastAPI(
@@ -31,6 +31,7 @@ app.include_router(chat.router)
 app.include_router(wiki.router)
 app.include_router(lint.router)
 app.include_router(projects.router)
+app.include_router(conversations.router)
 app.include_router(settings_api.router)
 
 
@@ -38,6 +39,41 @@ app.include_router(settings_api.router)
 async def startup():
     _migrate_to_projects()
     ensure_dirs(project_id="default")
+    # Auto-build vector index for all projects if missing
+    _ensure_vector_indices()
+
+
+def _ensure_vector_indices():
+    """Build vector index for any project that doesn't have one yet."""
+    from services.vector_store import table_exists, index_pages
+    from storage.wiki_store import list_projects, list_wiki_pages, read_wiki_page
+    import asyncio
+
+    try:
+        for proj in list_projects():
+            pid = proj["name"]
+            if table_exists(project_id=pid):
+                print(f"[vector] Index already exists for project '{pid}'")
+                continue
+            pages = list_wiki_pages(project_id=pid)
+            if not pages:
+                continue
+            # Load full content for each page
+            full_pages = []
+            for p in pages:
+                data = read_wiki_page(p["path"], project_id=pid)
+                if data:
+                    full_pages.append({
+                        "path": p["path"],
+                        "title": p["title"],
+                        "type": p["type"],
+                        "content": data.get("content", ""),
+                    })
+            if full_pages:
+                n = index_pages(full_pages, project_id=pid)
+                print(f"[vector] Built index for project '{pid}': {n} pages")
+    except Exception as e:
+        print(f"[vector] Index build skipped: {e}")
 
 
 def _migrate_to_projects():

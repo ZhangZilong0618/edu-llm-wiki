@@ -29,7 +29,8 @@ export function AppLayout() {
     <div className="flex h-screen w-screen overflow-hidden">
       <IconSidebar />
 
-      <Group orientation="horizontal" id="edu-llm-wiki-layout-v3">
+      <div className="flex-1 min-w-0 overflow-hidden">
+        <Group orientation="horizontal" id="edu-llm-wiki-layout-v3">
         {/* Left panel */}
         <Panel defaultSize="30%" minSize="18%" maxSize="50%" className="border-r bg-[var(--sidebar)]">
           {renderSidebar()}
@@ -60,6 +61,7 @@ export function AppLayout() {
           <PreviewPanel />
         </Panel>
       </Group>
+      </div>
     </div>
   )
 }

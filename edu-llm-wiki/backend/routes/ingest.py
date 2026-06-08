@@ -1,8 +1,10 @@
 """API routes for document ingestion."""
 
+import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi.responses import StreamingResponse
 from models.wiki import IngestRequest, IngestResult
-from services.ingest_engine import run_ingest
+from services.ingest_engine import run_ingest, run_ingest_streaming
 from services.file_parser import parse_file
 from storage.wiki_store import sources_path, ensure_dirs
 import aiofiles
@@ -26,6 +28,15 @@ async def upload_file(file: UploadFile = File(...), project_id: str = Query("def
         await f.write(content)
 
     return {"filename": safe_name, "size": len(content)}
+
+
+@router.post("/run-stream")
+async def run_ingest_stream(req: IngestRequest, project_id: str = Query("default")):
+    """Run ingest with SSE streaming for progress updates."""
+    async def event_stream():
+        async for event in run_ingest_streaming(req.source_paths, force=req.force, project_id=project_id):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/run", response_model=IngestResult)

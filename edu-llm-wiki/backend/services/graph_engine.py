@@ -2,12 +2,14 @@
 
 Builds a graph from wiki pages:
 - Nodes: concepts, formulas, principles, courses, sources
-- Edges: wikilinks, source overlap, type affinity
+- Edges: 4-signal relevance scoring (direct links, source overlap,
+  Adamic-Adar common neighbors, type affinity)
 - Community detection: Louvain algorithm
 - Graph insights: isolated nodes, bridges, surprising connections
 """
 
 import re
+import math
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -24,85 +26,136 @@ except ImportError:
 
 WIKILINK_RE = re.compile(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]')
 
+# Signal weights for edge relevance scoring
+WEIGHTS = {
+    "direct_link": 3.0,
+    "source_overlap": 4.0,
+    "common_neighbor": 1.5,
+    "type_affinity": 1.0,
+}
+
+# Cross-type affinity: higher = stronger connection between types
+TYPE_AFFINITY: dict[str, dict[str, float]] = {
+    "concept":   {"concept": 0.8, "formula": 1.3, "principle": 1.2, "exercise": 1.2,
+                  "source": 1.0, "synthesis": 1.2, "query": 1.0},
+    "formula":   {"concept": 1.3, "formula": 0.7, "principle": 1.3, "exercise": 1.5,
+                  "source": 0.8, "synthesis": 1.0, "query": 0.8},
+    "principle": {"concept": 1.2, "formula": 1.3, "principle": 0.7, "exercise": 1.0,
+                  "source": 0.8, "synthesis": 1.1, "query": 0.8},
+    "exercise":  {"concept": 1.2, "formula": 1.5, "principle": 1.0, "exercise": 0.4,
+                  "source": 0.8, "synthesis": 0.8, "query": 0.8},
+    "source":    {"concept": 1.0, "formula": 0.8, "principle": 0.8, "exercise": 0.8,
+                  "source": 0.5, "synthesis": 1.0, "query": 0.8},
+    "synthesis": {"concept": 1.2, "formula": 1.0, "principle": 1.1, "exercise": 0.8,
+                  "source": 1.0, "synthesis": 0.8, "query": 1.0},
+    "query":     {"concept": 1.0, "formula": 0.8, "principle": 0.8, "exercise": 0.8,
+                  "source": 0.8, "synthesis": 1.0, "query": 0.5},
+}
+
 
 def build_graph(*, project_id: str = "default") -> dict:
-    """Build the knowledge graph from wiki pages. Returns GraphData-compatible dict."""
+    """Build the knowledge graph with 4-signal edge relevance scoring."""
     nodes = []
-    edges = []
     pages = list_wiki_pages(project_id=project_id)
+    wp = wiki_path(project_id)
 
-    # Build node id -> page info mapping
+    # Build node id -> page info
     page_map = {}
     for p in pages:
         node_id = p["path"].replace(".md", "")
         page_map[node_id] = p
-
-        # Determine node type (map page types to graph node types)
-        node_type = p["type"]
         nodes.append({
             "id": node_id,
             "label": p["title"],
-            "node_type": node_type,
+            "node_type": p["type"],
             "size": 1,
             "community": -1,
             "metadata": {"path": p["path"]},
         })
 
-    # Extract wikilinks to build edges
-    wp = wiki_path(project_id)
-    link_graph = defaultdict(set)
-    source_map = defaultdict(set)  # source_path -> set of node_ids
+    # Read full content for each page: extract wikilinks, sources, neighbors
+    link_graph: dict[str, set[str]] = defaultdict(set)   # node_id -> out-link targets
+    in_links: dict[str, set[str]] = defaultdict(set)      # node_id -> in-link sources
+    source_map: dict[str, set[str]] = defaultdict(set)     # source_path -> node_ids using it
+    node_sources: dict[str, set[str]] = {}                 # node_id -> set of source paths
 
-    for node_id, p in page_map.items():
-        full_path = wp / p["path"]
-        if full_path.exists():
-            content = full_path.read_text(encoding="utf-8")
-            # Extract wikilinks
-            for match in WIKILINK_RE.finditer(content):
-                target = match.group(1).strip()
-                if target in page_map and target != node_id:
-                    link_graph[node_id].add(target)
-            # Extract sources
-            for src in p.get("sources", []):
-                source_map[src].add(node_id)
+    for node_id in page_map:
+        full_path = wp / page_map[node_id]["path"]
+        if not full_path.exists():
+            node_sources[node_id] = set()
+            continue
+        content = full_path.read_text(encoding="utf-8")
+        fm, _ = parse_frontmatter(content)
 
-    # Build edges with weights
-    edge_set = set()
-    edge_list = []
+        # Wikilinks
+        for match in WIKILINK_RE.finditer(content):
+            target = match.group(1).strip()
+            if target in page_map and target != node_id:
+                link_graph[node_id].add(target)
+                in_links[target].add(node_id)
 
-    # Direct links (weight 3.0)
+        # Sources
+        srcs = set(fm.get("sources", []))
+        node_sources[node_id] = srcs
+        for src in srcs:
+            source_map[src].add(node_id)
+
+    # Neighbor sets and degrees (for Adamic-Adar)
+    neighbors: dict[str, set[str]] = {}
+    degrees: dict[str, int] = {}
+    for node_id in page_map:
+        nbrs = link_graph[node_id] | in_links[node_id]
+        neighbors[node_id] = nbrs
+        degrees[node_id] = len(nbrs)
+
+    # Collect candidate edge pairs: direct links + source overlap
+    edge_set: set[tuple[str, str]] = set()
+
     for src_id, targets in link_graph.items():
         for tgt_id in targets:
-            key = tuple(sorted([src_id, tgt_id]))
-            if key not in edge_set:
-                edge_set.add(key)
-                edge_list.append({
-                    "source": src_id,
-                    "target": tgt_id,
-                    "edge_type": "related",
-                    "weight": 3.0,
-                })
+            edge_set.add((min(src_id, tgt_id), max(src_id, tgt_id)))
 
-    # Source overlap (weight 4.0)
-    node_ids = list(page_map.keys())
-    for i in range(len(node_ids)):
-        for j in range(i + 1, len(node_ids)):
-            a, b = node_ids[i], node_ids[j]
-            key = (min(a, b), max(a, b))
-            if key in edge_set:
-                continue
-            # Check if they share sources
-            sources_a = set(page_map.get(a, {}).get("sources", []))
-            sources_b = set(page_map.get(b, {}).get("sources", []))
-            overlap = sources_a & sources_b
-            if overlap:
-                edge_set.add(key)
-                edge_list.append({
-                    "source": a,
-                    "target": b,
-                    "edge_type": "related",
-                    "weight": 4.0,
-                })
+    for src_path, node_set in source_map.items():
+        node_list = list(node_set)
+        for i in range(len(node_list)):
+            for j in range(i + 1, len(node_list)):
+                edge_set.add((min(node_list[i], node_list[j]), max(node_list[i], node_list[j])))
+
+    # Calculate 4-signal relevance for each candidate pair
+    edge_list: list[dict] = []
+    for a, b in edge_set:
+        type_a = page_map[a]["type"]
+        type_b = page_map[b]["type"]
+
+        # Signal 1: Direct links (bidirectional count × 3.0)
+        forward = 1 if b in link_graph.get(a, set()) else 0
+        backward = 1 if a in link_graph.get(b, set()) else 0
+        direct_score = (forward + backward) * WEIGHTS["direct_link"]
+
+        # Signal 2: Source overlap (shared source count × 4.0)
+        shared_sources = len(node_sources.get(a, set()) & node_sources.get(b, set()))
+        source_score = shared_sources * WEIGHTS["source_overlap"]
+
+        # Signal 3: Common neighbors — Adamic-Adar (sum 1/log(degree) × 1.5)
+        nbrs_a = neighbors.get(a, set())
+        nbrs_b = neighbors.get(b, set())
+        adamic_adar = 0.0
+        for common in nbrs_a & nbrs_b:
+            deg = max(degrees.get(common, 2), 2)
+            adamic_adar += 1.0 / math.log(deg)
+        neighbor_score = adamic_adar * WEIGHTS["common_neighbor"]
+
+        # Signal 4: Type affinity (affinity matrix value × 1.0)
+        affinity = TYPE_AFFINITY.get(type_a, {}).get(type_b, 0.5)
+        type_score = affinity * WEIGHTS["type_affinity"]
+
+        total = round(direct_score + source_score + neighbor_score + type_score, 2)
+        edge_list.append({
+            "source": a,
+            "target": b,
+            "edge_type": "related",
+            "weight": total,
+        })
 
     # Community detection
     communities = []

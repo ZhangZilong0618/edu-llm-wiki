@@ -23,12 +23,20 @@ export default function App() {
 
   // Load wiki pages and sources when project changes
   useEffect(() => {
-    // Clear stale data immediately
+    // Clear all per-project state immediately
     setWikiPages([])
     setSourceFiles([])
     setSelectedPage(null)
+    useAppStore.getState().setSearchResults([])
+    useAppStore.getState().setSearchQuery("")
+    useAppStore.getState().setConversations([])
+    useAppStore.getState().setCurrentConversationId(null)
+    useAppStore.getState().setIngestProgress(null)
+
+    // Load fresh data for new project
     api.listPages().then(setWikiPages).catch(console.error)
     api.listSources().then(setSourceFiles).catch(console.error)
+    api.listConversations().then(useAppStore.getState().setConversations).catch(() => {})
   }, [currentProject])
 
   return (

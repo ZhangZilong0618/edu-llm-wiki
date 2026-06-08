@@ -3,6 +3,20 @@ import type { SearchResult, WikiPage } from "@/types/wiki"
 
 export type ActiveView = "wiki" | "sources" | "search" | "graph" | "lint" | "settings"
 
+export interface IngestProgress {
+  filename: string
+  stages: {
+    stage: string
+    message: string
+    status: "pending" | "active" | "done"
+    details?: { concepts?: string[]; formulas?: string[]; principles?: string[]; exercises?: string[] }
+    pages?: { current: number; total: number; items: { title: string; page_type: string; action: string }[] }
+    created?: number
+    updated?: number
+  }[]
+  error?: string
+}
+
 interface AppState {
   activeView: ActiveView
   setActiveView: (view: ActiveView) => void
@@ -33,10 +47,19 @@ interface AppState {
   // Ingest progress
   ingestStatus: string
   setIngestStatus: (s: string) => void
+  ingestProgress: IngestProgress | null
+  setIngestProgress: (p: IngestProgress | null) => void
+  updateIngestProgress: (fn: (prev: IngestProgress | null) => IngestProgress | null) => void
 
   // Knowledge tree pages
   wikiPages: { path: string; title: string; type: string; summary: string }[]
   setWikiPages: (pages: { path: string; title: string; type: string; summary: string }[]) => void
+
+  // Conversations
+  conversations: { id: string; title: string; message_count: number; created: string; updated: string }[]
+  setConversations: (list: { id: string; title: string; message_count: number; created: string; updated: string }[]) => void
+  currentConversationId: string | null
+  setCurrentConversationId: (id: string | null) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -72,7 +95,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   ingestStatus: "",
   setIngestStatus: (s) => set({ ingestStatus: s }),
+  ingestProgress: null,
+  setIngestProgress: (p) => set({ ingestProgress: p }),
+  updateIngestProgress: (fn) => set((s) => ({ ingestProgress: fn(s.ingestProgress) })),
 
   wikiPages: [],
   setWikiPages: (pages) => set({ wikiPages: pages }),
+
+  conversations: [],
+  setConversations: (list) => set({ conversations: list }),
+  currentConversationId: null,
+  setCurrentConversationId: (id) => set({ currentConversationId: id }),
 }))

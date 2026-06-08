@@ -135,41 +135,53 @@ def _generate_snippet(content: str, tokens: list[str]) -> str:
 
 
 async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str = "default") -> list[dict]:
-    """Phase 2: Expand search results using graph relevance (wikilinks)."""
+    """Phase 2: Expand search results using graph edge weights (4-signal relevance).
+
+    Only expands to neighbors with edge weight >= RELEVANCE_THRESHOLD,
+    matching the old Tauri system's behavior.
+    """
     from services.graph_engine import build_graph
+
+    RELEVANCE_THRESHOLD = 2.0
 
     graph = build_graph(project_id=project_id)
     nodes_by_id = {n["id"]: n for n in graph["nodes"]}
 
-    # Build adjacency
-    adjacency = defaultdict(set)
+    # Build weighted adjacency: node_id -> set of (neighbor_id, weight)
+    adjacency: dict[str, set[tuple[str, float]]] = defaultdict(set)
     for e in graph["edges"]:
-        adjacency[e["source"]].add(e["target"])
-        adjacency[e["target"]].add(e["source"])
+        adjacency[e["source"]].add((e["target"], e["weight"]))
+        adjacency[e["target"]].add((e["source"], e["weight"]))
 
     seen_paths = {r["path"] for r in results}
     new_results = list(results)
 
-    for r in results[:10]:  # expand from top 10
+    for r in results[:10]:  # expand from top 10 results
         node_id = r["path"].replace(".md", "")
-        for _ in range(depth):
-            neighbors = adjacency.get(node_id, set())
-            for neighbor in neighbors:
-                neighbor_path = neighbor + ".md"
-                if neighbor_path not in seen_paths and neighbor in nodes_by_id:
-                    seen_paths.add(neighbor_path)
-                    node = nodes_by_id[neighbor]
-                    # Read page content for snippet
-                    page = read_wiki_page(neighbor_path, project_id=project_id)
-                    content = page.get("content", "") if page else ""
-                    new_results.append({
-                        "path": neighbor_path,
-                        "title": node["label"],
-                        "snippet": content[:200],
-                        "score": r["score"] * 0.7,  # decay
-                        "title_match": False,
-                        "vector_score": None,
-                    })
+        # Collect neighbors with relevance above threshold
+        candidates: list[tuple[str, str, float]] = []
+        for neighbor, weight in adjacency.get(node_id, set()):
+            if weight < RELEVANCE_THRESHOLD:
+                continue
+            neighbor_path = neighbor + ".md"
+            if neighbor_path not in seen_paths and neighbor in nodes_by_id:
+                candidates.append((neighbor, neighbor_path, weight))
+        # Sort by edge weight descending, take top 3 (matching old system: getRelatedNodes limit 3)
+        candidates.sort(key=lambda x: -x[2])
+        for neighbor, neighbor_path, weight in candidates[:3]:
+            seen_paths.add(neighbor_path)
+            node = nodes_by_id[neighbor]
+            page = read_wiki_page(neighbor_path, project_id=project_id)
+            content = page.get("content", "") if page else ""
+            # Score combines original score + edge weight (normalized)
+            new_results.append({
+                "path": neighbor_path,
+                "title": node["label"],
+                "snippet": content[:200],
+                "score": round(r["score"] * 0.5 + weight, 2),
+                "title_match": False,
+                "vector_score": None,
+            })
 
     return sorted(new_results, key=lambda x: -x["score"])
 

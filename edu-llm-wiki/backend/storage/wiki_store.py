@@ -2,6 +2,7 @@
 
 import os
 import re
+import json
 import shutil
 import hashlib
 import yaml
@@ -284,7 +285,8 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
 
 # --- Project management ---
 
-_PROJECT_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+# Only forbid filesystem-unsafe characters: / \ : * ? " < > |
+_PROJECT_NAME_RE = re.compile(r'^[^/\\:*?"<>|]+$')
 
 
 def list_projects() -> list[dict]:
@@ -302,7 +304,7 @@ def list_projects() -> list[dict]:
 def create_project(name: str) -> dict:
     """Create a new project with full directory structure."""
     if not _PROJECT_NAME_RE.match(name):
-        raise ValueError("Project name must be alphanumeric (letters, numbers, hyphens, underscores)")
+        raise ValueError("Project name contains invalid characters: / \\ : * ? \" < > |")
     ensure_dirs(project_id=name)
     return {"name": name, "title": name}
 
@@ -314,5 +316,58 @@ def delete_project(name: str) -> bool:
     proj_path = Path(settings.projects_dir) / name
     if proj_path.exists():
         shutil.rmtree(proj_path)
+        return True
+    return False
+
+
+# --- Conversation storage ---
+
+def conversations_dir(project_id: str = "default") -> Path:
+    d = Path(settings.projects_dir) / project_id / "conversations"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def list_conversations(*, project_id: str = "default") -> list[dict]:
+    """List all conversations for a project, newest first."""
+    cd = conversations_dir(project_id)
+    convs = []
+    for f in sorted(cd.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            convs.append({
+                "id": data.get("id", f.stem),
+                "title": data.get("title", "Untitled"),
+                "message_count": len(data.get("messages", [])),
+                "created": data.get("created", ""),
+                "updated": data.get("updated", ""),
+            })
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return convs
+
+
+def get_conversation(conv_id: str, *, project_id: str = "default") -> dict | None:
+    """Load a single conversation by ID."""
+    fp = conversations_dir(project_id) / f"{conv_id}.json"
+    if not fp.exists():
+        return None
+    return json.loads(fp.read_text(encoding="utf-8"))
+
+
+def save_conversation(conv: dict, *, project_id: str = "default"):
+    """Save (create or update) a conversation."""
+    conv["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if "created" not in conv:
+        conv["created"] = conv["updated"]
+    fp = conversations_dir(project_id) / f"{conv['id']}.json"
+    fp.write_text(json.dumps(conv, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def delete_conversation(conv_id: str, *, project_id: str = "default") -> bool:
+    """Delete a conversation."""
+    fp = conversations_dir(project_id) / f"{conv_id}.json"
+    if fp.exists():
+        fp.unlink()
         return True
     return False

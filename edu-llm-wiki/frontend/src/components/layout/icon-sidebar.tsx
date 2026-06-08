@@ -19,7 +19,7 @@ export function IconSidebar() {
   const setActiveView = useAppStore((s) => s.setActiveView)
 
   return (
-    <div className="flex flex-col gap-0.5 py-3 px-2 w-40 border-r bg-[var(--sidebar)] shrink-0">
+    <div className="flex flex-col gap-0.5 py-3 px-2 w-48 border-r bg-[var(--sidebar)] shrink-0">
       <ProjectSelector />
       <div className="border-t border-[var(--border)] my-1" />
       {items.map((item) => (

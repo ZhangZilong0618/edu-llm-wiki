@@ -48,6 +48,39 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     }),
+  runIngestStream: async function* (sourcePaths: string[], force = false) {
+    const res = await fetch(`${BASE}/ingest/run-stream?${p()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_paths: sourcePaths, force }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buf = ""
+    while (true) {
+      let done: boolean, value: Uint8Array | undefined
+      try {
+        ({ done, value } = await reader.read())
+      } catch {
+        // Connection reset — stream ended abruptly
+        break
+      }
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split("\n")
+      buf = lines.pop() || ""
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6)
+          if (data === "[DONE]") return
+          try {
+            yield JSON.parse(data)
+          } catch { /* skip malformed lines */ }
+        }
+      }
+    }
+  },
   listSources: () => request<FileEntry[]>(`${BASE}/ingest/sources?${p()}`),
   deleteSource: (filename: string) =>
     request<{ status: string }>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}?${p()}`, { method: "DELETE" }),
@@ -86,6 +119,41 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ messages }),
     }),
+  chatStream: async function* (messages: { role: string; content: string }[]) {
+    const res = await fetch(`${BASE}/chat/stream?${p()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buf = ""
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split("\n")
+      buf = lines.pop() || ""
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue
+        const data = line.slice(6)
+        if (data === "[DONE]") return
+        yield JSON.parse(data)
+      }
+    }
+  },
+
+  // Conversations
+  listConversations: () => request<{ id: string; title: string; message_count: number; created: string; updated: string }[]>(`${BASE}/conversations?${p()}`),
+  getConversation: (id: string) => request<{ id: string; title: string; messages: any[] }>(`${BASE}/conversations/${id}?${p()}`),
+  saveConversation: (conv: { id: string; title: string; messages: any[] }) =>
+    request<{ status: string; id: string }>(`${BASE}/conversations?${p()}`, {
+      method: "POST",
+      body: JSON.stringify(conv),
+    }),
+  deleteConversation: (id: string) =>
+    request<{ status: string }>(`${BASE}/conversations/${id}?${p()}`, { method: "DELETE" }),
 
   // Lint
   runLint: () => request<Record<string, unknown>>(`${BASE}/lint/run?${p()}`, { method: "POST" }),
