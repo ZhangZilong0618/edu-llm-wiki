@@ -177,7 +177,11 @@ export const api = {
         if (!line.startsWith("data: ")) continue
         const data = line.slice(6)
         if (data === "[DONE]") return
-        yield JSON.parse(data)
+        try {
+          yield JSON.parse(data)
+        } catch {
+          // skip malformed SSE lines
+        }
       }
     }
   },

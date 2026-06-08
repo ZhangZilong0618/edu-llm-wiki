@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
-import { Send, Loader2, Plus, Trash2, MessageSquare, Dumbbell, MessageCircle, ChevronRight } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, Dumbbell, MessageCircle, ChevronRight, Square } from "lucide-react"
 
 interface Message {
   id: string
@@ -13,8 +13,8 @@ interface Message {
 
 type ChatMode = "chat" | "exercise"
 
-let idCounter = 0
-function nextId() { return String(++idCounter) }
+let idCounter = Date.now()
+function nextId() { return `${++idCounter}-${Math.random().toString(36).slice(2, 8)}` }
 
 export function ChatPanel() {
   const conversations = useAppStore((s) => s.conversations)
@@ -32,6 +32,7 @@ export function ChatPanel() {
   const [loadingExercises, setLoadingExercises] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const skipLoadRef = useRef(false)
   const convIdRef = useRef(convId)
   convIdRef.current = convId
@@ -62,6 +63,14 @@ export function ChatPanel() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, streaming])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      if (abortRef.current) abortRef.current.abort()
+    }
+  }, [])
 
   // Auto-save with debounce
   const autoSave = useCallback((msgs: Message[], title?: string) => {
@@ -165,6 +174,14 @@ export function ChatPanel() {
     if (exerciseIdx > 0) {
       setExerciseIdx((i) => i - 1)
     }
+  }
+
+  const handleStop = () => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    setStreaming(null)
   }
 
   const handleSend = useCallback(async () => {
@@ -460,13 +477,23 @@ export function ChatPanel() {
               className="flex-1 resize-none rounded-lg border px-3 py-2 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
               rows={2}
             />
-            <button
-              onClick={handleSend}
-              disabled={!!streaming || !input.trim()}
-              className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 transition-opacity"
-            >
-              <Send size={16} />
-            </button>
+{streaming ? (
+              <button
+                onClick={handleStop}
+                className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"
+                title="Stop generating"
+              >
+                <Square size={14} />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 transition-opacity"
+              >
+                <Send size={14} />
+              </button>
+            )}
           </div>
         </div>
       </div>

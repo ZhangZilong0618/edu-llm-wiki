@@ -47,6 +47,7 @@ export function KnowledgeTree() {
   const handleSelect = async (p: typeof wikiPages[0]) => {
     try {
       const page = await api.getPage(p.path)
+      useAppStore.getState().setSelectedSource(null)
       setSelectedPage(page)
       setActiveView("wiki")
     } catch {

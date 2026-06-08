@@ -7,7 +7,6 @@ Phase 2: Graph expansion (1-2 hop)
 
 import re
 from collections import defaultdict
-from pathlib import Path
 
 from config import settings
 from storage.wiki_store import list_wiki_pages, read_wiki_page
@@ -194,7 +193,7 @@ async def search(query: str, include_vector: bool = False, top_k: int = 20, *, p
     vector_hits = 0
     if include_vector and settings.embedding_enabled:
         try:
-            vector_results = await _vector_search(query, top_k)
+            vector_results = await _vector_search(query, top_k, project_id=project_id)
             vector_hits = len(vector_results)
 
             # Merge: boost existing, add new
@@ -224,40 +223,11 @@ async def search(query: str, include_vector: bool = False, top_k: int = 20, *, p
     }
 
 
-async def _vector_search(query: str, top_k: int = 20) -> list[dict]:
-    """Vector semantic search using embeddings."""
+async def _vector_search(query: str, top_k: int = 20, *, project_id: str = "default") -> list[dict]:
+    """Vector semantic search using local embeddings + LanceDB."""
     try:
-        import lancedb
-        from openai import AsyncOpenAI
-
-        # Get embedding
-        client = AsyncOpenAI(
-            api_key=settings.embedding_api_key or "ollama",
-            base_url=settings.embedding_endpoint or None,
-        )
-        resp = await client.embeddings.create(
-            model=settings.embedding_model,
-            input=[query],
-        )
-        query_vec = resp.data[0].embedding
-
-        # Connect to LanceDB
-        db_path = Path(settings.data_dir) / "vectors"
-        db = lancedb.connect(str(db_path))
-
-        if "wiki_pages" not in db.table_names():
-            return []
-
-        table = db.open_table("wiki_pages")
-        results = table.search(query_vec).metric("cosine").limit(top_k).to_list()
-
-        return [{
-            "path": r["path"],
-            "title": r.get("title", ""),
-            "snippet": r.get("content", "")[:200],
-            "score": round(1.0 - r.get("_distance", 0), 3),
-            "title_match": False,
-            "vector_score": round(1.0 - r.get("_distance", 0), 3),
-        } for r in results]
-    except ImportError:
+        from services.vector_store import vector_search
+        results = vector_search(query, top_k=top_k, project_id=project_id)
+        return results
+    except Exception:
         return []

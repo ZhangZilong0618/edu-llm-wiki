@@ -33,6 +33,7 @@ export default function App() {
     useAppStore.getState().setCurrentConversationId(null)
     useAppStore.getState().setIngestProgress(null)
     useAppStore.getState().setSelectedSource(null)
+    useAppStore.getState().setIsSearching(false)
 
     // Load fresh data for new project (stale results are discarded)
     api.listPages().then((pages) => {

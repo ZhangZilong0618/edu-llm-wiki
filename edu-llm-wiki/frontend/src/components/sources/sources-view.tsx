@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import { useAppStore, type IngestProgress } from "@/stores/app-store"
 import { api } from "@/lib/api"
+import { toast } from "@/components/ui/toast"
 import { Upload, Loader2, Trash2, Play, ChevronDown, ChevronUp, FileText, Brain, PenLine, CheckCircle2, X, Zap, Eye } from "lucide-react"
 
 function viewableExt(filename: string): boolean {
@@ -24,16 +25,29 @@ export function SourcesView() {
   const [uploading, setUploading] = useState(false)
   const [ingesting, setIngesting] = useState<string>("") // "" = not ingesting, "all" = batch, filename = single
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Clear delete confirmation when clicking elsewhere
+  useEffect(() => {
+    if (!confirmDelete) return
+    const handler = () => setConfirmDelete(null)
+    const timer = setTimeout(() => document.addEventListener("click", handler, { once: true }), 100)
+    return () => { clearTimeout(timer); document.removeEventListener("click", handler) }
+  }, [confirmDelete])
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
     setUploading(true)
+    let ok = 0
+    let fail = 0
     for (const file of files) {
       try {
         await api.uploadFile(file)
+        ok++
       } catch (err) {
+        fail++
         console.error(err)
       }
     }
@@ -41,6 +55,11 @@ export function SourcesView() {
     setSourceFiles(list)
     setUploading(false)
     if (fileInputRef.current) fileInputRef.current.value = ""
+    if (fail > 0) {
+      toast({ type: "error", message: `${ok} file(s) uploaded, ${fail} failed` })
+    } else if (ok > 0) {
+      toast({ type: "success", message: `${ok} file(s) uploaded` })
+    }
   }
 
   const handleIngest = async (filename: string) => {
@@ -226,9 +245,18 @@ export function SourcesView() {
   }, [sourceFiles, setSourceFiles, updateProgress])
 
   const handleDelete = async (filename: string) => {
-    await api.deleteSource(filename)
+    if (confirmDelete !== filename) {
+      setConfirmDelete(filename)
+      return
+    }
+    try {
+      await api.deleteSource(filename)
+    } catch {
+      toast({ type: "error", message: `Failed to delete ${filename}` })
+    }
     const list = await api.listSources()
     setSourceFiles(Array.isArray(list) ? list : [])
+    setConfirmDelete(null)
   }
 
   const handlePreview = async (filename: string) => {
@@ -254,7 +282,7 @@ export function SourcesView() {
           multiple
           onChange={handleUpload}
           className="hidden"
-          accept=".pdf,.docx,.pptx,.xlsx,.xls,.md,.txt"
+          accept=".pdf,.docx,.pptx,.xlsx,.xls,.md,.txt,.markdown,.rst"
         />
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -311,8 +339,12 @@ export function SourcesView() {
             </button>
             <button
               onClick={() => handleDelete(f.name)}
-              className="p-1 rounded hover:bg-red-100 text-red-600"
-              title="Delete"
+              className={`p-1 rounded transition-colors ${
+                confirmDelete === f.name
+                  ? "bg-red-100 text-red-600 hover:bg-red-200"
+                  : "hover:bg-red-100 text-red-600"
+              }`}
+              title={confirmDelete === f.name ? "Click again to confirm delete" : "Delete"}
             >
               <Trash2 size={14} />
             </button>

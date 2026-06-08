@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Query
 
+from services.ingest_engine import _repair_json
 from services.llm_client import chat_complete
 from storage.wiki_store import list_wiki_pages, wiki_path
 
@@ -65,10 +66,5 @@ async def run_lint(project_id: str = Query("default")):
     )
 
     # Parse JSON from response
-    result = result.strip()
-    if result.startswith("```"):
-        result = result.split("```")[1]
-        if result.startswith("json"):
-            result = result[4:]
-
+    result = _repair_json(result)
     return json.loads(result)

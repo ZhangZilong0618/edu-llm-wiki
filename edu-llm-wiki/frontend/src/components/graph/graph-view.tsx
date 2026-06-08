@@ -405,13 +405,14 @@ export function GraphView() {
   const [searchOpen, setSearchOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const selectPage = useAppStore((s) => s.selectPage)
+  const wikiPages = useAppStore((s) => s.wikiPages)
 
   useEffect(() => {
     api.getGraph()
       .then(setData)
       .catch((e) => setError(e?.message || "Failed to load graph"))
       .finally(() => setLoading(false))
-  }, [])
+  }, [wikiPages])
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()

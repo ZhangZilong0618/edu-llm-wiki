@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 
@@ -5,6 +6,11 @@ export function PreviewPanel() {
   const selectedPage = useAppStore((s) => s.selectedPage)
   const selectedSource = useAppStore((s) => s.selectedSource)
   const setSelectedSource = useAppStore((s) => s.setSelectedSource)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, 0)
+  }, [selectedPage?.path, selectedSource?.filename])
 
   if (selectedSource) {
     const isPdf = selectedSource.extension === ".pdf" && selectedSource.view_url
@@ -25,7 +31,7 @@ export function PreviewPanel() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" ref={scrollRef}>
           {isPdf ? (
             <iframe
               src={selectedSource.view_url!}
@@ -91,7 +97,7 @@ export function PreviewPanel() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4" ref={selectedPage ? scrollRef : undefined}>
         <Markdown>{selectedPage.content || "*No content*"}</Markdown>
       </div>
     </div>
