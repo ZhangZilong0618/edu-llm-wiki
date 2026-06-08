@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
-import { Send, Loader2, Plus, Trash2, MessageSquare } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, Dumbbell, MessageCircle, ChevronRight } from "lucide-react"
 
 interface Message {
   id: string
@@ -10,6 +10,8 @@ interface Message {
   content: string
   cited?: { path: string; title: string; snippet: string }[]
 }
+
+type ChatMode = "chat" | "exercise"
 
 let idCounter = 0
 function nextId() { return String(++idCounter) }
@@ -24,10 +26,14 @@ export function ChatPanel() {
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState<string | null>(null)
   const [convTitle, setConvTitle] = useState("")
+  const [mode, setMode] = useState<ChatMode>("chat")
+  const [exercises, setExercises] = useState<{ path: string; title: string; content: string }[]>([])
+  const [exerciseIdx, setExerciseIdx] = useState(0)
+  const [loadingExercises, setLoadingExercises] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const skipLoadRef = useRef(false)
-  const convIdRef = useRef(convId) // always-current ref for async closures
+  const convIdRef = useRef(convId)
   convIdRef.current = convId
 
   // Load conversation list on mount / project change
@@ -49,9 +55,7 @@ export function ChatPanel() {
     api.getConversation(convId).then((c) => {
       setMessages(c.messages || [])
       setConvTitle(c.title || "")
-    }).catch(() => {
-      // Don't clear messages for 404 — the conversation hasn't been saved yet
-    })
+    }).catch(() => {})
   }, [convId])
 
   // Auto-scroll
@@ -59,7 +63,7 @@ export function ChatPanel() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, streaming])
 
-  // Auto-save with debounce (uses ref for latest convId)
+  // Auto-save with debounce
   const autoSave = useCallback((msgs: Message[], title?: string) => {
     const id = convIdRef.current
     if (!id) return
@@ -75,11 +79,98 @@ export function ChatPanel() {
     }, 500)
   }, [convTitle, setConversations])
 
+  // Load exercises when switching to exercise mode
+  const loadExercises = useCallback(async () => {
+    setLoadingExercises(true)
+    try {
+      const pages = await api.listPages()
+      const exercisePages = pages.filter((p: any) => p.type === "exercise")
+      if (exercisePages.length === 0) {
+        setExercises([])
+        setLoadingExercises(false)
+        return
+      }
+      const loaded = await Promise.all(
+        exercisePages.slice(0, 20).map(async (p: any) => {
+          try {
+            const full = await api.getPage(p.path)
+            return { path: p.path, title: p.title, content: full.content || "" }
+          } catch {
+            return { path: p.path, title: p.title, content: "" }
+          }
+        })
+      )
+      setExercises(loaded.filter((e) => e.content))
+      setExerciseIdx(0)
+    } catch {
+      setExercises([])
+    }
+    setLoadingExercises(false)
+  }, [])
+
+  const startExercise = useCallback(async () => {
+    if (exercises.length === 0) return
+    const exercise = exercises[exerciseIdx]
+    const prompt = `请基于以下练习内容，给我出一道题目。先出题，等我作答后再给反馈和讲解。\n\n## ${exercise.title}\n\n${exercise.content.slice(0, 3000)}`
+
+    let currentConvId = convId
+    if (!currentConvId) {
+      currentConvId = nextId()
+      skipLoadRef.current = true
+      setConvId(currentConvId)
+    }
+
+    const userMsg: Message = { id: nextId(), role: "user", content: `[Exercise] ${exercise.title}` }
+    const assistantId = nextId()
+    const newMsgs = [...messages, userMsg, { id: assistantId, role: "assistant" as const, content: "" }]
+    setMessages(newMsgs)
+    setStreaming(assistantId)
+    setConvTitle(`Exercise: ${exercise.title}`)
+
+    try {
+      const apiMessages = [
+        { role: "system" as const, content: "你是一位教育导师，请引导学生通过练习掌握知识。先出题，等学生作答后再给反馈和讲解。回答要简洁清晰。" },
+        ...newMsgs.filter((m) => m.content !== "").map((m) => ({ role: m.role, content: m.content })),
+      ]
+
+      let lastContent = ""
+      for await (const event of api.chatStream(apiMessages)) {
+        if (event.type === "cited") {
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
+        } else if (event.type === "content") {
+          lastContent += event.text
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+        }
+      }
+
+      setMessages((prev) => {
+        autoSave(prev, `Exercise: ${exercise.title}`)
+        return prev
+      })
+    } catch (e: any) {
+      setMessages((prev) => prev.map((m) =>
+        m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
+      ))
+    }
+    setStreaming(null)
+  }, [exercises, exerciseIdx, messages, convId, convTitle, autoSave, setConvId])
+
+  const nextExercise = () => {
+    if (exerciseIdx < exercises.length - 1) {
+      setExerciseIdx((i) => i + 1)
+    }
+  }
+
+  const prevExercise = () => {
+    if (exerciseIdx > 0) {
+      setExerciseIdx((i) => i - 1)
+    }
+  }
+
   const handleSend = useCallback(async () => {
     if (!input.trim() || streaming) return
 
     let currentConvId = convId
-    // Auto-create conversation if none selected
     if (!currentConvId) {
       currentConvId = nextId()
       skipLoadRef.current = true
@@ -93,49 +184,44 @@ export function ChatPanel() {
     setInput("")
     setStreaming(assistantId)
 
-    // Auto-title from first user message
     if (!convTitle && messages.length === 0) {
       setConvTitle(input.slice(0, 50))
     }
 
     try {
-      const apiMessages = newMsgs.filter((m) => m.content !== "").map((m) => ({
-        role: m.role,
-        content: m.content,
-      }))
+      const systemMsg = mode === "exercise"
+        ? [{ role: "system" as const, content: "你是一位教育导师，请引导学生通过练习掌握知识。先出题，等学生作答后再给反馈和讲解。" }]
+        : []
+
+      const apiMessages = [
+        ...systemMsg,
+        ...newMsgs.filter((m) => m.content !== "").map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+      ]
 
       let lastContent = ""
       for await (const event of api.chatStream(apiMessages)) {
         if (event.type === "cited") {
-          setMessages((prev) => {
-            const next = prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m)
-            return next
-          })
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
           lastContent += event.text
-          setMessages((prev) => {
-            const next = prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m)
-            return next
-          })
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
         }
       }
 
-      // Save completed
       setMessages((prev) => {
         autoSave(prev, input.slice(0, 50))
         return prev
       })
     } catch (e: any) {
-      setMessages((prev) => {
-        const next = prev.map((m) =>
-          m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
-        )
-        autoSave(next)
-        return next
-      })
+      setMessages((prev) => prev.map((m) =>
+        m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
+      ))
     }
     setStreaming(null)
-  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId])
+  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, mode])
 
   const handleNewConv = () => {
     setConvId(null)
@@ -159,6 +245,15 @@ export function ChatPanel() {
       handleSend()
     }
   }
+
+  const handleModeChange = (newMode: ChatMode) => {
+    setMode(newMode)
+    if (newMode === "exercise" && exercises.length === 0) {
+      loadExercises()
+    }
+  }
+
+  const isEmpty = messages.length === 0 && !convId
 
   return (
     <div className="flex h-full">
@@ -203,9 +298,46 @@ export function ChatPanel() {
 
       {/* Chat area */}
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Mode toggle */}
+        <div className="shrink-0 flex items-center gap-1 px-3 py-1.5 border-b bg-[var(--background)]">
+          <button
+            onClick={() => handleModeChange("chat")}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
+              mode === "chat"
+                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+            }`}
+          >
+            <MessageCircle size={12} />
+            Chat
+          </button>
+          <button
+            onClick={() => handleModeChange("exercise")}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
+              mode === "exercise"
+                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+            }`}
+          >
+            <Dumbbell size={12} />
+            Exercise
+          </button>
+          {mode === "exercise" && exercises.length > 0 && (
+            <div className="ml-auto flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
+              <button onClick={prevExercise} disabled={exerciseIdx === 0} className="p-0.5 rounded hover:bg-[var(--accent)] disabled:opacity-30">
+                <ChevronRight size={12} className="rotate-180" />
+              </button>
+              <span>{exerciseIdx + 1} / {exercises.length}</span>
+              <button onClick={nextExercise} disabled={exerciseIdx === exercises.length - 1} className="p-0.5 rounded hover:bg-[var(--accent)] disabled:opacity-30">
+                <ChevronRight size={12} />
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.length === 0 && !convId && (
+          {isEmpty && mode === "chat" && (
             <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
               <div className="text-center">
                 <p className="text-lg mb-2">Edu-LLM-Wiki</p>
@@ -213,6 +345,37 @@ export function ChatPanel() {
               </div>
             </div>
           )}
+
+          {isEmpty && mode === "exercise" && (
+            <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
+              <div className="text-center">
+                <Dumbbell className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                {loadingExercises ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2 opacity-40" />
+                    <p>Loading exercises...</p>
+                  </>
+                ) : exercises.length === 0 ? (
+                  <>
+                    <p className="text-sm font-medium">No exercises found</p>
+                    <p className="text-xs mt-1">Import documents with exercises to practice here.</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium">Ready to practice!</p>
+                    <p className="text-xs mt-1">{exercises.length} exercises available. Click below to start.</p>
+                    <button
+                      onClick={startExercise}
+                      className="mt-3 px-4 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-xs hover:opacity-90 transition-opacity"
+                    >
+                      Start Exercise
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -259,12 +422,41 @@ export function ChatPanel() {
 
         {/* Input */}
         <div className="shrink-0 p-3 border-t">
+          {/* Exercise next button */}
+          {mode === "exercise" && exercises.length > 0 && !isEmpty && (
+            <div className="mb-2 flex items-center gap-2">
+              <button
+                onClick={startExercise}
+                disabled={!!streaming}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition-colors disabled:opacity-50"
+              >
+                <Dumbbell size={12} />
+                {messages.length === 0 ? "Start Exercise" : "This Question Again"}
+              </button>
+              {exerciseIdx < exercises.length - 1 && (
+                <button
+                  onClick={() => { nextExercise(); startExercise() }}
+                  disabled={!!streaming}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border hover:bg-[var(--accent)] transition-colors disabled:opacity-50"
+                >
+                  Next Question
+                  <ChevronRight size={12} />
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex gap-2">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
+              placeholder={
+                mode === "exercise"
+                  ? "Type your answer..."
+                  : convId
+                    ? "Ask a follow-up..."
+                    : "Ask a question about your knowledge base..."
+              }
               className="flex-1 resize-none rounded-lg border px-3 py-2 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
               rows={2}
             />

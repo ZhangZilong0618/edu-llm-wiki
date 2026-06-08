@@ -4,9 +4,10 @@ import Graph from "graphology"
 import { SigmaContainer, useLoadGraph, useRegisterEvents, useSetSettings, useSigma } from "@react-sigma/core"
 import "@react-sigma/core/lib/style.css"
 import forceAtlas2 from "graphology-layout-forceatlas2"
-import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Tag, Layers, Filter, X, Search, RotateCcw } from "lucide-react"
+import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Tag, Layers, Filter, X, Search, RotateCcw, ExternalLink } from "lucide-react"
 import { api } from "@/lib/api"
-import type { GraphData } from "@/types/wiki"
+import { useAppStore } from "@/stores/app-store"
+import type { GraphData, GraphNode } from "@/types/wiki"
 
 const TYPE_COLORS: Record<string, string> = {
   concept: "#3b82f6",
@@ -391,6 +392,7 @@ export function GraphView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const [selectedNodeData, setSelectedNodeData] = useState<{ node: GraphNode; neighbors: GraphNode[]; degree: number } | null>(null)
   const [colorMode, setColorMode] = useState<ColorMode>("type")
   const [hoverState, setHoverState] = useState<HoverState>(null)
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set())
@@ -402,6 +404,7 @@ export function GraphView() {
   const [graphSearch, setGraphSearch] = useState("")
   const [searchOpen, setSearchOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const selectPage = useAppStore((s) => s.selectPage)
 
   useEffect(() => {
     api.getGraph()
@@ -413,6 +416,26 @@ export function GraphView() {
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
+
+  // Load node details when selected
+  useEffect(() => {
+    if (!selectedNode || !data) {
+      setSelectedNodeData(null)
+      return
+    }
+    const node = data.nodes.find((n) => n.id === selectedNode)
+    if (!node) {
+      setSelectedNodeData(null)
+      return
+    }
+    const neighborIds = new Set<string>()
+    for (const e of data.edges) {
+      if (e.source === selectedNode) neighborIds.add(e.target)
+      if (e.target === selectedNode) neighborIds.add(e.source)
+    }
+    const neighbors = data.nodes.filter((n) => neighborIds.has(n.id))
+    setSelectedNodeData({ node, neighbors, degree: neighborIds.size })
+  }, [selectedNode, data])
 
   // Filter by hidden types
   const filteredNodes = useMemo(() => {
@@ -633,7 +656,13 @@ export function GraphView() {
               <EventHandler onNodeClick={handleNodeClick} onHoverChange={setHoverState} />
               <GraphSettings
                 hoverState={hoverState}
-                highlightedNodes={searchActive ? searchResults.matched : highlightedNodes}
+                highlightedNodes={
+                  searchActive
+                    ? searchResults.matched
+                    : selectedNodeData && selectedNode
+                      ? new Set([selectedNode, ...selectedNodeData.neighbors.map((n) => n.id)])
+                      : highlightedNodes
+                }
                 nodeCount={visibleData.nodes.length}
               />
               <EdgeLabelOverlay hoverState={hoverState} />
@@ -771,6 +800,84 @@ export function GraphView() {
                   <p className="text-[var(--muted-foreground)] mt-1">{insight.description}</p>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Node detail sidebar */}
+        {selectedNodeData && !showInsights && (
+          <div className="w-72 shrink-0 border-l bg-[var(--background)] overflow-y-auto">
+            <div className="flex items-center justify-between px-3 py-2 border-b">
+              <span className="text-sm font-medium truncate">{selectedNodeData.node.label}</span>
+              <button onClick={() => setSelectedNode(null)} className="p-0.5 rounded hover:bg-[var(--muted)]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-3 space-y-3">
+              {/* Type badge */}
+              <div className="flex items-center gap-2">
+                <span
+                  className="w-2.5 h-2.5 rounded-full"
+                  style={{ background: nodeColor(selectedNodeData.node.node_type) }}
+                />
+                <span className="text-xs font-medium capitalize">{selectedNodeData.node.node_type}</span>
+                {selectedNodeData.node.community >= 0 && (
+                  <span className="text-xs text-[var(--muted-foreground)] ml-auto">
+                    Community {selectedNodeData.node.community}
+                  </span>
+                )}
+              </div>
+
+              {/* Stats */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-md bg-[var(--muted)] p-2 text-center">
+                  <div className="text-lg font-semibold">{selectedNodeData.degree}</div>
+                  <div className="text-xs text-[var(--muted-foreground)]">Connections</div>
+                </div>
+                <div className="rounded-md bg-[var(--muted)] p-2 text-center">
+                  <div className="text-lg font-semibold">{selectedNodeData.node.size}</div>
+                  <div className="text-xs text-[var(--muted-foreground)]">References</div>
+                </div>
+              </div>
+
+              {/* Open in wiki */}
+              <button
+                onClick={() => {
+                  const path = selectedNodeData.node.id
+                  selectPage(path)
+                }}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md border hover:bg-[var(--accent)] transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open in Wiki
+              </button>
+
+              {/* Neighbors */}
+              {selectedNodeData.neighbors.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-[var(--muted-foreground)] mb-2">
+                    Connected Nodes ({selectedNodeData.neighbors.length})
+                  </div>
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {selectedNodeData.neighbors.map((n) => (
+                      <button
+                        key={n.id}
+                        onClick={() => setSelectedNode(n.id)}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-[var(--muted)] transition-colors text-left"
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ background: nodeColor(n.node_type) }}
+                        />
+                        <span className="truncate">{n.label}</span>
+                        <span className="text-[var(--muted-foreground)] ml-auto capitalize text-[10px]">
+                          {n.node_type}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

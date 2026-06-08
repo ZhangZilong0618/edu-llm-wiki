@@ -13,6 +13,14 @@ function stripFrontmatter(text: string): string {
   return text
 }
 
+function convertLatexDelimiters(text: string): string {
+  // Convert \(...\) inline math to $...$
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`)
+  // Convert \[...\] display math to $$...$$
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `$$${math}$$`)
+  return text
+}
+
 function processWikiLinks(text: string): string {
   return text.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, path: string, label: string) => {
     const clean = path.trim().replace(/\.md$/, "")
@@ -57,7 +65,7 @@ const components: any = {
 }
 
 export function Markdown({ children }: { children: string }) {
-  const processed = useMemo(() => processWikiLinks(stripFrontmatter(children)), [children])
+  const processed = useMemo(() => convertLatexDelimiters(processWikiLinks(stripFrontmatter(children))), [children])
 
   return (
     <div className="markdown-body">

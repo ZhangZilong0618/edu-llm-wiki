@@ -81,9 +81,47 @@ export const api = {
       }
     }
   },
+  runIngestBatch: async function* (sourcePaths: string[], force = false, concurrency = 3) {
+    const res = await fetch(`${BASE}/ingest/run-batch?${p()}&concurrency=${concurrency}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_paths: sourcePaths, force }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buf = ""
+    while (true) {
+      let done: boolean, value: Uint8Array | undefined
+      try {
+        ({ done, value } = await reader.read())
+      } catch {
+        break
+      }
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split("\n")
+      buf = lines.pop() || ""
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6)
+          if (data === "[DONE]") return
+          try {
+            yield JSON.parse(data)
+          } catch { /* skip malformed lines */ }
+        }
+      }
+    }
+  },
   listSources: () => request<FileEntry[]>(`${BASE}/ingest/sources?${p()}`),
   deleteSource: (filename: string) =>
     request<{ status: string }>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}?${p()}`, { method: "DELETE" }),
+  viewSourceUrl: (filename: string) =>
+    `${BASE}/ingest/sources/${encodeURIComponent(filename)}/view?${p()}`,
+  parseSource: (filename: string) =>
+    request<{ filename: string; content: string; images: string[]; extension: string; view_url: string | null }>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}/parsed?${p()}`),
+  mediaUrl: (filename: string) =>
+    `${BASE}/ingest/media/${encodeURIComponent(filename)}?${p()}`,
 
   // Wiki
   listPages: () => request<WikiPageSummary[]>(`${BASE}/wiki/pages?${p()}`),

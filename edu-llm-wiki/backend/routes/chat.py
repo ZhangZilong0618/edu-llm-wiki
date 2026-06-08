@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from models.chat import ChatRequest, ChatResponse, CitedPage
 from services.context_budget import compute_budget
+from services.ingest_engine import _strip_images
 from services.llm_client import chat_complete, stream_chat
 from services.search_engine import graph_expand, keyword_search
 from storage.wiki_store import read_wiki_page, wiki_path
@@ -80,12 +81,12 @@ async def _run_rag_pipeline(
     purpose = ""
     purpose_path = wp / "purpose.md"
     if purpose_path.exists():
-        purpose = purpose_path.read_text(encoding="utf-8")[:2000]
+        purpose = _strip_images(purpose_path.read_text(encoding="utf-8"))[:2000]
 
     raw_index = ""
     index_path = wp / "index.md"
     if index_path.exists():
-        raw_index = index_path.read_text(encoding="utf-8")
+        raw_index = _strip_images(index_path.read_text(encoding="utf-8"))
 
     # ── Phase 1: Vector semantic search (primary) ──
     top_results: list[dict] = []
@@ -158,7 +159,7 @@ async def _run_rag_pipeline(
             page = read_wiki_page(file_path, project_id=project_id)
             if not page:
                 return False
-            content = page.get("content", "")
+            content = _strip_images(page.get("content", ""))
             if len(content) > MAX_PAGE_SIZE:
                 content = content[:MAX_PAGE_SIZE] + "\n\n[...truncated...]"
             if used_chars + len(content) > PAGE_BUDGET:

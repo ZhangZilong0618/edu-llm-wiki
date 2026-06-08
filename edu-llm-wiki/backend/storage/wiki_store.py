@@ -120,6 +120,7 @@ def make_frontmatter(fm: dict) -> str:
 
 def write_wiki_page(relative_path: str, title: str, page_type: str, content: str,
                     sources: list[str] | None = None, tags: list[str] | None = None,
+                    prerequisites: list[str] | None = None,
                     *, project_id: str = "default") -> str:
     """Write a wiki page. Returns the absolute path."""
     wp = wiki_path(project_id)
@@ -136,6 +137,8 @@ def write_wiki_page(relative_path: str, title: str, page_type: str, content: str
         "created": now,
         "updated": now,
     }
+    if prerequisites:
+        fm["prerequisites"] = prerequisites
 
     # Check if exists, preserve created date
     if full_path.exists():

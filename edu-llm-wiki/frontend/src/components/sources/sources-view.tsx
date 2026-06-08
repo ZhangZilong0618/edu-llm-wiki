@@ -1,7 +1,12 @@
-import { useState, useRef } from "react"
+import { useState, useRef, useCallback } from "react"
 import { useAppStore, type IngestProgress } from "@/stores/app-store"
 import { api } from "@/lib/api"
-import { Upload, Loader2, Trash2, Play, ChevronDown, ChevronUp, FileText, Brain, PenLine, CheckCircle2, X } from "lucide-react"
+import { Upload, Loader2, Trash2, Play, ChevronDown, ChevronUp, FileText, Brain, PenLine, CheckCircle2, X, Zap, Eye } from "lucide-react"
+
+function viewableExt(filename: string): boolean {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase()
+  return [".pdf", ".pptx", ".docx", ".xlsx", ".txt", ".md", ".markdown", ".rst"].includes(ext)
+}
 
 const STAGE_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   parse: { label: "解析文件", icon: <FileText size={12} /> },
@@ -14,8 +19,10 @@ export function SourcesView() {
   const { sourceFiles, setSourceFiles } = useAppStore()
   const progress = useAppStore((s) => s.ingestProgress)
   const updateProgress = useAppStore((s) => s.updateIngestProgress)
+  const setSelectedSource = useAppStore((s) => s.setSelectedSource)
+  const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const [uploading, setUploading] = useState(false)
-  const [ingesting, setIngesting] = useState<string>("")
+  const [ingesting, setIngesting] = useState<string>("") // "" = not ingesting, "all" = batch, filename = single
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -50,7 +57,7 @@ export function SourcesView() {
     try {
       for await (const event of api.runIngestStream([filename])) {
         updateProgress((prev) => {
-          if (!prev) return null  // shouldn't happen, but safe
+          if (!prev) return null
           const stages = prev.stages.map((s) => ({ ...s, items: s.pages?.items ? [...s.pages.items] : s.pages?.items }))
 
           if (event.event === "stage") {
@@ -93,7 +100,6 @@ export function SourcesView() {
           } else if (event.event === "error") {
             return { ...prev, error: event.message }
           } else if (event.event === "cached") {
-            // Mark all stages as done for cached items
             return {
               ...prev,
               stages: prev.stages.map((s) => ({ ...s, status: "done" as const, message: event.message })),
@@ -116,13 +122,126 @@ export function SourcesView() {
       updateProgress((prev) => prev ? { ...prev, error: `${e.message || e}` } : prev)
     }
     setIngesting("")
-    // No auto-dismiss — user closes manually
   }
+
+  const handleIngestAll = useCallback(async () => {
+    const filenames = sourceFiles.map((f) => f.name)
+    if (filenames.length === 0) return
+
+    setIngesting("all")
+    updateProgress(() => ({
+      filename: `[Batch] ${filenames.length} files`,
+      stages: [
+        { stage: "parse", message: "等待中...", status: "pending" as const },
+        { stage: "analyze", message: "等待中...", status: "pending" as const },
+        { stage: "generate", message: "等待中...", status: "pending" as const },
+        { stage: "write", message: "等待中...", status: "pending" as const },
+      ],
+    }))
+
+    const fileStatus = new Map<string, string>()
+    let completedCount = 0
+
+    try {
+      for await (const event of api.runIngestBatch(filenames)) {
+        const src = event.source || ""
+
+        updateProgress((prev) => {
+          if (!prev) return null
+          const stages = prev.stages.map((s) => ({ ...s, items: s.pages?.items ? [...s.pages.items] : s.pages?.items }))
+
+          // Update per-file status
+          if (event.event === "stage") {
+            fileStatus.set(src, event.stage)
+            const activeFiles = [...fileStatus.entries()].filter(([, s]) => s === event.stage)
+            const stageLabel = STAGE_LABELS[event.stage]?.label || event.stage
+            const idx = stages.findIndex((s) => s.stage === event.stage)
+            if (idx >= 0) {
+              stages[idx] = {
+                ...stages[idx],
+                status: "active",
+                message: `${stageLabel} (${activeFiles.length} files)`,
+              }
+            }
+          } else if (event.event === "stage_done") {
+            fileStatus.delete(src)
+            const idx = stages.findIndex((s) => s.stage === event.stage)
+            if (idx >= 0 && stages[idx].status !== "done") {
+              stages[idx] = {
+                ...stages[idx],
+                status: "done",
+                message: event.message,
+                details: event.details,
+              }
+            }
+          } else if (event.event === "write_page") {
+            const idx = stages.findIndex((s) => s.stage === "write")
+            if (idx >= 0) {
+              stages[idx] = {
+                ...stages[idx],
+                message: `[${src}] ${event.message}`,
+                pages: {
+                  current: event.current,
+                  total: event.total,
+                  items: [...(stages[idx].pages?.items || []), {
+                    title: event.title,
+                    page_type: event.page_type,
+                    action: event.action || (event.skipped ? "skip" : "new"),
+                  }],
+                },
+              }
+            }
+          } else if (event.event === "error") {
+            completedCount++
+            return {
+              ...prev,
+              filename: `[Batch] ${completedCount}/${filenames.length} done — Error: ${src}: ${event.message}`,
+            }
+          } else if (event.event === "cached") {
+            completedCount++
+          } else if (event.event === "complete") {
+            completedCount++
+          }
+
+          return {
+            ...prev,
+            stages,
+            filename: `[Batch] ${completedCount}/${filenames.length} completed`,
+          }
+        })
+
+        if (event.event === "complete" || event.event === "cached") {
+          const [pages, sources] = await Promise.all([
+            api.listPages(),
+            api.listSources(),
+          ])
+          useAppStore.getState().setWikiPages(pages)
+          setSourceFiles(Array.isArray(sources) ? sources : [])
+        }
+      }
+    } catch (e: any) {
+      updateProgress((prev) => prev ? { ...prev, error: `${e.message || e}` } : prev)
+    }
+    setIngesting("")
+  }, [sourceFiles, setSourceFiles, updateProgress])
 
   const handleDelete = async (filename: string) => {
     await api.deleteSource(filename)
     const list = await api.listSources()
     setSourceFiles(Array.isArray(list) ? list : [])
+  }
+
+  const handlePreview = async (filename: string) => {
+    try {
+      const result = await api.parseSource(filename)
+      setSelectedPage(null)
+      setSelectedSource(result)
+    } catch {
+      const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase()
+      if (ext === ".pdf") {
+        window.open(api.viewSourceUrl(filename), "_blank")
+      }
+    }
   }
 
   return (
@@ -145,6 +264,22 @@ export function SourcesView() {
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
           {uploading ? "Uploading..." : "Upload Documents"}
         </button>
+
+        {/* Ingest All button */}
+        {sourceFiles.length > 1 && (
+          <button
+            onClick={handleIngestAll}
+            disabled={!!ingesting}
+            className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {ingesting === "all" ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Zap size={14} />
+            )}
+            {ingesting === "all" ? `Processing ${sourceFiles.length} files...` : `Ingest All (${sourceFiles.length} files)`}
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -157,9 +292,18 @@ export function SourcesView() {
             <span className="text-[10px] text-[var(--muted-foreground)]">
               {(f.size / 1024).toFixed(0)} KB
             </span>
+            {viewableExt(f.name) && (
+              <button
+                onClick={() => handlePreview(f.name)}
+                className="p-1 rounded hover:bg-blue-100 text-blue-600"
+                title="Preview file"
+              >
+                <Eye size={14} />
+              </button>
+            )}
             <button
               onClick={() => handleIngest(f.name)}
-              disabled={ingesting === f.name}
+              disabled={!!ingesting}
               className="p-1 rounded hover:bg-green-100 text-green-600 disabled:opacity-50"
               title="Process with LLM"
             >

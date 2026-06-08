@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import type { SearchResult, WikiPage } from "@/types/wiki"
 
-export type ActiveView = "wiki" | "sources" | "search" | "graph" | "lint" | "settings"
+export type ActiveView = "wiki" | "sources" | "search" | "graph" | "lint" | "settings" | "learn"
 
 export interface IngestProgress {
   filename: string
@@ -60,6 +60,10 @@ interface AppState {
   setConversations: (list: { id: string; title: string; message_count: number; created: string; updated: string }[]) => void
   currentConversationId: string | null
   setCurrentConversationId: (id: string | null) => void
+
+  // Source preview
+  selectedSource: { filename: string; content: string; images: string[]; extension: string; view_url: string | null } | null
+  setSelectedSource: (s: { filename: string; content: string; images: string[]; extension: string; view_url: string | null } | null) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -76,8 +80,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectPage: async (path: string) => {
     try {
       const { api } = await import("@/lib/api")
-      const page = await api.getPage(path)
-      set({ selectedPage: page })
+      let page = await api.getPage(path).catch(() => null)
+      if (!page && !path.endsWith(".md")) {
+        page = await api.getPage(path + ".md").catch(() => null)
+      }
+      set({ selectedPage: page, selectedSource: null })
     } catch {
       set({ selectedPage: null })
     }
@@ -106,4 +113,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setConversations: (list) => set({ conversations: list }),
   currentConversationId: null,
   setCurrentConversationId: (id) => set({ currentConversationId: id }),
+
+  selectedSource: null,
+  setSelectedSource: (s) => set({ selectedSource: s }),
 }))

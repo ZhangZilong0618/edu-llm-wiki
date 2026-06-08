@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { api, setProjectId } from "@/lib/api"
 import { AppLayout } from "@/components/layout/app-layout"
@@ -10,19 +10,19 @@ export default function App() {
   const setSourceFiles = useAppStore((s) => s.setSourceFiles)
   const setProjects = useAppStore((s) => s.setProjects)
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
-
-  // Sync project ID to API module
-  useEffect(() => {
-    setProjectId(currentProject)
-  }, [currentProject])
+  const projectRef = useRef(currentProject)
+  projectRef.current = currentProject
 
   // Load projects list on mount
   useEffect(() => {
     api.listProjects().then(setProjects).catch(console.error)
   }, [])
 
-  // Load wiki pages and sources when project changes
+  // Sync project ID and load data when project changes
   useEffect(() => {
+    const project = currentProject
+    setProjectId(project)
+
     // Clear all per-project state immediately
     setWikiPages([])
     setSourceFiles([])
@@ -32,11 +32,18 @@ export default function App() {
     useAppStore.getState().setConversations([])
     useAppStore.getState().setCurrentConversationId(null)
     useAppStore.getState().setIngestProgress(null)
+    useAppStore.getState().setSelectedSource(null)
 
-    // Load fresh data for new project
-    api.listPages().then(setWikiPages).catch(console.error)
-    api.listSources().then(setSourceFiles).catch(console.error)
-    api.listConversations().then(useAppStore.getState().setConversations).catch(() => {})
+    // Load fresh data for new project (stale results are discarded)
+    api.listPages().then((pages) => {
+      if (projectRef.current === project) setWikiPages(pages)
+    }).catch(console.error)
+    api.listSources().then((files) => {
+      if (projectRef.current === project) setSourceFiles(files)
+    }).catch(console.error)
+    api.listConversations().then((convs) => {
+      if (projectRef.current === project) useAppStore.getState().setConversations(convs)
+    }).catch(() => {})
   }, [currentProject])
 
   return (

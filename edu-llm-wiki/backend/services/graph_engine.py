@@ -76,6 +76,7 @@ def build_graph(*, project_id: str = "default") -> dict:
     in_links: dict[str, set[str]] = defaultdict(set)      # node_id -> in-link sources
     source_map: dict[str, set[str]] = defaultdict(set)     # source_path -> node_ids using it
     node_sources: dict[str, set[str]] = {}                 # node_id -> set of source paths
+    prerequisite_map: dict[str, set[str]] = defaultdict(set)  # node_id -> set of prerequisite node_ids
 
     for node_id in page_map:
         full_path = wp / page_map[node_id]["path"]
@@ -98,6 +99,14 @@ def build_graph(*, project_id: str = "default") -> dict:
         for src in srcs:
             source_map[src].add(node_id)
 
+        # Prerequisites from frontmatter
+        prereqs = fm.get("prerequisites", [])
+        for prereq in prereqs:
+            # Normalize: remove .md extension to match node_id format
+            prereq_id = prereq.replace(".md", "").strip()
+            if prereq_id in page_map and prereq_id != node_id:
+                prerequisite_map[node_id].add(prereq_id)
+
     # Neighbor sets and degrees (for Adamic-Adar)
     neighbors: dict[str, set[str]] = {}
     degrees: dict[str, int] = {}
@@ -106,8 +115,9 @@ def build_graph(*, project_id: str = "default") -> dict:
         neighbors[node_id] = nbrs
         degrees[node_id] = len(nbrs)
 
-    # Collect candidate edge pairs: direct links + source overlap
+    # Collect candidate edge pairs: direct links + source overlap + prerequisites
     edge_set: set[tuple[str, str]] = set()
+    prerequisite_edges: set[tuple[str, str]] = set()  # Edges from frontmatter prerequisites
 
     for src_id, targets in link_graph.items():
         for tgt_id in targets:
@@ -118,6 +128,13 @@ def build_graph(*, project_id: str = "default") -> dict:
         for i in range(len(node_list)):
             for j in range(i + 1, len(node_list)):
                 edge_set.add((min(node_list[i], node_list[j]), max(node_list[i], node_list[j])))
+
+    # Prerequisite edges from frontmatter (directed: prereq -> dependent)
+    for node_id, prereqs in prerequisite_map.items():
+        for prereq_id in prereqs:
+            edge_key = (min(prereq_id, node_id), max(prereq_id, node_id))
+            edge_set.add(edge_key)
+            prerequisite_edges.add(edge_key)
 
     # Calculate 4-signal relevance for each candidate pair
     edge_list: list[dict] = []
@@ -148,10 +165,18 @@ def build_graph(*, project_id: str = "default") -> dict:
         type_score = affinity * WEIGHTS["type_affinity"]
 
         total = round(direct_score + source_score + neighbor_score + type_score, 2)
+
+        # Determine edge type: prerequisite from frontmatter takes priority
+        edge_key = (min(a, b), max(a, b))
+        if edge_key in prerequisite_edges:
+            edge_type = "prerequisite"
+        else:
+            edge_type = "related"
+
         edge_list.append({
             "source": a,
             "target": b,
-            "edge_type": "related",
+            "edge_type": edge_type,
             "weight": total,
         })
 

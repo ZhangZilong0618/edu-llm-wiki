@@ -1,4 +1,3 @@
-import { useState } from "react"
 import { Panel, Group, Separator } from "react-resizable-panels"
 import { useAppStore } from "@/stores/app-store"
 import { IconSidebar } from "./icon-sidebar"
@@ -9,6 +8,8 @@ import { SearchView } from "@/components/search/search-view"
 import { GraphView } from "@/components/graph/graph-view"
 import { SettingsView } from "@/components/settings/settings-view"
 import { ChatPanel } from "@/components/chat/chat-panel"
+import { LintView } from "@/components/lint/lint-view"
+import { LearnView } from "@/components/learn/learn-view"
 
 export function AppLayout() {
   const activeView = useAppStore((s) => s.activeView)
@@ -45,10 +46,9 @@ export function AppLayout() {
           ) : activeView === "graph" ? (
             <GraphView key={currentProject} />
           ) : activeView === "lint" ? (
-            <div className="p-4">
-              <h2 className="text-lg font-semibold mb-4">Knowledge Base Health Check</h2>
-              <LintView />
-            </div>
+            <LintView />
+          ) : activeView === "learn" ? (
+            <LearnView key={currentProject} />
           ) : (
             <ChatPanel key={currentProject} />
           )}
@@ -62,40 +62,6 @@ export function AppLayout() {
         </Panel>
       </Group>
       </div>
-    </div>
-  )
-}
-
-function LintView() {
-  const [result, setResult] = useState<any>(null)
-  const [loading, setLoading] = useState(false)
-
-  const runLint = async () => {
-    setLoading(true)
-    try {
-      const { api } = await import("@/lib/api")
-      const r = await api.runLint()
-      setResult(r)
-    } catch (e: any) {
-      setResult({ error: e.message })
-    }
-    setLoading(false)
-  }
-
-  return (
-    <div>
-      <button
-        onClick={runLint}
-        disabled={loading}
-        className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm disabled:opacity-50"
-      >
-        {loading ? "Running..." : "Run Health Check"}
-      </button>
-      {result && (
-        <pre className="mt-4 p-4 bg-[var(--muted)] rounded-lg text-xs overflow-auto max-h-[60vh]">
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      )}
     </div>
   )
 }
