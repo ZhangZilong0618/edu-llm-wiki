@@ -1,22 +1,73 @@
-import { useEffect, useState, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
-  GraduationCap,
-  RefreshCw,
+  AlertTriangle,
   BookOpen,
-  FlaskConical,
-  Lightbulb,
+  Check,
+  ChevronDown,
+  ChevronRight,
   Dumbbell,
   FileText,
+  FlaskConical,
+  GraduationCap,
+  HelpCircle,
   Layers,
-  ArrowRight,
-  AlertTriangle,
-  Star,
-  ChevronRight,
+  Lightbulb,
+  MessageCircle,
   Play,
+  RefreshCw,
+  RotateCcw,
+  Star,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import type { GraphData, GraphNode } from "@/types/wiki"
+
+type ItemStatus = "not_started" | "done" | "needs_review"
+type StageId = "overview" | "foundations" | "core" | "applications" | "review"
+
+interface LearningItem {
+  id: string
+  path: string
+  title: string
+  type: string
+  reason: string
+  prerequisites: string[]
+  actions: ("read" | "ask" | "practice" | "review")[]
+  status: ItemStatus
+  score: number
+  isBridge: boolean
+  isGap: boolean
+}
+
+interface LearningStage {
+  id: StageId
+  title: string
+  description: string
+  items: LearningItem[]
+}
+
+const STAGE_META: Record<StageId, { title: string; description: string }> = {
+  overview: {
+    title: "Overview",
+    description: "Start with summaries and source-level context so the map has a shape.",
+  },
+  foundations: {
+    title: "Foundations",
+    description: "Build the vocabulary and concepts that later items depend on.",
+  },
+  core: {
+    title: "Core Ideas",
+    description: "Work through the main concepts, formulas, and principles.",
+  },
+  applications: {
+    title: "Applications",
+    description: "Use exercises and examples to check whether the ideas transfer.",
+  },
+  review: {
+    title: "Review & Gaps",
+    description: "Revisit isolated, weakly connected, or high-friction knowledge points.",
+  },
+}
 
 const TYPE_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: string; label: string }> = {
   concept: { icon: BookOpen, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-950/30", label: "Concept" },
@@ -27,137 +78,164 @@ const TYPE_CONFIG: Record<string, { icon: React.ElementType; color: string; bg: 
   synthesis: { icon: Layers, color: "text-pink-600", bg: "bg-pink-50 dark:bg-pink-950/30", label: "Synthesis" },
 }
 
-interface PathStep {
-  node: GraphNode
-  prerequisites: string[]
-  depth: number
-  isBridge: boolean
-  isGap: boolean
+const STATUS_LABELS: Record<ItemStatus, string> = {
+  not_started: "Not started",
+  done: "Done",
+  needs_review: "Review",
 }
 
-function topologicalSort(nodes: GraphNode[], edges: { source: string; target: string; edge_type: string; weight: number }[]): PathStep[] {
-  // Only use prerequisite edges for learning path
-  const prereqEdges = edges.filter((e) => e.edge_type === "prerequisite")
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]))
+function pagePath(node: GraphNode): string {
+  const metadataPath = typeof node.metadata?.path === "string" ? node.metadata.path : ""
+  return metadataPath || `${node.id}.md`
+}
 
-  // If no prerequisite edges exist, return all nodes as flat list (no ordering)
-  if (prereqEdges.length === 0) {
-    return nodes.map((node) => ({
-      node,
-      prerequisites: [],
-      depth: 0,
-      isBridge: false,
-      isGap: false,
-    }))
-  }
-
-  // Build adjacency: for each node, what are its prerequisites (incoming edges)
+function buildStages(data: GraphData, statuses: Record<string, ItemStatus>): LearningStage[] {
+  const nodesById = new Map(data.nodes.map((node) => [node.id, node]))
+  const adjacency = new Map<string, Set<string>>()
   const prereqOf = new Map<string, Set<string>>()
-  const dependents = new Map<string, Set<string>>()
-  const inDegree = new Map<string, number>()
+  const dependentsOf = new Map<string, Set<string>>()
 
-  for (const n of nodes) {
-    prereqOf.set(n.id, new Set())
-    dependents.set(n.id, new Set())
-    inDegree.set(n.id, 0)
+  for (const node of data.nodes) {
+    adjacency.set(node.id, new Set())
+    prereqOf.set(node.id, new Set())
+    dependentsOf.set(node.id, new Set())
   }
 
-  for (const e of prereqEdges) {
-    if (nodeMap.has(e.source) && nodeMap.has(e.target)) {
-      // e.source is a prerequisite of e.target
-      prereqOf.get(e.target)!.add(e.source)
-      dependents.get(e.source)!.add(e.target)
-      inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1)
+  for (const edge of data.edges) {
+    adjacency.get(edge.source)?.add(edge.target)
+    adjacency.get(edge.target)?.add(edge.source)
+    if (edge.edge_type === "prerequisite") {
+      prereqOf.get(edge.target)?.add(edge.source)
+      dependentsOf.get(edge.source)?.add(edge.target)
     }
   }
 
-  // Kahn's algorithm
-  const queue: string[] = []
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) queue.push(id)
-  }
-  queue.sort((a, b) => {
-    const ta = nodeMap.get(a)?.node_type ?? ""
-    const tb = nodeMap.get(b)?.node_type ?? ""
-    const order = ["concept", "formula", "principle", "exercise", "synthesis", "source"]
-    return order.indexOf(ta) - order.indexOf(tb)
-  })
-
-  const result: PathStep[] = []
-  const visited = new Set<string>()
-  const depthMap = new Map<string, number>()
-
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    if (visited.has(id)) continue
-    visited.add(id)
-
-    const node = nodeMap.get(id)!
-    const prereqs = [...(prereqOf.get(id) ?? [])]
-    const depth = prereqs.length === 0 ? 0 : Math.max(...prereqs.map((p) => (depthMap.get(p) ?? 0) + 1))
-    depthMap.set(id, depth)
-
-    result.push({
-      node,
-      prerequisites: prereqs.map((p) => nodeMap.get(p)?.label ?? p),
-      depth,
-      isBridge: false,
-      isGap: false,
-    })
-
-    // Add dependents whose prerequisites are all visited
-    for (const dep of dependents.get(id) ?? []) {
-      const deg = (inDegree.get(dep) ?? 1) - 1
-      inDegree.set(dep, deg)
-      if (deg === 0) {
-        queue.push(dep)
-      }
-    }
-  }
-
-  // Add any remaining nodes (cycles or disconnected)
-  for (const n of nodes) {
-    if (!visited.has(n.id)) {
-      result.push({
-        node: n,
-        prerequisites: [],
-        depth: 0,
-        isBridge: false,
-        isGap: false,
-      })
-    }
-  }
-
-  return result
-}
-
-function buildSteps(data: GraphData): PathStep[] {
-  const steps = topologicalSort(data.nodes, data.edges)
-
-  // Mark bridge and gap nodes
   const bridgeIds = new Set<string>()
   const gapIds = new Set<string>()
   for (const insight of data.insights) {
-    if (insight.insight_type === "bridge") {
-      insight.node_ids.forEach((id) => bridgeIds.add(id))
-    }
+    if (insight.insight_type === "bridge") insight.node_ids.forEach((id) => bridgeIds.add(id))
     if (insight.insight_type === "knowledge_gap" || insight.insight_type === "isolated") {
       insight.node_ids.forEach((id) => gapIds.add(id))
     }
   }
 
-  return steps.map((s) => ({
-    ...s,
-    isBridge: bridgeIds.has(s.node.id),
-    isGap: gapIds.has(s.node.id),
-  }))
+  const buckets: Record<StageId, LearningItem[]> = {
+    overview: [],
+    foundations: [],
+    core: [],
+    applications: [],
+    review: [],
+  }
+
+  for (const node of data.nodes) {
+    const type = node.node_type
+    const degree = adjacency.get(node.id)?.size ?? 0
+    const prereqs = [...(prereqOf.get(node.id) ?? [])]
+    const dependents = dependentsOf.get(node.id)?.size ?? 0
+    const isBridge = bridgeIds.has(node.id)
+    const isGap = gapIds.has(node.id) || degree <= 1
+    const score = degree + dependents * 2 + (isBridge ? 4 : 0) - (isGap ? 1 : 0)
+    const prerequisites = prereqs.map((id) => nodesById.get(id)?.label || id)
+
+    let stage: StageId = "core"
+    let reason = "This is part of the main conceptual spine."
+    let actions: LearningItem["actions"] = ["read", "ask"]
+
+    if (type === "source" || type === "synthesis") {
+      stage = "overview"
+      reason = type === "source" ? "Use this to understand where the material came from." : "Use this synthesis as a map before details."
+      actions = ["read", "ask"]
+    } else if (type === "exercise") {
+      stage = "applications"
+      reason = "Practice after reading the concepts and formulas it depends on."
+      actions = ["practice", "ask", "review"]
+    } else if (isGap) {
+      stage = "review"
+      reason = "This item has weak graph connections, so it is worth checking deliberately."
+      actions = ["read", "ask", "review"]
+    } else if (prereqs.length === 0 || dependents >= 2) {
+      stage = "foundations"
+      reason = dependents >= 2 ? "Many later items depend on this, so learn it early." : "This has few prerequisites and works as a foundation."
+      actions = ["read", "ask"]
+    } else if (type === "formula" || type === "principle") {
+      reason = "Connect this with its prerequisite concepts before applying it."
+      actions = ["read", "ask", "practice"]
+    }
+
+    buckets[stage].push({
+      id: node.id,
+      path: pagePath(node),
+      title: node.label,
+      type,
+      reason,
+      prerequisites,
+      actions,
+      status: statuses[node.id] || "not_started",
+      score,
+      isBridge,
+      isGap,
+    })
+  }
+
+  const orderByPriority = (a: LearningItem, b: LearningItem) => {
+    const typeOrder = { synthesis: 0, source: 1, concept: 2, formula: 3, principle: 4, exercise: 5 }
+    return (
+      (typeOrder[a.type as keyof typeof typeOrder] ?? 9) - (typeOrder[b.type as keyof typeof typeOrder] ?? 9) ||
+      b.score - a.score ||
+      a.title.localeCompare(b.title)
+    )
+  }
+
+  return (Object.keys(STAGE_META) as StageId[]).map((id) => ({
+    id,
+    ...STAGE_META[id],
+    items: buckets[id].sort(orderByPriority),
+  })).filter((stage) => stage.items.length > 0)
+}
+
+function nextLearningItem(stages: LearningStage[], goal: string): LearningItem | null {
+  const preferredOrder: StageId[] =
+    goal === "practice"
+      ? ["applications", "core", "foundations", "review", "overview"]
+      : goal === "review"
+        ? ["review", "core", "applications", "foundations", "overview"]
+        : goal === "quick"
+          ? ["overview", "foundations", "core", "applications", "review"]
+          : ["foundations", "core", "applications", "overview", "review"]
+  for (const stageId of preferredOrder) {
+    const stage = stages.find((s) => s.id === stageId)
+    const item = stage?.items.find((i) => i.status !== "done")
+    if (item) return item
+  }
+  return null
 }
 
 export function LearnView() {
   const [data, setData] = useState<GraphData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [goal, setGoal] = useState("system")
+  const [collapsedStages, setCollapsedStages] = useState<Set<StageId>>(new Set())
+  const currentProject = useAppStore((s) => s.currentProject)
   const selectPage = useAppStore((s) => s.selectPage)
+  const setActiveView = useAppStore((s) => s.setActiveView)
+  const [statuses, setStatuses] = useState<Record<string, ItemStatus>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("edu-llm-wiki.learning.default") || "{}")
+    } catch {
+      return {}
+    }
+  })
+
+  const storageKey = `edu-llm-wiki.learning.${currentProject}`
+
+  useEffect(() => {
+    try {
+      setStatuses(JSON.parse(localStorage.getItem(storageKey) || "{}"))
+    } catch {
+      setStatuses({})
+    }
+  }, [storageKey])
 
   useEffect(() => {
     api.getGraph()
@@ -166,26 +244,44 @@ export function LearnView() {
       .finally(() => setLoading(false))
   }, [])
 
-  const steps = useMemo(() => (data ? buildSteps(data) : []), [data])
+  useEffect(() => {
+    localStorage.setItem(storageKey, JSON.stringify(statuses))
+  }, [statuses, storageKey])
 
-  // Group by depth for display
-  const levels = useMemo(() => {
-    const map = new Map<number, PathStep[]>()
-    for (const s of steps) {
-      if (!map.has(s.depth)) map.set(s.depth, [])
-      map.get(s.depth)!.push(s)
-    }
-    return [...map.entries()].sort((a, b) => a[0] - b[0])
-  }, [steps])
+  const stages = useMemo(() => (data ? buildStages(data, statuses) : []), [data, statuses])
+  const nextItem = useMemo(() => nextLearningItem(stages, goal), [stages, goal])
+  const items = useMemo(() => stages.flatMap((stage) => stage.items), [stages])
+  const doneCount = items.filter((item) => item.status === "done").length
+  const reviewCount = items.filter((item) => item.status === "needs_review").length
+  const progress = items.length ? Math.round((doneCount / items.length) * 100) : 0
 
-  // Stats
-  const stats = useMemo(() => {
-    const types: Record<string, number> = {}
-    for (const s of steps) {
-      types[s.node.node_type] = (types[s.node.node_type] ?? 0) + 1
-    }
-    return types
-  }, [steps])
+  const updateStatus = useCallback((id: string, status: ItemStatus) => {
+    setStatuses((prev) => ({ ...prev, [id]: status }))
+  }, [])
+
+  const openItem = useCallback(async (item: LearningItem) => {
+    await selectPage(item.path)
+    if (item.status === "not_started") updateStatus(item.id, "done")
+  }, [selectPage, updateStatus])
+
+  const askTutor = useCallback(async (item: LearningItem) => {
+    await selectPage(item.path)
+    setActiveView("chat")
+  }, [selectPage, setActiveView])
+
+  const practiceItem = useCallback(async (item: LearningItem) => {
+    await selectPage(item.path)
+    setActiveView("wiki")
+  }, [selectPage, setActiveView])
+
+  const toggleStage = (stageId: StageId) => {
+    setCollapsedStages((prev) => {
+      const next = new Set(prev)
+      if (next.has(stageId)) next.delete(stageId)
+      else next.add(stageId)
+      return next
+    })
+  }
 
   if (loading) {
     return (
@@ -205,7 +301,7 @@ export function LearnView() {
     )
   }
 
-  if (steps.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-center text-[var(--muted-foreground)]">
         <div>
@@ -217,125 +313,204 @@ export function LearnView() {
     )
   }
 
-  // Check if we have prerequisite edges for meaningful ordering
-  const hasPrereqs = data?.edges.some((e) => e.edge_type === "prerequisite") ?? false
-
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
+    <div className="flex h-full flex-col overflow-hidden">
       <div className="shrink-0 border-b px-4 py-3">
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2">
           <GraduationCap className="h-4 w-4 text-[var(--muted-foreground)]" />
           <span className="text-sm font-medium">Learning Path</span>
-          <span className="text-xs text-[var(--muted-foreground)] ml-auto">{steps.length} steps</span>
+          <select
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            className="ml-auto h-7 rounded-md border bg-[var(--background)] px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+          >
+            <option value="system">System Learning</option>
+            <option value="quick">Quick Start</option>
+            <option value="practice">Practice Driven</option>
+            <option value="review">Review Gaps</option>
+          </select>
         </div>
-        {!hasPrereqs && steps.length > 0 && (
-          <p className="text-[11px] text-amber-600 bg-amber-50 dark:bg-amber-950/20 px-2 py-1 rounded">
-            Learning order is approximate (based on topic type). Re-ingest documents to generate prerequisite relationships.
-          </p>
-        )}
-        {/* Stats bar */}
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          {Object.entries(stats).map(([type, count]) => {
-            const cfg = TYPE_CONFIG[type] ?? TYPE_CONFIG.concept
-            const Icon = cfg.icon
-            return (
-              <span key={type} className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded ${cfg.bg} ${cfg.color}`}>
-                <Icon className="h-3 w-3" />
-                {count} {cfg.label}{count > 1 ? "s" : ""}
-              </span>
-            )
-          })}
+        <div className="mt-3 grid grid-cols-[1fr_auto] items-center gap-3">
+          <div className="h-2 overflow-hidden rounded-full bg-[var(--muted)]">
+            <div className="h-full bg-[var(--primary)] transition-all" style={{ width: `${progress}%` }} />
+          </div>
+          <span className="text-xs text-[var(--muted-foreground)]">{doneCount} / {items.length}</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-[var(--muted-foreground)]">
+          <span>{stages.length} stages</span>
+          <span>·</span>
+          <span>{reviewCount} marked for review</span>
+          <span>·</span>
+          <span>Goal: {goal === "system" ? "System Learning" : goal === "quick" ? "Quick Start" : goal === "practice" ? "Practice Driven" : "Review Gaps"}</span>
         </div>
       </div>
 
-      {/* Path content */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
-        {levels.map(([level, levelSteps], levelIdx) => (
-          <div key={level} className="mb-6">
-            {/* Level header */}
-            <div className="flex items-center gap-2 mb-3">
-              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-bold">
-                {levelIdx + 1}
-              </div>
-              <span className="text-xs font-medium text-[var(--muted-foreground)]">
-                {level === 0 ? "Foundation" : level === 1 ? "Core Concepts" : level === 2 ? "Advanced" : `Level ${level}`}
-              </span>
-              {levelIdx < levels.length - 1 && (
-                <ArrowRight className="h-3 w-3 text-[var(--muted-foreground)] ml-auto" />
+        {nextItem && (
+          <section className="mb-5 border-b pb-4">
+            <div className="mb-2 flex items-center gap-2">
+              <Play className="h-4 w-4 text-[var(--primary)]" />
+              <h2 className="text-sm font-semibold">Continue Learning</h2>
+              {nextItem.status === "needs_review" && (
+                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">Review</span>
               )}
             </div>
-
-            {/* Steps in this level */}
-            <div className="space-y-2 ml-3 pl-4 border-l-2 border-[var(--border)]">
-              {levelSteps.map((step) => {
-                const cfg = TYPE_CONFIG[step.node.node_type] ?? TYPE_CONFIG.concept
-                const Icon = cfg.icon
-                const isExercise = step.node.node_type === "exercise"
-                return (
-                  <div
-                    key={step.node.id}
-                    className="w-full text-left group rounded-lg border p-3 hover:bg-[var(--accent)] transition-colors"
-                  >
-                    <button
-                      onClick={() => selectPage(step.node.id)}
-                      className="w-full text-left"
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <div className={`shrink-0 mt-0.5 w-7 h-7 rounded-md flex items-center justify-center ${cfg.bg}`}>
-                          <Icon className={`h-3.5 w-3.5 ${cfg.color}`} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-sm font-medium truncate group-hover:text-[var(--primary)] transition-colors">
-                              {step.node.label}
-                            </span>
-                            {step.isBridge && (
-                              <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600">
-                                <Star className="h-2.5 w-2.5" />
-                                Key
-                              </span>
-                            )}
-                            {step.isGap && (
-                              <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-600">
-                                <AlertTriangle className="h-2.5 w-2.5" />
-                                Gap
-                              </span>
-                            )}
-                          </div>
-                          {step.prerequisites.length > 0 && (
-                            <div className="flex items-center gap-1 mt-1 flex-wrap">
-                              <span className="text-[10px] text-[var(--muted-foreground)]">Requires:</span>
-                              {step.prerequisites.map((p, i) => (
-                                <span key={i} className="text-[10px] bg-[var(--muted)] px-1 py-0.5 rounded">
-                                  {p}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <ChevronRight className="h-3.5 w-3.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-1" />
-                      </div>
-                    </button>
-                    {isExercise && (
-                      <button
-                        onClick={() => {
-                          useAppStore.getState().setActiveView("chat")
-                          useAppStore.getState().selectPage(step.node.id)
-                        }}
-                        className="mt-2 flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
-                      >
-                        <Play className="h-3 w-3" />
-                        Practice
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
+            <div className="flex items-start gap-3 rounded-md border p-3">
+              <TypeIcon type={nextItem.type} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{nextItem.title}</p>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">{nextItem.reason}</p>
+                {nextItem.prerequisites.length > 0 && (
+                  <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                    Requires: {nextItem.prerequisites.slice(0, 3).join(", ")}
+                  </p>
+                )}
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <IconButton label="Start" onClick={() => openItem(nextItem)} icon={<Play size={14} />} />
+                <IconButton label="Ask Tutor" onClick={() => askTutor(nextItem)} icon={<MessageCircle size={14} />} />
+                <IconButton label="Done" onClick={() => updateStatus(nextItem.id, "done")} icon={<Check size={14} />} />
+              </div>
             </div>
-          </div>
-        ))}
+          </section>
+        )}
+
+        {stages.map((stage, index) => {
+          const collapsed = collapsedStages.has(stage.id)
+          const stageDone = stage.items.filter((item) => item.status === "done").length
+          return (
+            <section key={stage.id} className="mb-5">
+              <button
+                onClick={() => toggleStage(stage.id)}
+                className="mb-2 flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--accent)]"
+              >
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary)] text-xs font-semibold text-[var(--primary-foreground)]">
+                  {index + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    <span className="text-sm font-semibold">{stage.title}</span>
+                    <span className="text-[11px] text-[var(--muted-foreground)]">{stageDone}/{stage.items.length}</span>
+                  </div>
+                  <p className="truncate text-xs text-[var(--muted-foreground)]">{stage.description}</p>
+                </div>
+              </button>
+              {!collapsed && (
+                <div className="space-y-2 border-l pl-4">
+                  {stage.items.map((item) => (
+                    <LearningRow
+                      key={item.id}
+                      item={item}
+                      onRead={() => openItem(item)}
+                      onAsk={() => askTutor(item)}
+                      onPractice={() => practiceItem(item)}
+                      onDone={() => updateStatus(item.id, "done")}
+                      onReview={() => updateStatus(item.id, item.status === "needs_review" ? "not_started" : "needs_review")}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          )
+        })}
       </div>
     </div>
+  )
+}
+
+function TypeIcon({ type }: { type: string }) {
+  const cfg = TYPE_CONFIG[type] ?? TYPE_CONFIG.concept
+  const Icon = cfg.icon
+  return (
+    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${cfg.bg}`}>
+      <Icon className={`h-4 w-4 ${cfg.color}`} />
+    </div>
+  )
+}
+
+function IconButton({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex h-8 w-8 items-center justify-center rounded-md border text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]"
+      title={label}
+    >
+      {icon}
+    </button>
+  )
+}
+
+function LearningRow({
+  item,
+  onRead,
+  onAsk,
+  onPractice,
+  onDone,
+  onReview,
+}: {
+  item: LearningItem
+  onRead: () => void
+  onAsk: () => void
+  onPractice: () => void
+  onDone: () => void
+  onReview: () => void
+}) {
+  const cfg = TYPE_CONFIG[item.type] ?? TYPE_CONFIG.concept
+  return (
+    <div className={`group rounded-md border p-3 ${item.status === "done" ? "opacity-65" : ""}`}>
+      <div className="flex items-start gap-3">
+        <TypeIcon type={item.type} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-medium group-hover:text-[var(--primary)]">{item.title}</span>
+            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>
+            {item.isBridge && (
+              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-blue-100 px-1 py-0.5 text-[10px] text-blue-600">
+                <Star className="h-2.5 w-2.5" />
+                Key
+              </span>
+            )}
+            {item.status === "needs_review" && (
+              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-700">
+                <AlertTriangle className="h-2.5 w-2.5" />
+                Review
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted-foreground)]">{item.reason}</p>
+          {item.prerequisites.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {item.prerequisites.slice(0, 4).map((prereq) => (
+                <span key={prereq} className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                  {prereq}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">{STATUS_LABELS[item.status]}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5 pl-11">
+        {item.actions.includes("read") && <ActionButton label="Read" icon={<BookOpen size={12} />} onClick={onRead} />}
+        {item.actions.includes("ask") && <ActionButton label="Ask Tutor" icon={<MessageCircle size={12} />} onClick={onAsk} />}
+        {item.actions.includes("practice") && <ActionButton label="Practice" icon={<Dumbbell size={12} />} onClick={onPractice} />}
+        {item.actions.includes("review") && <ActionButton label={item.status === "needs_review" ? "Clear Review" : "Needs Review"} icon={<RotateCcw size={12} />} onClick={onReview} />}
+        <ActionButton label="Mark Done" icon={<Check size={12} />} onClick={onDone} />
+        {item.isGap && <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-amber-600"><HelpCircle size={11} /> weak link</span>}
+      </div>
+    </div>
+  )
+}
+
+function ActionButton({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]"
+    >
+      {icon}
+      {label}
+    </button>
   )
 }

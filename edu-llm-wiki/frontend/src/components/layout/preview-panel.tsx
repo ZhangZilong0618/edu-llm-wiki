@@ -1,23 +1,116 @@
 import { useEffect, useRef, useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
-import { ChevronDown, ChevronRight, Play } from "lucide-react"
+import { CheckCircle2, ChevronDown, ChevronRight, HelpCircle, RotateCcw } from "lucide-react"
+
+function plainText(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/[#*_`>$\\{}[\]().,，。；;：:！？!?-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function answerScore(answer: string, solution: string): number | null {
+  const userWords = new Set(plainText(answer).toLowerCase().split(/\s+/).filter((w) => w.length >= 2))
+  const solutionWords = plainText(solution).toLowerCase().split(/\s+/).filter((w) => w.length >= 2)
+  if (userWords.size === 0 || solutionWords.length === 0) return null
+  const important = solutionWords.slice(0, 80)
+  const overlap = important.filter((word) => userWords.has(word)).length
+  return Math.min(100, Math.round((overlap / Math.max(6, Math.min(important.length, 24))) * 100))
+}
 
 function ExerciseContent({ content }: { content: string }) {
   const [showAnswer, setShowAnswer] = useState(false)
-  const [activeView] = useAppStore((s) => [s.activeView])
+  const [showHint, setShowHint] = useState(false)
+  const [userAnswer, setUserAnswer] = useState("")
+  const [checked, setChecked] = useState(false)
+  const [done, setDone] = useState(false)
 
   const parts = content.split(/(?=##\s*(?:解|答案|Answer|Solution|解答))/i)
   const question = parts[0] || content
-  const answer = parts.length > 1 ? parts.slice(1).join("\n") : null
+  const referenceAnswer = parts.length > 1 ? parts.slice(1).join("\n") : null
+  const score = checked && referenceAnswer ? answerScore(userAnswer, referenceAnswer) : null
+  const feedback = score == null
+    ? "Write your answer first, then check it against the solution."
+    : score >= 70
+      ? "Looks close to the reference answer. Now compare details below."
+      : score >= 35
+        ? "Part of the idea is there. Review the key terms in the solution."
+        : "This answer may be missing the main idea. Try using the hint before revealing the solution."
+  const hint = plainText(question).split(/\s+/).slice(0, 18).join(" ")
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div>
         <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase mb-2">题目</h3>
         <Markdown>{question}</Markdown>
       </div>
-      {answer ? (
+
+      <div className="rounded-md border p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase">作答</h3>
+          {done && <span className="ml-auto text-[10px] text-emerald-600">completed</span>}
+        </div>
+        <textarea
+          value={userAnswer}
+          onChange={(e) => {
+            setUserAnswer(e.target.value)
+            setChecked(false)
+          }}
+          placeholder="在这里写你的解题思路或答案..."
+          className="min-h-28 w-full resize-y rounded-md border bg-[var(--background)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+        />
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            onClick={() => setChecked(true)}
+            disabled={!userAnswer.trim()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
+          >
+            <CheckCircle2 size={13} />
+            Check
+          </button>
+          <button
+            onClick={() => setShowHint((v) => !v)}
+            className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+          >
+            <HelpCircle size={13} />
+            Hint
+          </button>
+          <button
+            onClick={() => {
+              setUserAnswer("")
+              setChecked(false)
+              setShowAnswer(false)
+              setDone(false)
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+          >
+            <RotateCcw size={13} />
+            Reset
+          </button>
+          <button
+            onClick={() => setDone(true)}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-50"
+          >
+            Mark Done
+          </button>
+        </div>
+        {showHint && (
+          <p className="mt-2 rounded bg-[var(--muted)] px-2 py-1.5 text-xs text-[var(--muted-foreground)]">
+            先抓住题目关键词：{hint || "找出已知量、未知量，以及要用到的概念或公式。"}
+          </p>
+        )}
+        {checked && (
+          <p className="mt-2 rounded bg-[var(--muted)] px-2 py-1.5 text-xs text-[var(--muted-foreground)]">
+            {feedback}
+          </p>
+        )}
+      </div>
+
+      {referenceAnswer ? (
         <div className="border-t pt-3">
           <button
             onClick={() => setShowAnswer((v) => !v)}
@@ -28,7 +121,7 @@ function ExerciseContent({ content }: { content: string }) {
           </button>
           {showAnswer && (
             <div className="mt-2 pl-3 border-l-2 border-emerald-300 dark:border-emerald-700">
-              <Markdown>{answer}</Markdown>
+              <Markdown>{referenceAnswer}</Markdown>
             </div>
           )}
         </div>
@@ -36,15 +129,6 @@ function ExerciseContent({ content }: { content: string }) {
         <div className="border-t pt-3">
           <p className="text-xs text-[var(--muted-foreground)] italic">No answer section found</p>
         </div>
-      )}
-      {activeView !== "chat" && (
-        <button
-          onClick={() => useAppStore.getState().setActiveView("chat")}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
-        >
-          <Play className="h-3.5 w-3.5" />
-          Practice in Chat
-        </button>
       )}
     </div>
   )

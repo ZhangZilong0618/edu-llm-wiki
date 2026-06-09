@@ -9,6 +9,7 @@ Supports concurrent processing with configurable concurrency limit.
 import asyncio
 import json
 import re
+from pathlib import Path
 
 from services.file_parser import parse_file
 from services.llm_client import chat_complete
@@ -17,6 +18,7 @@ from storage.wiki_store import (
     ensure_dirs,
     get_ingest_cache,
     read_wiki_page,
+    record_source_pages,
     set_ingest_cache,
     sources_path,
     update_index,
@@ -47,6 +49,25 @@ def _strip_images(content: str) -> str:
     # Clean up multiple blank lines left after removal
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content
+
+
+def _read_preparsed_source(source_path: Path) -> str | None:
+    """Use PaddleOCR parsed markdown when available; it preserves tables/formulas better for slide PDFs."""
+    parsed_doc = source_path.parent / f"{source_path.name}.parsed" / "document.md"
+    if not parsed_doc.exists():
+        return None
+    content = parsed_doc.read_text(encoding="utf-8")
+    content = re.sub(r'<img[^>]*>', '', content)
+    content = re.sub(r'<div[^>]*>\s*</div>', '', content)
+    return content.strip() or None
+
+
+async def _parse_source_content(source_path: Path, *, media_dir: str | None = None) -> tuple[str, list[dict], str]:
+    preparsed = _read_preparsed_source(source_path)
+    if preparsed:
+        return preparsed, [], "PaddleOCR parsed markdown"
+    content, images = await parse_file(str(source_path), media_dir=media_dir)
+    return content, images, "file parser"
 
 
 def _sync_vectors(pages: list[dict], *, project_id: str = "default"):
@@ -135,6 +156,13 @@ IMPORTANT for prerequisites:
 - Think carefully about the learning order: what must a student know before understanding this item?
 - NEVER leave prerequisites out — even basic concepts can reference other foundational items
 
+IMPORTANT for type classification:
+- Put equations, coefficients, variables with equations, and named mathematical expressions in formulas, not concepts.
+- Put laws, theorems, mechanisms, effects, and named rules in principles when they describe a general relationship or causal rule.
+- Put worked examples, review questions, homework questions, and calculation prompts in exercises, even if no full solution is present.
+- Concepts should be reserved for definitions and entities, not every named technical term.
+- If a document contains tables or paragraphs defining quantities such as thermal conductivity, absorption coefficient, Seebeck coefficient, heat capacity, or ZT, extract any accompanying equation as a formula page and the physical rule as a principle page when applicable.
+
 CRITICAL: Output ONLY the JSON object, no other text. Ensure valid JSON.
 """
 
@@ -158,6 +186,14 @@ Based on the analysis, generate wiki pages. For each page, output a JSON object 
 - sources: list of source file references
 - tags: list of relevant tags
 - prerequisites: list of page paths that must be understood BEFORE this page (e.g., ["concepts/lattice_wave.md"]). EVERY page must have this field — use [] only for genuinely foundational topics with no prerequisites.
+
+Type coverage rules:
+- Create concept pages for items in analysis.concepts.
+- Create formula pages for every meaningful item in analysis.formulas; do NOT merge formulas into concept pages.
+- Create principle pages for every meaningful item in analysis.principles; do NOT merge principles into concept pages.
+- Create exercise pages for every item in analysis.exercises. Exercise content MUST include a clear "## 题目" section and a separate "## 解答" or "## Answer" section.
+- Use source only for document summaries, never for ordinary concepts/formulas/principles/exercises.
+- If a category is empty in the analysis, do not invent pages for it.
 
 Return a JSON array of page objects. The source summary MUST always be created.
 CRITICAL: Output ONLY the JSON array, no other text. Ensure valid JSON.
@@ -273,6 +309,332 @@ def _repair_json(text: str) -> str:
     return text
 
 
+async def _load_llm_json(raw: str, *, expected: str) -> object:
+    """Parse LLM JSON output, asking the LLM to repair malformed JSON once if needed."""
+    repaired = _repair_json(raw)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError as first_error:
+        fixed = await chat_complete(
+            system_prompt=(
+                "You repair malformed JSON. Return ONLY valid JSON. "
+                "Do not add markdown fences, comments, explanations, or new content."
+            ),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"The following should be a valid JSON {expected}, but parsing failed with:\n"
+                    f"{first_error}\n\n"
+                    "Repair syntax only. Preserve all keys, values, language, and structure as much as possible.\n\n"
+                    f"{repaired[:60000]}"
+                ),
+            }],
+            temperature=0,
+            max_tokens=8192,
+        )
+        try:
+            return json.loads(_repair_json(fixed))
+        except json.JSONDecodeError as second_error:
+            raise ValueError(f"LLM returned malformed JSON and auto-repair failed: {second_error}") from second_error
+
+
+def _slugify_title(title: str) -> str:
+    title = (title or "untitled").strip()
+    title = re.sub(r"^#+\s*", "", title)
+    title = re.sub(r'[\\/:\*\?"<>\|]+', "_", title)
+    title = re.sub(r"\s+", "_", title)
+    return title[:80].strip("._ ") or "untitled"
+
+
+_GENERIC_FORMULA_TITLES = {
+    "公式", "电学", "热学", "力学", "磁学", "光学", "上课形式", "基本原理",
+    "① 基本原理", "formula", "page",
+}
+
+
+def _clean_item_title(title: str) -> str:
+    title = re.sub(r"^#+\s*", "", (title or "").strip())
+    title = title.strip(" ：:，,。")
+    return title
+
+
+def _is_page_heading(title: str) -> bool:
+    return bool(re.match(r"^#+?\s*Page\s+\d+\s*$", title.strip(), re.IGNORECASE))
+
+
+def _is_generic_formula_title(title: str) -> bool:
+    clean = _clean_item_title(title)
+    return (
+        not clean
+        or clean in _GENERIC_FORMULA_TITLES
+        or _is_page_heading(clean)
+        or len(clean) > 50
+    )
+
+
+def _normalize_latex(latex: str) -> str:
+    latex = (latex or "").strip()
+    latex = re.sub(r"^\$+\s*(?:\\n|\n)?", "", latex)
+    latex = re.sub(r"(?:\\n|\n)?\s*\$+$", "", latex)
+    latex = latex.replace("$$", "").strip()
+    return latex
+
+
+def _formula_title_from_latex(latex: str) -> str:
+    cleaned = _normalize_latex(latex)
+    if not cleaned:
+        return "公式"
+    display = re.sub(r"\\mathrm\{([^}]+)\}", r"\1", cleaned)
+    display = re.sub(r"\\mathbf\{([^}]+)\}", r"\1", display)
+    display = re.sub(r"\\left|\\right", "", display)
+    display = re.sub(r"\s+", " ", display).strip()
+    return display[:48]
+
+
+def _normalize_generated_pages(pages: list[dict], source_relative_path: str) -> list[dict]:
+    normalized: list[dict] = []
+    for page in pages:
+        ptype = page.get("page_type") or page.get("type") or "concept"
+        title = _clean_item_title(str(page.get("title") or page.get("name") or ""))
+        if not title:
+            continue
+        page["page_type"] = ptype
+        page["title"] = title
+        if ptype == "formula":
+            content = str(page.get("content") or "")
+            content = re.sub(r"\$\$\s*(?:\\n|\n)\s*\$\$", "$$", content)
+            content = content.replace("$$\\n", "$$\n").replace("\\n$$", "\n$$")
+            page["content"] = content
+        page.setdefault("sources", [source_relative_path])
+        normalized.append(page)
+    return normalized
+
+
+def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_path: str) -> list[dict]:
+    """Guarantee formulas/principles/exercises become their own wiki pages when analysis found them."""
+    if not isinstance(pages, list):
+        pages = []
+
+    normalized_pages = _normalize_generated_pages([p for p in pages if isinstance(p, dict)], source_relative_path)
+    existing = {
+        (
+            (p.get("page_type") or "concept"),
+            (p.get("title") or "").strip().lower(),
+        )
+        for p in normalized_pages
+    }
+
+    def add_page(page_type: str, title: str, content: str, tags: list[str], prerequisites: list[str] | None = None):
+        key = (page_type, title.strip().lower())
+        if not title or key in existing:
+            return
+        existing.add(key)
+        normalized_pages.append({
+            "path": f"{page_type}s/{_slugify_title(title)}.md",
+            "title": title,
+            "page_type": page_type,
+            "content": content,
+            "sources": [source_relative_path],
+            "tags": tags,
+            "prerequisites": prerequisites or [],
+        })
+
+    for item in analysis.get("formulas", []) or []:
+        if not isinstance(item, dict):
+            continue
+        raw_title = str(item.get("name") or item.get("title") or "").strip()
+        latex = _normalize_latex(str(item.get("latex") or item.get("formula") or ""))
+        title = _clean_item_title(raw_title)
+        if _is_generic_formula_title(title):
+            title = _formula_title_from_latex(latex)
+        if not latex or _is_generic_formula_title(title):
+            continue
+        variables = str(item.get("variables") or "").strip()
+        applications = str(item.get("applications") or "").strip()
+        prereqs = item.get("prerequisites") if isinstance(item.get("prerequisites"), list) else []
+        content = (
+            f"# {title}\n\n"
+            f"## 公式\n\n$$\n{latex}\n$$\n\n"
+            f"## 变量说明\n\n{variables or '待补充'}\n\n"
+            f"## 适用场景\n\n{applications or '待补充'}\n"
+        )
+        add_page("formula", title, content, ["formula"], prereqs)
+
+    for item in analysis.get("principles", []) or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("name") or item.get("title") or "").strip()
+        statement = str(item.get("statement") or "").strip()
+        conditions = str(item.get("conditions") or "").strip()
+        derivation = str(item.get("derivation_summary") or "").strip()
+        applications = str(item.get("applications") or "").strip()
+        prereqs = item.get("prerequisites") if isinstance(item.get("prerequisites"), list) else []
+        content = (
+            f"# {title}\n\n"
+            f"## 陈述\n\n{statement or '待补充'}\n\n"
+            f"## 适用条件\n\n{conditions or '待补充'}\n\n"
+            f"## 推导/说明\n\n{derivation or '待补充'}\n\n"
+            f"## 应用\n\n{applications or '待补充'}\n"
+        )
+        add_page("principle", title, content, ["principle"], prereqs)
+
+    for idx, item in enumerate(analysis.get("exercises", []) or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question") or item.get("title") or "").strip()
+        title = question[:40] or f"练习 {idx}"
+        solution = str(item.get("solution") or item.get("answer") or "").strip()
+        knowledge_points = item.get("knowledge_points") if isinstance(item.get("knowledge_points"), list) else []
+        content = (
+            f"# {title}\n\n"
+            f"## 题目\n\n{question or '待补充'}\n\n"
+            f"## 解答\n\n{solution or '待补充'}\n\n"
+            f"## 考察知识点\n\n"
+            + "\n".join(f"- {kp}" for kp in knowledge_points)
+            + ("\n" if knowledge_points else "待补充\n")
+        )
+        add_page("exercise", title, content, ["exercise"], [])
+
+    return normalized_pages
+
+
+def _analysis_is_empty(analysis: dict) -> bool:
+    return not any(analysis.get(key) for key in ("concepts", "formulas", "principles", "exercises"))
+
+
+def _fallback_analysis_from_text(content: str) -> dict:
+    """Heuristic fallback when the LLM returns an empty analysis for clearly educational content."""
+    text = re.sub(r"<[^>]+>", " ", content)
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if line and not line.startswith("---")]
+
+    concepts: list[dict] = []
+    formulas: list[dict] = []
+    principles: list[dict] = []
+    exercises: list[dict] = []
+    seen: dict[str, set[str]] = {"concept": set(), "formula": set(), "principle": set(), "exercise": set()}
+
+    def add_concept(name: str, definition: str = ""):
+        name = _clean_item_title(name)
+        if _is_page_heading(name):
+            return
+        name = name.strip(" ：:，,。")
+        if len(name) < 2 or len(name) > 30 or name in seen["concept"]:
+            return
+        seen["concept"].add(name)
+        concepts.append({
+            "name": name,
+            "definition": definition or f"文档中出现的核心概念：{name}",
+            "related_concepts": [],
+            "parent_concept": "",
+            "prerequisites": [],
+        })
+
+    def add_formula(name: str, latex: str, variables: str = ""):
+        latex = _normalize_latex(latex)
+        if not latex or "=" not in latex:
+            return
+        name = _clean_item_title(name)
+        if _is_generic_formula_title(name):
+            name = _formula_title_from_latex(latex)
+        if len(name) < 2 or name in seen["formula"]:
+            return
+        seen["formula"].add(name)
+        formulas.append({
+            "name": name,
+            "latex": latex,
+            "variables": variables,
+            "applications": f"用于分析{name}相关的材料电学性能。",
+            "prerequisites": [],
+        })
+
+    def add_principle(name: str, statement: str = ""):
+        name = _clean_item_title(name)
+        if _is_page_heading(name):
+            return
+        name = name.strip(" ：:，,。")
+        if len(name) < 2 or len(name) > 40 or name in seen["principle"]:
+            return
+        seen["principle"].add(name)
+        principles.append({
+            "name": name,
+            "statement": statement or f"{name}是文档中涉及的重要规律或理论。",
+            "conditions": "见原始文档上下文。",
+            "derivation_summary": "",
+            "applications": "用于解释材料电学性能。",
+            "prerequisites": [],
+        })
+
+    def add_exercise(question: str):
+        question = _clean_item_title(question)
+        if _is_page_heading(question):
+            return
+        if len(question) < 6 or question in seen["exercise"]:
+            return
+        seen["exercise"].add(question)
+        exercises.append({
+            "question": question,
+            "solution": "请结合文档中的定义、公式和图表进行分析。",
+            "knowledge_points": [],
+        })
+
+    known_terms = [
+        "导电", "电阻", "电阻率", "电导率", "导电机理", "霍耳效应", "霍尔效应",
+        "霍耳系数", "霍尔系数", "经典自由电子理论", "量子自由电子理论", "能带理论",
+        "费米能级", "费米分布函数", "导带", "价带", "禁带", "半导体", "绝缘体",
+        "金属", "载流子浓度", "迁移率", "驰豫时间", "电子热导率",
+    ]
+    for term in known_terms:
+        if term in content:
+            add_concept(term)
+
+    for i, line in enumerate(lines):
+        if _is_page_heading(line):
+            continue
+        prev_line = lines[i - 1] if i > 0 else ""
+        next_line = lines[i + 1] if i + 1 < len(lines) else ""
+
+        clean_line = _clean_item_title(line)
+
+        if re.search(r"(定律|理论|效应|规则|原理)", clean_line):
+            add_principle(line, next_line if len(next_line) < 120 else "")
+
+        if "?" in clean_line or "？" in clean_line or "为什么" in clean_line or "由什么决定" in clean_line:
+            add_exercise(line)
+
+        inline_formulas = re.findall(r"\$\s*([^$]{1,240}=[^$]{1,240})\s*\$", line)
+        if inline_formulas:
+            for formula in inline_formulas:
+                add_formula(formula, formula)
+            continue
+
+        if (
+            not re.search(r"[\u4e00-\u9fff]", line)
+            and re.search(r"^[\s\w\\{}^_+\-*/().,，α-ωΑ-Ω𝑉𝐼𝑅𝜌𝜎𝜅𝜇𝜏𝐸𝐽𝐵=＝]+$", line)
+            and re.search(r"[=＝]", line)
+        ):
+            name = prev_line if 2 <= len(_clean_item_title(prev_line)) <= 30 else line
+            add_formula(name, line)
+
+    summary = "文档包含材料电学性能相关知识，包括导电、电阻率、电导率、导电机理、霍耳效应、电子理论和能带理论等。"
+    return {
+        "summary": summary,
+        "concepts": concepts[:30],
+        "formulas": formulas[:20],
+        "principles": principles[:15],
+        "exercises": exercises[:10],
+        "relationships": [],
+        "knowledge_gaps": [],
+        "review_items": ["LLM 分析为空，已使用规则兜底抽取；建议人工复核。"],
+    }
+
+
+def _augment_empty_analysis(analysis: dict, content: str) -> dict:
+    if not isinstance(analysis, dict) or _analysis_is_empty(analysis):
+        return _fallback_analysis_from_text(content)
+    return analysis
+
+
 async def read_context(project_id: str = "default") -> str:
     """Read purpose.md and index.md for context."""
     from storage.wiki_store import wiki_path
@@ -309,7 +671,7 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
     try:
         wp = wiki_path(project_id)
         media_dir = str(wp / "media")
-        content, extracted_images = await parse_file(str(source_path), media_dir=media_dir)
+        content, extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
     except Exception as e:
         return {"source": source_relative_path, "status": "error", "error": f"Parse error: {e}"}
 
@@ -336,9 +698,7 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
             analysis_raw = analysis_raw.split("```")[1]
             if analysis_raw.startswith("json"):
                 analysis_raw = analysis_raw[4:]
-        # Repair truncated JSON by closing open structures
-        analysis_raw = _repair_json(analysis_raw)
-        analysis = json.loads(analysis_raw)
+        analysis = _augment_empty_analysis(await _load_llm_json(analysis_raw, expected="object"), content)
     except Exception as e:
         return {"source": source_relative_path, "status": "error",
                 "error": f"Analysis error: {e}"}
@@ -366,8 +726,11 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
             gen_raw = gen_raw.split("```")[1]
             if gen_raw.startswith("json"):
                 gen_raw = gen_raw[4:]
-        gen_raw = _repair_json(gen_raw)
-        pages = json.loads(gen_raw)
+        pages = _ensure_pages_from_analysis(
+            analysis,
+            await _load_llm_json(gen_raw, expected="array"),
+            source_relative_path,
+        )
     except Exception as e:
         return {"source": source_relative_path, "status": "error",
                 "error": f"Generation error: {e}"}
@@ -414,6 +777,9 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
 
     if source_summary:
         created.append(source_summary_path)
+
+    generated_paths = [p["path"] for p in pages if p.get("path")]
+    record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
 
     # Update index
     all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
@@ -464,7 +830,7 @@ async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, 
         try:
             wp = wiki_path(project_id)
             media_dir = str(wp / "media")
-            content, extracted_images = await parse_file(str(source_path), media_dir=media_dir)
+            content, extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
         except Exception as e:
             yield await emit("error", source=source_relative_path, message=f"解析失败: {e}")
             continue
@@ -476,7 +842,7 @@ async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, 
             content = content[:max_chars] + "\n\n[Content truncated...]"
         yield await emit("stage_done", source=source_relative_path,
                         stage="parse",
-                        message=f"解析完成: {len(content):,} 字符" + (" (已截断)" if truncated else ""))
+                        message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
 
         # Step 1: Analysis
         yield await emit("stage", source=source_relative_path,
@@ -491,8 +857,7 @@ async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, 
                 temperature=0.2,
                 max_tokens=8192,
             )
-            analysis_raw = _repair_json(analysis_raw)
-            analysis = json.loads(analysis_raw)
+            analysis = _augment_empty_analysis(await _load_llm_json(analysis_raw, expected="object"), content)
         except Exception as e:
             yield await emit("error", source=source_relative_path, message=f"分析失败: {e}")
             continue
@@ -537,8 +902,11 @@ async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, 
                 temperature=0.3,
                 max_tokens=8192,
             )
-            gen_raw = _repair_json(gen_raw)
-            pages = json.loads(gen_raw)
+            pages = _ensure_pages_from_analysis(
+                analysis,
+                await _load_llm_json(gen_raw, expected="array"),
+                source_relative_path,
+            )
         except Exception as e:
             yield await emit("error", source=source_relative_path, message=f"生成失败: {e}")
             continue
@@ -599,6 +967,9 @@ async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, 
         )
         created.append(source_summary_path)
 
+        generated_paths = [p["path"] for p in pages if p.get("path")]
+        record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
+
         # Update index
         all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
                    for p in pages]
@@ -652,7 +1023,7 @@ async def _run_single_with_events(
     try:
         wp = wiki_path(project_id)
         media_dir = str(wp / "media")
-        content, extracted_images = await parse_file(str(source_path), media_dir=media_dir)
+        content, extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
     except Exception as e:
         await emit("error", source=source_relative_path, message=f"解析失败: {e}")
         return
@@ -664,7 +1035,7 @@ async def _run_single_with_events(
         content = content[:max_chars] + "\n\n[Content truncated...]"
     await emit("stage_done", source=source_relative_path,
                stage="parse",
-               message=f"解析完成: {len(content):,} 字符" + (" (已截断)" if truncated else ""))
+               message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
 
     # Step 1: Analysis
     await emit("stage", source=source_relative_path,
@@ -679,8 +1050,7 @@ async def _run_single_with_events(
             temperature=0.2,
             max_tokens=8192,
         )
-        analysis_raw = _repair_json(analysis_raw)
-        analysis = json.loads(analysis_raw)
+        analysis = _augment_empty_analysis(await _load_llm_json(analysis_raw, expected="object"), content)
     except Exception as e:
         await emit("error", source=source_relative_path, message=f"分析失败: {e}")
         return
@@ -724,8 +1094,11 @@ async def _run_single_with_events(
             temperature=0.3,
             max_tokens=8192,
         )
-        gen_raw = _repair_json(gen_raw)
-        pages = json.loads(gen_raw)
+        pages = _ensure_pages_from_analysis(
+            analysis,
+            await _load_llm_json(gen_raw, expected="array"),
+            source_relative_path,
+        )
     except Exception as e:
         await emit("error", source=source_relative_path, message=f"生成失败: {e}")
         return
@@ -785,6 +1158,9 @@ async def _run_single_with_events(
         project_id=project_id,
     )
     created.append(source_summary_path)
+
+    generated_paths = [p["path"] for p in pages if p.get("path")]
+    record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
 
     # Update index
     all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}

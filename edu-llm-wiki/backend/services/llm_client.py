@@ -1,8 +1,6 @@
 from collections.abc import AsyncIterator
 
 import httpx
-from anthropic import AsyncAnthropic
-from openai import AsyncOpenAI
 
 from config import settings
 
@@ -13,7 +11,9 @@ _http_client = httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(180.0, c
 
 def _client_for(provider: str, api_key: str, base_url: str | None):
     if provider == "anthropic":
+        from anthropic import AsyncAnthropic
         return AsyncAnthropic(api_key=api_key, base_url=base_url, http_client=_http_client)
+    from openai import AsyncOpenAI
     return AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=_http_client)
 
 

@@ -21,6 +21,8 @@ async def create_project_endpoint(data: dict):
         raise HTTPException(status_code=400, detail="Project name required")
     try:
         return create_project(name)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileExistsError as e:

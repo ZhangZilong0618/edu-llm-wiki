@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
@@ -7,10 +7,24 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class ChatScope(BaseModel):
+    type: str = "whole_wiki"  # whole_wiki | current_page | selected_source
+    page_path: str | None = None
+    source_name: str | None = None
+
+
+class ChatOptions(BaseModel):
+    citation_required: bool = True
+    answer_style: str = "concise"  # concise | detailed | socratic
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     conversation_id: str = "default"
     context_budget: int = 32000  # max context in chars
+    mode: str = "ask"  # ask | practice
+    scope: ChatScope = Field(default_factory=ChatScope)
+    options: ChatOptions = Field(default_factory=ChatOptions)
 
 
 class CitedPage(BaseModel):

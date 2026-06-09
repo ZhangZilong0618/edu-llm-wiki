@@ -185,7 +185,7 @@ def list_wiki_pages(page_type: str | None = None, *, project_id: str = "default"
             continue
         rel_path = str(md_file.relative_to(wp))
         fm, body = parse_frontmatter(md_file.read_text(encoding="utf-8"))
-        ptype = fm.get("type", "unknown")
+        ptype = fm.get("type") or "unknown"
         if page_type and ptype != page_type:
             continue
         pages.append({
@@ -209,7 +209,7 @@ def delete_wiki_page(relative_path: str, *, project_id: str = "default") -> bool
         # Remove from vector index
         try:
             from services.vector_store import remove_page
-            remove_page(page_id, project_id=project_id)
+            remove_page(relative_path, project_id=project_id)
         except Exception:
             pass
         return True
@@ -252,6 +252,47 @@ def set_ingest_cache(source_path: str, content_hash: str, *, project_id: str = "
     cache_dir.mkdir(exist_ok=True)
     cache_file = cache_dir / (hashlib.md5(source_path.encode()).hexdigest() + ".hash")
     cache_file.write_text(content_hash)
+
+
+def _source_manifest_path(*, project_id: str = "default") -> Path:
+    return wiki_path(project_id) / ".source_pages.json"
+
+
+def read_source_manifest(*, project_id: str = "default") -> dict[str, list[str]]:
+    """Read source-to-wiki-page mapping used for exact source reingest cleanup."""
+    manifest_path = _source_manifest_path(project_id=project_id)
+    if not manifest_path.exists():
+        return {}
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(source): [str(path) for path in paths if isinstance(path, str)]
+        for source, paths in data.items()
+        if isinstance(paths, list)
+    }
+
+
+def record_source_pages(source_path: str, page_paths: list[str], *, project_id: str = "default"):
+    """Persist the complete set of wiki pages generated for one source file."""
+    manifest = read_source_manifest(project_id=project_id)
+    manifest[source_path] = sorted(set(page_paths))
+    manifest_path = _source_manifest_path(project_id=project_id)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def remove_source_manifest(source_path: str, *, project_id: str = "default"):
+    """Remove one source entry from the source-to-pages manifest."""
+    manifest = read_source_manifest(project_id=project_id)
+    if source_path not in manifest:
+        return
+    del manifest[source_path]
+    manifest_path = _source_manifest_path(project_id=project_id)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def update_index(new_pages: list[dict], *, project_id: str = "default"):
@@ -311,6 +352,44 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
 
     new_body = "\n".join(sections) if sections else body
     text = make_frontmatter(fm) + "\n# 知识库索引\n\n" + new_body
+    index_path.write_text(text, encoding="utf-8")
+
+
+def rebuild_index(*, project_id: str = "default"):
+    """Rebuild index.md from current wiki files."""
+    pages = list_wiki_pages(project_id=project_id)
+    index_path = wiki_path(project_id) / "index.md"
+    if not index_path.exists():
+        ensure_dirs(project_id=project_id)
+
+    fm = {
+        "title": "知识库索引",
+        "type": "index",
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    section_names = {
+        "concept": "## 概念 (Concepts)",
+        "formula": "## 公式 (Formulas)",
+        "principle": "## 原理 (Principles)",
+        "exercise": "## 习题 (Exercises)",
+        "source": "## 来源 (Sources)",
+        "synthesis": "## 综合分析 (Synthesis)",
+        "query": "## 问答记录 (Queries)",
+    }
+    grouped: dict[str, list[dict]] = {t: [] for t in section_names}
+    for page in pages:
+        if page.get("type") in grouped:
+            grouped[page["type"]].append(page)
+
+    sections = []
+    for ptype, header in section_names.items():
+        sections.append(header)
+        for page in sorted(grouped[ptype], key=lambda p: p.get("title", "")):
+            link = page["path"].replace(".md", "")
+            sections.append(f"- [[{link}]] - {page.get('title', '')}")
+        sections.append("")
+
+    text = make_frontmatter(fm) + "\n# 知识库索引\n\n" + "\n".join(sections)
     index_path.write_text(text, encoding="utf-8")
 
 

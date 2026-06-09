@@ -1,22 +1,31 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
 import { Markdown } from "@/components/markdown"
-import { FileText, FileScan, Loader2, AlertCircle, ExternalLink, RefreshCw } from "lucide-react"
+import { PdfPreview } from "@/components/sources/pdf-preview"
+import { FileText, FileScan, Loader2, AlertCircle, ExternalLink, RefreshCw, Link2, Link2Off } from "lucide-react"
 import { toast } from "@/components/ui/toast"
 
 export function SourcePreview() {
   const filename = useAppStore((s) => s.importSelectedSource)
+  const sourceFiles = useAppStore((s) => s.sourceFiles)
   const selectedSource = useAppStore((s) => s.selectedSource)
   const setSelectedSource = useAppStore((s) => s.setSelectedSource)
   const [parsedContent, setParsedContent] = useState<string | null>(null)
   const [parsedError, setParsedError] = useState<string | null>(null)
   const [parseLoading, setParseLoading] = useState(false)
   const [parseStatus, setParseStatus] = useState<"not_started" | "pending" | "running" | "done" | "failed" | "unknown">("unknown")
+  const [syncEnabled, setSyncEnabled] = useState(true)
+  const [pdfPage, setPdfPage] = useState(1)
+  const originalScrollRef = useRef<HTMLDivElement>(null)
+  const parsedScrollRef = useRef<HTMLDivElement>(null)
+  const syncingRef = useRef<"original" | "parsed" | null>(null)
+  const isPdf = filename?.toLowerCase().endsWith(".pdf") || false
 
   useEffect(() => {
     setParsedContent(null)
     setParsedError(null)
+    setPdfPage(1)
     if (!filename) return
     let cancelled = false
 
@@ -63,6 +72,61 @@ export function SourcePreview() {
     return () => clearInterval(t)
   }, [filename, parseStatus])
 
+  const syncScrollRatio = useCallback((from: HTMLDivElement | null, to: HTMLDivElement | null, direction: "original" | "parsed") => {
+    if (!from || !to || !syncEnabled || syncingRef.current) return
+    const fromMax = from.scrollHeight - from.clientHeight
+    const toMax = to.scrollHeight - to.clientHeight
+    if (fromMax <= 0 || toMax <= 0) return
+    syncingRef.current = direction
+    to.scrollTop = (from.scrollTop / fromMax) * toMax
+    window.setTimeout(() => {
+      syncingRef.current = null
+    }, 80)
+  }, [syncEnabled])
+
+  const getVisibleParsedPage = useCallback(() => {
+    const container = parsedScrollRef.current
+    if (!container) return null
+    const headings = Array.from(container.querySelectorAll("h2"))
+    let current: number | null = null
+    for (const heading of headings) {
+      const match = heading.textContent?.trim().match(/^Page\s+(\d+)$/i)
+      if (!match) continue
+      const top = heading.getBoundingClientRect().top - container.getBoundingClientRect().top
+      if (top <= 96) current = Number(match[1])
+      else break
+    }
+    return current
+  }, [])
+
+  const syncPdfToParsedPage = useCallback(() => {
+    if (!syncEnabled || !isPdf) return
+    const page = getVisibleParsedPage()
+    if (page && page !== pdfPage && !syncingRef.current) {
+      syncingRef.current = "parsed"
+      setPdfPage(page)
+      window.setTimeout(() => {
+        syncingRef.current = null
+      }, 160)
+    }
+  }, [getVisibleParsedPage, isPdf, pdfPage, syncEnabled])
+
+  const syncParsedToPage = useCallback((page: number) => {
+    if (!syncEnabled || !isPdf || syncingRef.current) return
+    const container = parsedScrollRef.current
+    if (!container) return
+    const heading = Array.from(container.querySelectorAll("h2")).find((h) => (
+      h.textContent?.trim().match(new RegExp(`^Page\\s+${page}$`, "i"))
+    ))
+    if (!heading) return
+    syncingRef.current = "original"
+    const headingTop = heading.getBoundingClientRect().top - container.getBoundingClientRect().top
+    container.scrollTop += headingTop - 12
+    window.setTimeout(() => {
+      syncingRef.current = null
+    }, 160)
+  }, [isPdf, syncEnabled])
+
   if (!filename) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)] p-4 text-center">
@@ -75,8 +139,9 @@ export function SourcePreview() {
     )
   }
 
-  const isPdf = filename.toLowerCase().endsWith(".pdf")
   const viewUrl = isPdf ? api.viewSourceUrl(filename) : null
+  const currentFile = filename ? sourceFiles.find((file) => file.name === filename) : null
+  const pdfCacheKey = currentFile ? `${currentFile.modified}-${currentFile.size}` : filename
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -86,12 +151,19 @@ export function SourcePreview() {
           source
         </span>
         <h2 className="text-sm font-semibold truncate">{filename}</h2>
+        <button
+          onClick={() => setSyncEnabled((v) => !v)}
+          className={`ml-auto p-1 rounded hover:bg-[var(--muted)] ${syncEnabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`}
+          title={syncEnabled ? "Synced scrolling enabled" : "Synced scrolling disabled"}
+        >
+          {syncEnabled ? <Link2 size={14} /> : <Link2Off size={14} />}
+        </button>
         {viewUrl && (
           <a
             href={viewUrl}
             target="_blank"
             rel="noreferrer"
-            className="ml-auto p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+            className="p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             title="Open in new tab"
           >
             <ExternalLink size={14} />
@@ -108,13 +180,19 @@ export function SourcePreview() {
           </div>
           <div className="flex-1 overflow-hidden">
             {isPdf && viewUrl ? (
-              <iframe
+              <PdfPreview
                 src={viewUrl}
-                className="w-full h-full border-0"
-                title={filename}
+                cacheKey={pdfCacheKey}
+                targetPage={pdfPage}
+                syncEnabled={syncEnabled}
+                onVisiblePageChange={syncParsedToPage}
               />
             ) : selectedSource?.content ? (
-              <div className="h-full overflow-y-auto p-3">
+              <div
+                ref={originalScrollRef}
+                onScroll={() => syncScrollRatio(originalScrollRef.current, parsedScrollRef.current, "parsed")}
+                className="h-full overflow-y-auto p-3"
+              >
                 <Markdown>{selectedSource.content}</Markdown>
               </div>
             ) : (
@@ -179,7 +257,14 @@ export function SourcePreview() {
                 Loading parse status...
               </div>
             ) : parseStatus === "done" && parsedContent ? (
-              <div className="h-full overflow-y-auto p-3">
+              <div
+                ref={parsedScrollRef}
+                onScroll={() => {
+                  if (isPdf) syncPdfToParsedPage()
+                  else syncScrollRatio(parsedScrollRef.current, originalScrollRef.current, "original")
+                }}
+                className="h-full overflow-y-auto p-3"
+              >
                 <Markdown>{parsedContent}</Markdown>
               </div>
             ) : parseStatus === "failed" ? (

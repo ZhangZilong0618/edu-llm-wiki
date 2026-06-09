@@ -6,12 +6,12 @@ import re
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from models.chat import ChatRequest, ChatResponse, CitedPage
+from models.chat import ChatRequest, ChatResponse, ChatScope, CitedPage
 from services.context_budget import compute_budget
 from services.ingest_engine import _strip_images
 from services.llm_client import chat_complete, stream_chat
 from services.search_engine import graph_expand, keyword_search
-from storage.wiki_store import read_wiki_page, wiki_path
+from storage.wiki_store import list_wiki_pages, read_wiki_page, wiki_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -36,6 +36,9 @@ def _is_greeting(text: str) -> bool:
 
 
 SYSTEM_PROMPT = """You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.
+
+## Interaction Mode
+{mode_instruction}
 
 ## Rules
 - Answer based ONLY on the numbered wiki pages provided below.
@@ -62,12 +65,79 @@ SYSTEM_PROMPT = """You are a knowledgeable wiki assistant. Answer questions base
 GREETING_PROMPT = """You are a wiki assistant. The user sent a casual greeting — reply briefly and naturally, in one or two sentences. Do NOT invent wiki content or pretend to have retrieved pages."""
 
 
+def _mode_instruction(mode: str, answer_style: str) -> str:
+    if mode == "practice":
+        return (
+            "You are a patient learning coach. If the user is answering a question, diagnose their answer, "
+            "give one targeted hint before a full solution, and connect feedback to the cited wiki pages."
+        )
+    if answer_style == "detailed":
+        return "Give a structured, detailed explanation with examples when useful."
+    if answer_style == "socratic":
+        return "Guide the user with short Socratic steps and avoid jumping straight to the final answer."
+    return "Answer directly and concisely, with enough explanation to be useful."
+
+
+def _extract_cited_numbers(response: str) -> tuple[str, set[int]]:
+    match = re.search(r"<!--\s*cited:\s*([0-9,\s]+)\s*-->", response, re.IGNORECASE)
+    if not match:
+        return response.strip(), set()
+    numbers = {int(n) for n in re.findall(r"\d+", match.group(1))}
+    cleaned = (response[:match.start()] + response[match.end():]).strip()
+    return cleaned, numbers
+
+
+def _filter_actual_citations(response: str, cited: list[dict]) -> tuple[str, list[dict]]:
+    cleaned, numbers = _extract_cited_numbers(response)
+    if numbers:
+        return cleaned, [c for i, c in enumerate(cited, start=1) if i in numbers]
+    bracket_numbers = {int(n) for n in re.findall(r"\[(\d+)\]", cleaned)}
+    if bracket_numbers:
+        return cleaned, [c for i, c in enumerate(cited, start=1) if i in bracket_numbers]
+    return cleaned, []
+
+
+def _scope_seed_results(scope: ChatScope, *, project_id: str = "default") -> list[dict]:
+    if scope.type == "current_page" and scope.page_path:
+        page = read_wiki_page(scope.page_path, project_id=project_id)
+        if page:
+            return [{
+                "path": page["path"],
+                "title": page["title"],
+                "snippet": page.get("content", "")[:200],
+                "score": 100.0,
+                "title_match": True,
+                "vector_score": None,
+            }]
+    if scope.type == "selected_source" and scope.source_name:
+        seeded: list[dict] = []
+        for summary in list_wiki_pages(project_id=project_id):
+            page = read_wiki_page(summary["path"], project_id=project_id)
+            if not page:
+                continue
+            source_names = page.get("sources", []) or []
+            if scope.source_name in source_names or scope.source_name in page.get("title", "") or scope.source_name in page.get("path", ""):
+                seeded.append({
+                    "path": page["path"],
+                    "title": page["title"],
+                    "snippet": page.get("content", "")[:200],
+                    "score": 90.0 - len(seeded),
+                    "title_match": True,
+                    "vector_score": None,
+                })
+            if len(seeded) >= 8:
+                break
+        return seeded
+    return []
+
+
 async def _run_rag_pipeline(
     query: str,
     budget: dict,
     *,
     project_id: str = "default",
-) -> tuple[str, list[dict], str, str]:
+    scope: ChatScope | None = None,
+) -> tuple[str, list[dict], str, str, str]:
     """Full RAG pipeline: search → vector → graph expand → budget fill → context assembly.
 
     Returns: (pages_context, cited, page_list, index)
@@ -88,12 +158,17 @@ async def _run_rag_pipeline(
     if index_path.exists():
         raw_index = _strip_images(index_path.read_text(encoding="utf-8"))
 
+    # ── Phase 0: Explicit user-selected scope ──
+    top_results: list[dict] = _scope_seed_results(scope or ChatScope(), project_id=project_id)
+    seeded_paths = {r["path"] for r in top_results}
+
     # ── Phase 1: Vector semantic search (primary) ──
-    top_results: list[dict] = []
     try:
         from services.vector_store import vector_search
         vector_results = vector_search(query, top_k=20, project_id=project_id)
         for i, vr in enumerate(vector_results):
+            if vr["path"] in seeded_paths:
+                continue
             top_results.append({
                 "path": vr["path"],
                 "title": vr["title"],
@@ -237,12 +312,13 @@ async def chat(req: ChatRequest, project_id: str = Query("default")):
         return ChatResponse(content=response, cited_pages=[], conversation_id=req.conversation_id)
 
     # Full RAG pipeline
-    budget = compute_budget(None)
+    budget = compute_budget(req.context_budget)
     pages_context, cited, page_list, index, purpose = await _run_rag_pipeline(
-        last_user_msg, budget, project_id=project_id,
+        last_user_msg, budget, project_id=project_id, scope=req.scope,
     )
 
     system = SYSTEM_PROMPT.format(
+        mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
         purpose=purpose or "Not defined",
         index=index or "(No index)",
         page_list=page_list,
@@ -250,10 +326,11 @@ async def chat(req: ChatRequest, project_id: str = Query("default")):
     )
 
     response = await chat_complete(system_prompt=system, messages=messages)
+    response, actual_cited = _filter_actual_citations(response, cited)
 
     return ChatResponse(
         content=response,
-        cited_pages=[CitedPage(**c) for c in cited],
+        cited_pages=[CitedPage(**c) for c in actual_cited],
         conversation_id=req.conversation_id,
     )
 
@@ -279,12 +356,13 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
         return StreamingResponse(greeting_gen(), media_type="text/event-stream")
 
     # Full RAG pipeline
-    budget = compute_budget(None)
+    budget = compute_budget(req.context_budget)
     pages_context, cited, page_list, index, purpose = await _run_rag_pipeline(
-        last_user_msg, budget, project_id=project_id,
+        last_user_msg, budget, project_id=project_id, scope=req.scope,
     )
 
     system = SYSTEM_PROMPT.format(
+        mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
         purpose=purpose or "Not defined",
         index=index or "(No index)",
         page_list=page_list,
@@ -292,9 +370,16 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
     )
 
     async def generate():
-        yield f"data: {json.dumps({'type': 'cited', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in cited]})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': 'Reading relevant wiki pages...'})}\n\n"
+        yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in cited]})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': 'Answering with citations...'})}\n\n"
+        full_response = ""
         async for chunk in stream_chat(system_prompt=system, messages=messages):
+            full_response += chunk
             yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
+        cleaned, actual_cited = _filter_actual_citations(full_response, cited)
+        yield f"data: {json.dumps({'type': 'replace', 'text': cleaned})}\n\n"
+        yield f"data: {json.dumps({'type': 'final_citations', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in actual_cited]})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

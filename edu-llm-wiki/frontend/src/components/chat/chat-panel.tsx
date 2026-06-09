@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
-import { Send, Loader2, Plus, Trash2, MessageSquare, Dumbbell, MessageCircle, ChevronRight, Square } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, Dumbbell, MessageCircle, ChevronRight, Square, BookOpen } from "lucide-react"
 
 interface Message {
   id: string
@@ -11,7 +11,8 @@ interface Message {
   cited?: { path: string; title: string; snippet: string }[]
 }
 
-type ChatMode = "chat" | "exercise"
+type ChatMode = "ask" | "practice"
+type ScopeType = "whole_wiki" | "current_page" | "selected_source"
 
 let idCounter = Date.now()
 function nextId() { return `${++idCounter}-${Math.random().toString(36).slice(2, 8)}` }
@@ -21,12 +22,17 @@ export function ChatPanel() {
   const setConversations = useAppStore((s) => s.setConversations)
   const convId = useAppStore((s) => s.currentConversationId)
   const setConvId = useAppStore((s) => s.setCurrentConversationId)
+  const selectedPage = useAppStore((s) => s.selectedPage)
+  const selectedSource = useAppStore((s) => s.selectedSource)
+  const importSelectedSource = useAppStore((s) => s.importSelectedSource)
 
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState<string | null>(null)
   const [convTitle, setConvTitle] = useState("")
-  const [mode, setMode] = useState<ChatMode>("chat")
+  const [mode, setMode] = useState<ChatMode>("ask")
+  const [scopeType, setScopeType] = useState<ScopeType>("whole_wiki")
+  const [chatStatus, setChatStatus] = useState<string | null>(null)
   const [exercises, setExercises] = useState<{ path: string; title: string; content: string }[]>([])
   const [exerciseIdx, setExerciseIdx] = useState(0)
   const [loadingExercises, setLoadingExercises] = useState(false)
@@ -36,6 +42,13 @@ export function ChatPanel() {
   const skipLoadRef = useRef(false)
   const convIdRef = useRef(convId)
   convIdRef.current = convId
+
+  const selectedSourceName = selectedSource?.filename || importSelectedSource || null
+  const chatScope = {
+    type: scopeType,
+    page_path: scopeType === "current_page" ? selectedPage?.path || null : null,
+    source_name: scopeType === "selected_source" ? selectedSourceName : null,
+  }
 
   // Load conversation list on mount / project change
   useEffect(() => {
@@ -134,23 +147,30 @@ export function ChatPanel() {
     const newMsgs = [...messages, userMsg, { id: assistantId, role: "assistant" as const, content: "" }]
     setMessages(newMsgs)
     setStreaming(assistantId)
+    setChatStatus("Preparing practice question...")
     setConvTitle(`Exercise: ${exercise.title}`)
 
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
-      const apiMessages = [
-        { role: "system" as const, content: "你是一位教育导师，请引导学生通过练习掌握知识。先出题，等学生作答后再给反馈和讲解。回答要简洁清晰。" },
-        ...newMsgs.filter((m) => m.content !== "").map((m) => ({ role: m.role, content: m.content })),
-      ]
+      const apiMessages = newMsgs.filter((m) => m.content !== "").map((m) => ({ role: m.role, content: m.content }))
 
 let lastContent = ""
-      for await (const event of api.chatStream(apiMessages, controller.signal)) {
-        if (event.type === "cited") {
+      for await (const event of api.chatStream(apiMessages, controller.signal, {
+        mode: "practice",
+        scope: { type: "whole_wiki" },
+        options: { answer_style: "socratic", citation_required: true },
+      })) {
+        if (event.type === "status") {
+          setChatStatus(event.text)
+        } else if (event.type === "cited" || event.type === "sources" || event.type === "final_citations") {
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
           lastContent += event.text
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+        } else if (event.type === "replace") {
+          lastContent = event.text
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
         }
       }
@@ -166,7 +186,8 @@ let lastContent = ""
       ))
     }
     setStreaming(null)
-  }, [exercises, exerciseIdx, messages, convId, convTitle, autoSave, setConvId])
+    setChatStatus(null)
+  }, [exercises, exerciseIdx, messages, convId, autoSave, setConvId])
 
   const nextExercise = () => {
     if (exerciseIdx < exercises.length - 1) {
@@ -186,6 +207,7 @@ let lastContent = ""
       abortRef.current = null
     }
     setStreaming(null)
+    setChatStatus(null)
   }
 
   const handleSend = useCallback(async () => {
@@ -204,6 +226,7 @@ let lastContent = ""
     setMessages(newMsgs)
     setInput("")
     setStreaming(assistantId)
+    setChatStatus("Understanding question...")
 
     if (!convTitle && messages.length === 0) {
       setConvTitle(input.slice(0, 50))
@@ -213,24 +236,38 @@ let lastContent = ""
     abortRef.current = controller
 
     try {
-      const systemMsg = mode === "exercise"
-        ? [{ role: "system" as const, content: "你是一位教育导师，请引导学生通过练习掌握知识。先出题，等学生作答后再给反馈和讲解。" }]
-        : []
-
-      const apiMessages = [
-        ...systemMsg,
-        ...newMsgs.filter((m) => m.content !== "").map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-      ]
+      const effectiveScope = {
+        ...chatScope,
+        type:
+          chatScope.type === "current_page" && !chatScope.page_path
+            ? "whole_wiki"
+            : chatScope.type === "selected_source" && !chatScope.source_name
+              ? "whole_wiki"
+              : chatScope.type,
+      }
+      const apiMessages = newMsgs.filter((m) => m.content !== "").map((m) => ({
+        role: m.role,
+        content: m.content,
+      }))
 
       let lastContent = ""
-for await (const event of api.chatStream(apiMessages, controller.signal)) {
-        if (event.type === "cited") {
+for await (const event of api.chatStream(apiMessages, controller.signal, {
+        mode,
+        scope: effectiveScope,
+        options: {
+          citation_required: true,
+          answer_style: mode === "practice" ? "socratic" : "concise",
+        },
+      })) {
+        if (event.type === "status") {
+          setChatStatus(event.text)
+        } else if (event.type === "cited" || event.type === "sources" || event.type === "final_citations") {
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
           lastContent += event.text
+          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+        } else if (event.type === "replace") {
+          lastContent = event.text
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
         }
       }
@@ -246,7 +283,8 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
       ))
     }
     setStreaming(null)
-  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, mode])
+    setChatStatus(null)
+  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, mode, chatScope])
 
   const handleNewConv = () => {
     setConvId(null)
@@ -273,7 +311,7 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
 
   const handleModeChange = (newMode: ChatMode) => {
     setMode(newMode)
-    if (newMode === "exercise" && exercises.length === 0) {
+    if (newMode === "practice" && exercises.length === 0) {
       loadExercises()
     }
   }
@@ -323,31 +361,47 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
 
       {/* Chat area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Mode toggle */}
-        <div className="shrink-0 flex items-center gap-1 px-3 py-1.5 border-b bg-[var(--background)]">
+        {/* Mode and scope */}
+        <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b bg-[var(--background)]">
           <button
-            onClick={() => handleModeChange("chat")}
+            onClick={() => handleModeChange("ask")}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
-              mode === "chat"
+              mode === "ask"
                 ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                 : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
             }`}
           >
             <MessageCircle size={12} />
-            Chat
+            Ask
           </button>
           <button
-            onClick={() => handleModeChange("exercise")}
+            onClick={() => handleModeChange("practice")}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
-              mode === "exercise"
+              mode === "practice"
                 ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                 : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
             }`}
           >
             <Dumbbell size={12} />
-            Exercise
+            Practice
           </button>
-          {mode === "exercise" && exercises.length > 0 && (
+          <div className="ml-2 h-4 w-px bg-[var(--border)]" />
+          <select
+            value={scopeType}
+            onChange={(e) => setScopeType(e.target.value as ScopeType)}
+            className="h-7 rounded-md border bg-[var(--background)] px-2 text-xs text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+            title="Knowledge scope"
+          >
+            <option value="whole_wiki">Whole Wiki</option>
+            <option value="current_page" disabled={!selectedPage}>Current Page</option>
+            <option value="selected_source" disabled={!selectedSourceName}>Selected Source</option>
+          </select>
+          <span className="min-w-0 truncate text-[11px] text-[var(--muted-foreground)]">
+            {scopeType === "current_page" && selectedPage ? selectedPage.title : null}
+            {scopeType === "selected_source" && selectedSourceName ? selectedSourceName : null}
+            {scopeType === "whole_wiki" ? "Using all wiki pages" : null}
+          </span>
+          {mode === "practice" && exercises.length > 0 && (
             <div className="ml-auto flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
               <button onClick={prevExercise} disabled={exerciseIdx === 0} className="p-0.5 rounded hover:bg-[var(--accent)] disabled:opacity-30">
                 <ChevronRight size={12} className="rotate-180" />
@@ -362,16 +416,17 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {isEmpty && mode === "chat" && (
+          {isEmpty && mode === "ask" && (
             <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
               <div className="text-center">
-                <p className="text-lg mb-2">Edu-LLM-Wiki</p>
-                <p>Ask a question about your knowledge base to get started.</p>
+                <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                <p className="text-lg mb-2">Knowledge Wiki Assistant</p>
+                <p>Ask with citations from your selected scope.</p>
               </div>
             </div>
           )}
 
-          {isEmpty && mode === "exercise" && (
+          {isEmpty && mode === "practice" && (
             <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
               <div className="text-center">
                 <Dumbbell className="h-10 w-10 mx-auto mb-3 opacity-20" />
@@ -422,14 +477,18 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
                 )}
 
                 {msg.cited && msg.cited.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-[var(--border)]">
-                    <p className="text-[10px] font-medium text-[var(--muted-foreground)] mb-1">Sources:</p>
-                    {msg.cited.map((c) => (
-                      <div key={c.path} className="text-[10px] text-[var(--muted-foreground)]">
-                        <span className="font-medium">{c.title}</span> — {c.snippet.slice(0, 80)}...
-                      </div>
-                    ))}
-                  </div>
+                  <details className="mt-2 border-t border-[var(--border)] pt-2">
+                    <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                      Sources ({msg.cited.length})
+                    </summary>
+                    <div className="mt-1 space-y-1">
+                      {msg.cited.map((c) => (
+                        <div key={c.path} className="text-[10px] text-[var(--muted-foreground)]">
+                          <span className="font-medium">{c.title}</span> — {c.snippet.slice(0, 80)}...
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 )}
               </div>
             </div>
@@ -438,7 +497,7 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
             <div className="flex justify-start">
               <div className="bg-[var(--muted)] rounded-xl px-4 py-2.5 flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
-                <span className="text-[11px] text-[var(--muted-foreground)]">Thinking...</span>
+                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "Thinking..."}</span>
               </div>
             </div>
           )}
@@ -448,7 +507,7 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
         {/* Input */}
         <div className="shrink-0 p-3 border-t">
           {/* Exercise next button */}
-          {mode === "exercise" && exercises.length > 0 && !isEmpty && (
+          {mode === "practice" && exercises.length > 0 && !isEmpty && (
             <div className="mb-2 flex items-center gap-2">
               <button
                 onClick={startExercise}
@@ -476,7 +535,7 @@ for await (const event of api.chatStream(apiMessages, controller.signal)) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                mode === "exercise"
+                mode === "practice"
                   ? "Type your answer..."
                   : convId
                     ? "Ask a follow-up..."

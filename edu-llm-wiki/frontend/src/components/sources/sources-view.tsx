@@ -31,16 +31,40 @@ export function SourcesView() {
   const [ingesting, setIngesting] = useState<string>("")
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmDeleteWiki, setConfirmDeleteWiki] = useState<string | null>(null)
   const [parseStatuses, setParseStatuses] = useState<Record<string, ParseStatus>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const progressDismissTimerRef = useRef<number | null>(null)
+
+  const clearProgressDismissTimer = useCallback(() => {
+    if (progressDismissTimerRef.current !== null) {
+      window.clearTimeout(progressDismissTimerRef.current)
+      progressDismissTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleProgressDismiss = useCallback((delay = 1800) => {
+    clearProgressDismissTimer()
+    progressDismissTimerRef.current = window.setTimeout(() => {
+      useAppStore.getState().setIngestProgress(null)
+      progressDismissTimerRef.current = null
+    }, delay)
+  }, [clearProgressDismissTimer])
+
+  useEffect(() => {
+    return () => clearProgressDismissTimer()
+  }, [clearProgressDismissTimer])
 
   // Clear delete confirmation when clicking elsewhere
   useEffect(() => {
-    if (!confirmDelete) return
-    const handler = () => setConfirmDelete(null)
+    if (!confirmDelete && !confirmDeleteWiki) return
+    const handler = () => {
+      setConfirmDelete(null)
+      setConfirmDeleteWiki(null)
+    }
     const timer = setTimeout(() => document.addEventListener("click", handler, { once: true }), 100)
     return () => { clearTimeout(timer); document.removeEventListener("click", handler) }
-  }, [confirmDelete])
+  }, [confirmDelete, confirmDeleteWiki])
 
   const refreshParseStatuses = useCallback(async () => {
     try {
@@ -125,6 +149,7 @@ export function SourcesView() {
   }
 
   const handleIngest = async (filename: string) => {
+    clearProgressDismissTimer()
     setIngesting(filename)
     updateProgress(() => ({
       filename,
@@ -186,6 +211,17 @@ export function SourcesView() {
               stages: prev.stages.map((s) => ({ ...s, status: "done" as const, message: event.message })),
               error: undefined,
             }
+          } else if (event.event === "complete") {
+            return {
+              ...prev,
+              filename,
+              stages: prev.stages.map((s) => ({
+                ...s,
+                status: "done" as const,
+                message: s.stage === "write" ? event.message : s.message,
+              })),
+              error: undefined,
+            }
           }
 
           return { ...prev, stages }
@@ -197,6 +233,7 @@ export function SourcesView() {
           ])
           useAppStore.getState().setWikiPages(pages)
           setSourceFiles(Array.isArray(sources) ? sources : [])
+          scheduleProgressDismiss()
         }
       }
     } catch (e: any) {
@@ -209,6 +246,7 @@ export function SourcesView() {
     const filenames = sourceFiles.map((f) => f.name)
     if (filenames.length === 0) return
 
+    clearProgressDismissTimer()
     setIngesting("all")
     updateProgress(() => ({
       filename: `[Batch] ${filenames.length} files`,
@@ -283,10 +321,15 @@ export function SourcesView() {
             completedCount++
           }
 
+          const allFinished = completedCount >= filenames.length
           return {
             ...prev,
-            stages,
-            filename: `[Batch] ${completedCount}/${filenames.length} completed`,
+            stages: allFinished
+              ? stages.map((s) => ({ ...s, status: "done" as const }))
+              : stages,
+            filename: allFinished
+              ? `[Batch] ${completedCount}/${filenames.length} completed`
+              : `[Batch] ${completedCount}/${filenames.length} completed`,
           }
         })
 
@@ -297,13 +340,17 @@ export function SourcesView() {
           ])
           useAppStore.getState().setWikiPages(pages)
           setSourceFiles(Array.isArray(sources) ? sources : [])
+          if (completedCount >= filenames.length) scheduleProgressDismiss()
+        }
+        if (event.event === "error" && completedCount >= filenames.length) {
+          scheduleProgressDismiss(5000)
         }
       }
     } catch (e: any) {
       updateProgress((prev) => prev ? { ...prev, error: `${e.message || e}` } : prev)
     }
     setIngesting("")
-  }, [sourceFiles, setSourceFiles, updateProgress])
+  }, [clearProgressDismissTimer, scheduleProgressDismiss, sourceFiles, setSourceFiles, updateProgress])
 
   const handleDelete = async (filename: string) => {
     if (confirmDelete !== filename) {
@@ -319,6 +366,23 @@ export function SourcesView() {
     setSourceFiles(Array.isArray(list) ? list : [])
     setConfirmDelete(null)
     if (importSelected === filename) setImportSelected(null)
+  }
+
+  const handleDeleteWiki = async (filename: string) => {
+    if (confirmDeleteWiki !== filename) {
+      setConfirmDeleteWiki(filename)
+      return
+    }
+    try {
+      const result = await api.deleteSourceWiki(filename)
+      const pages = await api.listPages()
+      useAppStore.getState().setWikiPages(pages)
+      useAppStore.getState().setSelectedPage(null)
+      toast({ type: "success", message: `Deleted ${result.deleted_count} generated wiki page(s)` })
+    } catch (e: any) {
+      toast({ type: "error", message: `Failed to delete generated wiki: ${e?.message || e}` })
+    }
+    setConfirmDeleteWiki(null)
   }
 
   const handlePreview = async (filename: string) => {
@@ -422,6 +486,17 @@ export function SourcesView() {
                 title="Process with LLM"
               >
                 {ingesting === f.name ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleDeleteWiki(f.name) }}
+                className={`p-1 rounded transition-colors ${
+                  confirmDeleteWiki === f.name
+                    ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                    : "hover:bg-amber-100 text-amber-600"
+                }`}
+                title={confirmDeleteWiki === f.name ? "Click again to delete generated wiki pages" : "Delete generated wiki pages only"}
+              >
+                <ScanSearch size={14} />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDelete(f.name) }}

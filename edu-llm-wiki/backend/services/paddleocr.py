@@ -12,6 +12,7 @@ import re
 import time
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 import requests
 
@@ -76,7 +77,7 @@ def get_parse_status(source_filename: str, *, project_id: str = "default") -> di
             pass
 
     if md_file.exists():
-        result["markdown_path"] = f"/api/ingest/sources/{source_filename}/parsed-doc?project_id={project_id}"
+        result["markdown_path"] = _parsed_doc_url(source_filename, project_id=project_id)
 
     return result
 
@@ -169,8 +170,55 @@ def _fetch_results(json_url: str) -> list[dict]:
     return out
 
 
+def _parsed_doc_url(source_filename: str, *, project_id: str = "default") -> str:
+    return f"/api/ingest/sources/{quote(source_filename)}/parsed-doc?project_id={quote(project_id)}"
+
+
+def _parsed_image_url(source_filename: str, image_filename: str, *, project_id: str = "default") -> str:
+    return (
+        f"/api/ingest/sources/{quote(source_filename)}/parsed-image/"
+        f"{quote(image_filename)}?project_id={quote(project_id)}"
+    )
+
+
+def _local_image_url_from_src(source_filename: str, src: str, *, project_id: str = "default") -> str | None:
+    """Map OCR image references like imgs/foo.jpg to the parsed-image route."""
+    if not src or src.startswith(("http://", "https://", "data:", "/api/")):
+        return None
+
+    path = Path(src)
+    filename = path.name
+    if not filename:
+        return None
+    return _parsed_image_url(source_filename, filename, project_id=project_id)
+
+
+def rewrite_parsed_markdown_assets(markdown: str, source_filename: str, *, project_id: str = "default") -> str:
+    """Rewrite Markdown and HTML image references in a parsed document."""
+
+    def _md_repl(match: re.Match) -> str:
+        alt = match.group(1) or ""
+        src = match.group(2).strip()
+        local_url = _local_image_url_from_src(source_filename, src, project_id=project_id)
+        if local_url:
+            return f"![{alt}]({local_url})"
+        return match.group(0)
+
+    def _html_repl(match: re.Match) -> str:
+        quote_char = match.group(1)
+        src = match.group(2).strip()
+        local_url = _local_image_url_from_src(source_filename, src, project_id=project_id)
+        if local_url:
+            return f'src={quote_char}{local_url}{quote_char}'
+        return match.group(0)
+
+    markdown = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", _md_repl, markdown)
+    markdown = re.sub(r"""src=(["'])([^"']+)\1""", _html_repl, markdown, flags=re.IGNORECASE)
+    return markdown
+
+
 def _rewrite_image_paths(markdown: str, image_url_map: dict[str, str]) -> str:
-    """Rewrite PaddleOCR image references to local /api/ingest/media paths."""
+    """Rewrite PaddleOCR image references to local /api routes."""
 
     def _repl(match: re.Match) -> str:
         alt = match.group(1) or ""
@@ -228,7 +276,9 @@ async def _run_parse(source_filename: str, *, project_id: str = "default") -> di
                     img_data = await asyncio.to_thread(lambda u=img_url: requests.get(u, timeout=60).content)
                     img_filename = Path(orig_path).name
                     (page_imgs_dir / img_filename).write_bytes(img_data)
-                    image_url_map[orig_path] = f"/api/ingest/sources/{source_filename}/parsed-image/{img_filename}?project_id={project_id}"
+                    image_url_map[orig_path] = _parsed_image_url(source_filename, img_filename, project_id=project_id)
+                    image_url_map[img_filename] = image_url_map[orig_path]
+                    image_url_map[f"imgs/{img_filename}"] = image_url_map[orig_path]
                     image_count += 1
                 except Exception:
                     continue
@@ -237,7 +287,9 @@ async def _run_parse(source_filename: str, *, project_id: str = "default") -> di
                     img_data = await asyncio.to_thread(lambda u=img_url: requests.get(u, timeout=60).content)
                     fname = f"{img_name}_{page_idx}.jpg"
                     (page_imgs_dir / fname).write_bytes(img_data)
-                    image_url_map[img_name] = f"/api/ingest/sources/{source_filename}/parsed-image/{fname}?project_id={project_id}"
+                    image_url_map[img_name] = _parsed_image_url(source_filename, fname, project_id=project_id)
+                    image_url_map[fname] = image_url_map[img_name]
+                    image_url_map[f"imgs/{fname}"] = image_url_map[img_name]
                     image_count += 1
                 except Exception:
                     continue
@@ -248,6 +300,7 @@ async def _run_parse(source_filename: str, *, project_id: str = "default") -> di
             md = page.get("markdown", {})
             text = md.get("text", "")
             text = _rewrite_image_paths(text, image_url_map)
+            text = rewrite_parsed_markdown_assets(text, source_filename, project_id=project_id)
             md_parts.append(f"## Page {page_idx + 1}\n\n{text}")
         combined = "\n\n---\n\n".join(md_parts)
         (pd / "document.md").write_text(combined, encoding="utf-8")

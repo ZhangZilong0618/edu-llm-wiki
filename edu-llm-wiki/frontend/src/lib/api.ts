@@ -122,6 +122,11 @@ export const api = {
   listSources: () => request<FileEntry[]>(`${BASE}/ingest/sources?${p()}`),
   deleteSource: (filename: string) =>
     request<{ status: string }>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}?${p()}`, { method: "DELETE" }),
+  deleteSourceWiki: (filename: string) =>
+    request<{ status: string; source: string; deleted_pages: string[]; deleted_count: number; cache_deleted: boolean }>(
+      `${BASE}/ingest/sources/${encodeURIComponent(filename)}/wiki?${p()}`,
+      { method: "DELETE" }
+    ),
   viewSourceUrl: (filename: string) =>
     `${BASE}/ingest/sources/${encodeURIComponent(filename)}/view?${p()}`,
   parseSource: (filename: string) =>
@@ -158,16 +163,16 @@ export const api = {
   getInsights: () => request<GraphInsight[]>(`${BASE}/graph/insights?${p()}`),
 
   // Chat
-  chat: (messages: { role: string; content: string }[]) =>
+  chat: (messages: { role: string; content: string }[], options?: Record<string, unknown>) =>
     request<ChatResponse>(`${BASE}/chat?${p()}`, {
       method: "POST",
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, ...options }),
     }),
-  chatStream: async function* (messages: { role: string; content: string }[], signal?: AbortSignal) {
+  chatStream: async function* (messages: { role: string; content: string }[], signal?: AbortSignal, options?: Record<string, unknown>) {
     const res = await fetch(`${BASE}/chat/stream?${p()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, ...options }),
       signal,
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)

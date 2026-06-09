@@ -1,7 +1,9 @@
-import { useMemo } from "react"
+import { Children, cloneElement, isValidElement, useMemo, type ReactNode } from "react"
+import { renderToString } from "katex"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
+import rehypeRaw from "rehype-raw"
 import rehypeKatex from "rehype-katex"
 import { useAppStore } from "@/stores/app-store"
 
@@ -18,6 +20,9 @@ function convertLatexDelimiters(text: string): string {
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`)
   // Convert \[...\] display math to $$...$$
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => `$$${math}$$`)
+  // Repair common malformed wrappers produced by OCR/LLM output.
+  text = text.replace(/\$\$\\n/g, "$$\n").replace(/\\n\$\$/g, "\n$$")
+  text = text.replace(/\$\$\s*\n?\s*\$\$([\s\S]*?)\$\$\s*\n?\s*\$\$/g, "$$\n$1\n$$")
   return text
 }
 
@@ -26,6 +31,73 @@ function processWikiLinks(text: string): string {
     const clean = path.trim().replace(/\.md$/, "")
     const display = (label || clean.split("/").pop() || clean).trim()
     return `[${display}](/wiki/${clean})`
+  })
+}
+
+function renderFormula(math: string, displayMode: boolean, key: string) {
+  try {
+    return (
+      <span
+        key={key}
+        className={displayMode ? "block overflow-x-auto my-2" : "inline-block align-middle"}
+        dangerouslySetInnerHTML={{
+          __html: renderToString(math.trim(), {
+            displayMode,
+            throwOnError: false,
+          }),
+        }}
+      />
+    )
+  } catch {
+    return displayMode ? `$$${math}$$` : `$${math}$`
+  }
+}
+
+function renderMathText(text: string, keyPrefix: string): ReactNode {
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  let key = 0
+
+  while (cursor < text.length) {
+    const start = text.indexOf("$", cursor)
+    if (start === -1) {
+      nodes.push(text.slice(cursor))
+      break
+    }
+
+    if (start > cursor) nodes.push(text.slice(cursor, start))
+
+    const displayMode = text[start + 1] === "$"
+    const delimiter = displayMode ? "$$" : "$"
+    const contentStart = start + delimiter.length
+    const end = text.indexOf(delimiter, contentStart)
+
+    if (end === -1) {
+      nodes.push(text.slice(start))
+      break
+    }
+
+    const math = text.slice(contentStart, end)
+    if (math.trim()) {
+      nodes.push(renderFormula(math, displayMode, `${keyPrefix}-${key++}`))
+    } else {
+      nodes.push(text.slice(start, end + delimiter.length))
+    }
+    cursor = end + delimiter.length
+  }
+
+  return nodes.length === 1 ? nodes[0] : nodes
+}
+
+function renderMathChildren(children: ReactNode, keyPrefix = "raw-math"): ReactNode {
+  return Children.map(children, (child, index) => {
+    if (typeof child === "string") return renderMathText(child, `${keyPrefix}-${index}`)
+    if (isValidElement<{ children?: ReactNode }>(child) && child.props.children) {
+      return cloneElement(child, {
+        children: renderMathChildren(child.props.children, `${keyPrefix}-${index}`),
+      })
+    }
+    return child
   })
 }
 
@@ -51,13 +123,25 @@ const components: any = {
     )
   },
   img({ src, alt, ...props }: any) {
-    return <img src={src} alt={alt} className="max-w-full rounded-lg my-4" loading="lazy" {...props} />
+    return <img src={src} alt={alt} className="max-w-full rounded-lg my-4 inline-block" loading="lazy" {...props} />
   },
   blockquote({ children, ...props }: any) {
     return <blockquote className="border-l-4 border-[var(--primary)] pl-4 my-4 text-[var(--muted-foreground)] italic" {...props}>{children}</blockquote>
   },
   table({ children, ...props }: any) {
-    return <div className="overflow-x-auto my-4"><table className="w-full border-collapse" {...props}>{children}</table></div>
+    return <div className="overflow-x-auto my-4"><table className="w-full border-collapse text-sm" {...props}>{children}</table></div>
+  },
+  th({ children, ...props }: any) {
+    return <th className="border px-2 py-1.5 bg-[var(--muted)] font-semibold align-top" {...props}>{renderMathChildren(children, "th")}</th>
+  },
+  td({ children, ...props }: any) {
+    return <td className="border px-2 py-1.5 align-top" {...props}>{renderMathChildren(children, "td")}</td>
+  },
+  div({ children, ...props }: any) {
+    return <div {...props}>{renderMathChildren(children, "div")}</div>
+  },
+  span({ children, ...props }: any) {
+    return <span {...props}>{renderMathChildren(children, "span")}</span>
   },
   hr(props: any) {
     return <hr className="my-6 border-[var(--border)]" {...props} />
@@ -71,7 +155,7 @@ export function Markdown({ children }: { children: string }) {
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={components}
       >
         {processed}
