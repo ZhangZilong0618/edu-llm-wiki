@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
-import { api, type LlmSettings, type EmbeddingSettings } from "@/lib/api"
-import { Eye, EyeOff, Save, Check, Loader } from "lucide-react"
+import { api, type LlmSettings, type EmbeddingSettings, type PaddleocrSettings } from "@/lib/api"
+import { Eye, EyeOff, Save, Check, Loader, FileScan, ExternalLink } from "lucide-react"
 import { toast } from "@/components/ui/toast"
 
 const PROVIDERS = [
@@ -54,6 +54,18 @@ export function SettingsView() {
   const [embSaved, setEmbSaved] = useState(false)
   const updateEmb = (patch: Partial<EmbeddingSettings>) => { setEmb((p) => ({ ...p, ...patch })); setEmbSaved(false) }
 
+  // PaddleOCR Document Parsing
+  const [paddle, setPaddle] = useState<PaddleocrSettings>({
+    paddleocr_token: "",
+    paddleocr_model: "PaddleOCR-VL-1.6",
+    paddleocr_orientation: false,
+    paddleocr_unwarping: false,
+    paddleocr_chart: false,
+  })
+  const [paddleSaved, setPaddleSaved] = useState(false)
+  const [showPaddleToken, setShowPaddleToken] = useState(false)
+  const updatePaddle = (patch: Partial<PaddleocrSettings>) => { setPaddle((p) => ({ ...p, ...patch })); setPaddleSaved(false) }
+
   // Purpose / Schema
   const [purpose, setPurpose] = useState("")
   const [schema, setSchema] = useState("")
@@ -63,14 +75,16 @@ export function SettingsView() {
   useEffect(() => {
     api.getLlmSettings().then(setLlm).catch(console.error)
     api.getEmbeddingSettings().then(setEmb).catch(console.error)
+    api.getPaddleocrSettings().then(setPaddle).catch(console.error)
     api.getPurpose().then((r) => setPurpose(r.content)).catch(console.error)
     api.getSchema().then((r) => setSchema(r.content)).catch(console.error)
   }, [])
 
   const saveLlm = async () => {
     setLlmTesting(true)
-    toast({ type: "loading", message: "Testing connection..." })
     try {
+      await api.saveLlmSettings(llm)
+      toast({ type: "loading", message: "Settings saved. Testing connection..." })
       const result = await api.testLlmConnection(llm)
       if (result.ok) {
         toast({ type: "success", message: result.message })
@@ -79,24 +93,49 @@ export function SettingsView() {
         toast({ type: "error", message: result.message })
       }
     } catch (e: any) {
-      toast({ type: "error", message: e.message || "Connection test failed" })
+      toast({ type: "error", message: e?.message || "Failed to save settings" })
     }
     setLlmTesting(false)
   }
 
   const saveEmb = async () => {
-    await api.saveEmbeddingSettings(emb)
-    setEmbSaved(true)
+    try {
+      await api.saveEmbeddingSettings(emb)
+      setEmbSaved(true)
+      toast({ type: "success", message: "Embedding settings saved" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "Failed to save embedding settings" })
+    }
+  }
+
+  const savePaddle = async () => {
+    try {
+      await api.savePaddleocrSettings(paddle)
+      setPaddleSaved(true)
+      toast({ type: "success", message: "Document parsing settings saved" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "Failed to save document parsing settings" })
+    }
   }
 
   const savePurpose = async () => {
-    await api.updatePurpose(purpose)
-    setPurposeSaved(true)
+    try {
+      await api.updatePurpose(purpose)
+      setPurposeSaved(true)
+      toast({ type: "success", message: "Purpose saved" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "Failed to save purpose" })
+    }
   }
 
   const saveSchema = async () => {
-    await api.updateSchema(schema)
-    setSchemaSaved(true)
+    try {
+      await api.updateSchema(schema)
+      setSchemaSaved(true)
+      toast({ type: "success", message: "Schema saved" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "Failed to save schema" })
+    }
   }
 
   const needsCustomUrl = ["google", "azure", "deepseek", "groq", "together", "openrouter", "ollama", "custom"].includes(llm.llm_provider)
@@ -259,6 +298,96 @@ export function SettingsView() {
           >
             {embSaved ? <Check size={14} /> : <Save size={14} />}
             {embSaved ? "Saved" : "Save Embedding Config"}
+          </button>
+        </section>
+
+        {/* ===== Document Parsing (PaddleOCR-VL) ===== */}
+        <section className="space-y-4">
+          <h3 className="text-sm font-medium border-b pb-1 flex items-center gap-2">
+            <FileScan size={14} />
+            Document Parsing (PaddleOCR-VL)
+            <a
+              href="https://aistudio.baidu.com/paddleocr"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--muted-foreground)] hover:text-[var(--primary)]"
+              title="Apply for an access token"
+            >
+              <ExternalLink size={12} />
+            </a>
+            <span className="text-[var(--muted-foreground)] font-normal text-xs ml-auto">PDF & images → structured Markdown</span>
+          </h3>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">API Token</label>
+            <div className="relative">
+              <input
+                type={showPaddleToken ? "text" : "password"}
+                value={paddle.paddleocr_token}
+                onChange={(e) => updatePaddle({ paddleocr_token: e.target.value })}
+                className="w-full rounded-lg border px-3 py-2 pr-10 text-sm bg-[var(--background)] font-mono"
+                placeholder="Enter your AI Studio PaddleOCR token"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPaddleToken((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              >
+                {showPaddleToken ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+            <p className="text-[11px] text-[var(--muted-foreground)]">
+              Apply for a free token at aistudio.baidu.com/paddleocr. Parsed documents appear alongside the original in the Import view.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">Model</label>
+            <input
+              type="text"
+              value={paddle.paddleocr_model}
+              onChange={(e) => updatePaddle({ paddleocr_model: e.target.value })}
+              className="w-full rounded-lg border px-3 py-2 text-sm bg-[var(--background)]"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-[var(--muted-foreground)]">Optional processing</label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={paddle.paddleocr_orientation}
+                onChange={(e) => updatePaddle({ paddleocr_orientation: e.target.checked })}
+                className="w-4 h-4 rounded"
+              />
+              Detect document orientation
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={paddle.paddleocr_unwarping}
+                onChange={(e) => updatePaddle({ paddleocr_unwarping: e.target.checked })}
+                className="w-4 h-4 rounded"
+              />
+              Unwarp distorted scans
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={paddle.paddleocr_chart}
+                onChange={(e) => updatePaddle({ paddleocr_chart: e.target.checked })}
+                className="w-4 h-4 rounded"
+              />
+              Recognize charts
+            </label>
+          </div>
+
+          <button
+            onClick={savePaddle}
+            className="flex items-center gap-2 px-4 py-1.5 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm hover:opacity-90 transition-opacity"
+          >
+            {paddleSaved ? <Check size={14} /> : <Save size={14} />}
+            {paddleSaved ? "Saved" : "Save Parsing Config"}
           </button>
         </section>
 

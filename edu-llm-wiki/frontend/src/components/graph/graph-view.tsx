@@ -60,7 +60,7 @@ function GraphLoader({
   const loadedRef = useRef("")
 
   useEffect(() => {
-    const key = `${data.nodes.length}:${data.edges.length}:${colorMode}:${nodeScale}:${spacing}`
+    const key = `${data.nodes.map(n => n.id).join(",")};${data.edges.map(e => `${e.source}->${e.target}`).join(",")};${colorMode}:${nodeScale}:${spacing}`
     if (key === loadedRef.current) return
     loadedRef.current = key
 
@@ -133,10 +133,11 @@ function GraphLoader({
 }
 
 function GraphSettings({
-  hoverState, highlightedNodes, nodeCount,
+  hoverState, highlightedNodes, selectedNode, nodeCount,
 }: {
   hoverState: HoverState
   highlightedNodes: Set<string>
+  selectedNode: string | null
   nodeCount: number
 }) {
   const setSettings = useSetSettings()
@@ -155,16 +156,38 @@ function GraphSettings({
         const isHoverNode = hoverState?.node === _node
         const isHoverNeighbor = hoverState?.neighbors.has(_node) ?? false
         const isHighlighted = highlightedNodes.has(_node)
+        const isSelected = selectedNode === _node
 
-        if (isHighlighted || isHoverNode) {
-          result.size = (attrs.size ?? 8) * 1.4
+        // Selected node: subtle highlight
+        if (isSelected) {
+          result.size = (attrs.size ?? 8) * 1.3
           result.zIndex = 10
           result.forceLabel = true
         }
-        if ((hasHover && !isHoverNode && !isHoverNeighbor) || (hasHighlight && !isHighlighted)) {
-          result.color = mixColor(attrs.color ?? "#94a3b8", "#e2e8f0", 0.7)
-          result.label = ""
-          result.size = (attrs.size ?? 8) * 0.5
+        // Hover: full highlight on hovered node + neighbors
+        if (isHoverNode) {
+          result.size = (attrs.size ?? 8) * 1.4
+          result.zIndex = 10
+          result.forceLabel = true
+        } else if (isHoverNeighbor) {
+          result.zIndex = 5
+          result.forceLabel = true
+        }
+        // Hover: fade non-neighbor nodes
+        if (hasHover && !isHoverNode && !isHoverNeighbor) {
+          result.color = mixColor(attrs.color ?? "#94a3b8", "#e2e8f0", 0.65)
+          result.size = (attrs.size ?? 8) * 0.55
+        }
+        // Search/filter highlight: fade non-highlighted nodes (lighter fade)
+        if (!hasHover && hasHighlight && !isHighlighted) {
+          result.color = mixColor(attrs.color ?? "#94a3b8", "#e2e8f0", 0.45)
+          result.size = (attrs.size ?? 8) * 0.7
+        }
+        // Highlighted nodes in search mode
+        if (!hasHover && hasHighlight && isHighlighted) {
+          result.size = (attrs.size ?? 8) * 1.2
+          result.zIndex = 5
+          result.forceLabel = true
         }
         return result
       },
@@ -178,7 +201,6 @@ function GraphSettings({
         const highlightedEdge = hasHighlight && highlightedNodes.has(attrs.source) && highlightedNodes.has(attrs.target)
         const isHoveredEdge = isEdgeHover && hoverState?.hoveredEdge === _edge
 
-        // Show label for highlighted/neighbor edges, hide for faded ones.
         result.label = (hoverEdge || highlightedEdge) ? (attrs.label ?? "") : ""
 
         if (isEdgeHover) {
@@ -192,12 +214,22 @@ function GraphSettings({
             result.zIndex = 0
           }
         } else {
-          if ((hasHover && !hoverEdge) || (hasHighlight && !highlightedEdge)) {
+          if (hasHover && !hoverEdge) {
             result.color = "#f1f5f9"
             result.size = 0.3
             result.zIndex = 0
           }
-          if (hoverEdge || highlightedEdge) {
+          if (hoverEdge) {
+            result.color = "#334155"
+            result.size = Math.max(2, (attrs.size ?? 1) * 1.5)
+            result.zIndex = 5
+          }
+          // Highlight mode: only fade non-highlighted edges lightly
+          if (!hasHover && hasHighlight && !highlightedEdge) {
+            result.color = mixColor(attrs.color ?? "#cbd5e1", "#f1f5f9", 0.6)
+            result.size = (attrs.size ?? 1) * 0.5
+          }
+          if (!hasHover && hasHighlight && highlightedEdge) {
             result.color = "#334155"
             result.size = Math.max(2, (attrs.size ?? 1) * 1.5)
             result.zIndex = 5
@@ -207,7 +239,7 @@ function GraphSettings({
       },
     })
     sigma.refresh()
-  }, [setSettings, sigma, hoverState, highlightedNodes, nodeCount])
+  }, [setSettings, sigma, hoverState, highlightedNodes, selectedNode, nodeCount])
 
   return null
 }
@@ -660,10 +692,9 @@ export function GraphView() {
                 highlightedNodes={
                   searchActive
                     ? searchResults.matched
-                    : selectedNodeData && selectedNode
-                      ? new Set([selectedNode, ...selectedNodeData.neighbors.map((n) => n.id)])
-                      : highlightedNodes
+                    : highlightedNodes
                 }
+                selectedNode={selectedNode}
                 nodeCount={visibleData.nodes.length}
               />
               <EdgeLabelOverlay hoverState={hoverState} />

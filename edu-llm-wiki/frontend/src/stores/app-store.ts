@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import type { SearchResult, WikiPage } from "@/types/wiki"
 
-export type ActiveView = "wiki" | "sources" | "search" | "graph" | "lint" | "settings" | "learn"
+export type ActiveView = "wiki" | "sources" | "search" | "graph" | "lint" | "settings" | "learn" | "chat"
 
 export interface IngestProgress {
   filename: string
@@ -64,6 +64,10 @@ interface AppState {
   // Source preview
   selectedSource: { filename: string; content: string; images: string[]; extension: string; view_url: string | null } | null
   setSelectedSource: (s: { filename: string; content: string; images: string[]; extension: string; view_url: string | null } | null) => void
+
+  // Source file selected in Import view (filename only, for the dual-pane preview)
+  importSelectedSource: string | null
+  setImportSelectedSource: (name: string | null) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -116,4 +120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectedSource: null,
   setSelectedSource: (s) => set({ selectedSource: s }),
+
+  importSelectedSource: null,
+  setImportSelectedSource: (name) => set({ importSelectedSource: name }),
 }))

@@ -51,6 +51,9 @@ TYPE_AFFINITY: dict[str, dict[str, float]] = {
 }
 
 
+PREREQ_TYPE_ORDER = {"concept": 0, "formula": 1, "principle": 2, "source": 3, "exercise": 4, "synthesis": 5, "query": 6}
+
+
 def build_graph(*, project_id: str = "default") -> dict:
     """Build the knowledge graph with 4-signal edge relevance scoring."""
     nodes = []
@@ -117,7 +120,8 @@ def build_graph(*, project_id: str = "default") -> dict:
 
     # Collect candidate edge pairs: direct links + source overlap + prerequisites
     edge_set: set[tuple[str, str]] = set()
-    prerequisite_edges: set[tuple[str, str]] = set()  # Edges from frontmatter prerequisites
+    # Track directed prerequisite relationships: (prerequisite, dependent)
+    prereq_directed: set[tuple[str, str]] = set()
 
     for src_id, targets in link_graph.items():
         for tgt_id in targets:
@@ -132,9 +136,8 @@ def build_graph(*, project_id: str = "default") -> dict:
     # Prerequisite edges from frontmatter (directed: prereq -> dependent)
     for node_id, prereqs in prerequisite_map.items():
         for prereq_id in prereqs:
-            edge_key = (min(prereq_id, node_id), max(prereq_id, node_id))
-            edge_set.add(edge_key)
-            prerequisite_edges.add(edge_key)
+            edge_set.add((min(prereq_id, node_id), max(prereq_id, node_id)))
+            prereq_directed.add((prereq_id, node_id))
 
     # Calculate 4-signal relevance for each candidate pair
     edge_list: list[dict] = []
@@ -166,16 +169,43 @@ def build_graph(*, project_id: str = "default") -> dict:
 
         total = round(direct_score + source_score + neighbor_score + type_score, 2)
 
-        # Determine edge type: prerequisite from frontmatter takes priority
-        edge_key = (min(a, b), max(a, b))
-        if edge_key in prerequisite_edges:
+        # Determine edge type and direction
+        # For prerequisite edges: source=prerequisite, target=dependent
+        edge_type = "related"
+        prereq_source = None  # Which node is the prerequisite?
+
+        # Check frontmatter prerequisites (highest priority)
+        if (a, b) in prereq_directed:
             edge_type = "prerequisite"
+            prereq_source = a
+        elif (b, a) in prereq_directed:
+            edge_type = "prerequisite"
+            prereq_source = b
         else:
-            edge_type = "related"
+            # Infer from wikilink direction + type hierarchy
+            # If A links to B, A references B — B is likely a prerequisite of A
+            order_a = PREREQ_TYPE_ORDER.get(type_a, 99)
+            order_b = PREREQ_TYPE_ORDER.get(type_b, 99)
+            if b in link_graph.get(a, set()) and order_b <= order_a:
+                # A links to B, B is more foundational → B is prereq of A
+                edge_type = "prerequisite"
+                prereq_source = b
+            elif a in link_graph.get(b, set()) and order_a <= order_b:
+                # B links to A, A is more foundational → A is prereq of B
+                edge_type = "prerequisite"
+                prereq_source = a
+
+        # For prerequisite edges, ensure source=prerequisite, target=dependent
+        if edge_type == "prerequisite" and prereq_source is not None:
+            source_node = prereq_source
+            target_node = b if prereq_source == a else a
+        else:
+            source_node = a
+            target_node = b
 
         edge_list.append({
-            "source": a,
-            "target": b,
+            "source": source_node,
+            "target": target_node,
             "edge_type": edge_type,
             "weight": total,
         })

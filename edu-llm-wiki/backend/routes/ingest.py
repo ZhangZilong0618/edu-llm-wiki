@@ -99,7 +99,9 @@ async def list_sources(project_id: str = Query("default")):
 
 @router.delete("/sources/{filename}")
 async def delete_source(filename: str, project_id: str = Query("default")):
-    """Delete a source file and cascade-clean wiki pages."""
+    """Delete a source file."""
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     sp = sources_path(project_id)
     file_path = sp / filename
     if file_path.exists():
@@ -239,6 +241,105 @@ async def serve_media(filename: str, project_id: str = Query("default")):
 
     return FileResponse(
         path=str(media_path),
+        media_type=mime_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+def _safe_parsed_filename(source_filename: str) -> str:
+    if ".." in source_filename or "/" in source_filename or "\\" in source_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return source_filename
+
+
+@router.post("/sources/{filename}/parse")
+async def start_parse(filename: str, project_id: str = Query("default")):
+    """Trigger a PaddleOCR-VL parse for a single source file.
+
+    Returns immediately with the current job status. The parse runs
+    asynchronously; poll /api/ingest/sources/{filename}/parse-status
+    for progress.
+    """
+    from services.paddleocr import parse_source_async
+
+    _safe_parsed_filename(filename)
+    sp = sources_path(project_id)
+    if not (sp / filename).exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    import asyncio
+    asyncio.create_task(parse_source_async(filename, project_id=project_id))
+
+    from services.paddleocr import get_parse_status
+    return get_parse_status(filename, project_id=project_id)
+
+
+@router.get("/sources/{filename}/parse-status")
+async def get_parse_status(filename: str, project_id: str = Query("default")):
+    """Get the PaddleOCR parse status of a source file."""
+    from services.paddleocr import get_parse_status as _status
+    _safe_parsed_filename(filename)
+    return _status(filename, project_id=project_id)
+
+
+@router.get("/parse-statuses")
+async def get_all_parse_statuses(project_id: str = Query("default")):
+    """Get parse status for all source files."""
+    from services.paddleocr import list_all_statuses
+    return list_all_statuses(project_id=project_id)
+
+
+@router.post("/parse-all-pending")
+async def parse_all_pending(project_id: str = Query("default")):
+    """Trigger PaddleOCR parsing for all sources not yet successfully parsed."""
+    from services.paddleocr import parse_all_pending, list_all_statuses
+
+    import asyncio
+    asyncio.create_task(parse_all_pending(project_id=project_id))
+    return {"status": "started", "files": list_all_statuses(project_id=project_id)}
+
+
+@router.get("/sources/{filename}/parsed-doc")
+async def get_parsed_doc(filename: str, project_id: str = Query("default")):
+    """Return the parsed markdown for a source file as JSON.
+
+    The markdown references images via /api/ingest/sources/{filename}/parsed-image/{img}
+    """
+    from services.paddleocr import _parsed_dir
+
+    _safe_parsed_filename(filename)
+    sp = sources_path(project_id)
+    pd = _parsed_dir(sp, filename)
+    md_path = pd / "document.md"
+    if not md_path.exists():
+        raise HTTPException(status_code=404, detail="Parsed document not available. Run parse first.")
+    content = md_path.read_text(encoding="utf-8")
+    if len(content) > 200000:
+        content = content[:200000] + "\n\n[Truncated...]"
+    return {
+        "filename": filename,
+        "content": content,
+    }
+
+
+@router.get("/sources/{filename}/parsed-image/{image_name}")
+async def get_parsed_image(filename: str, image_name: str, project_id: str = Query("default")):
+    """Serve an image from the parsed document's image directory."""
+    from services.paddleocr import _parsed_dir
+
+    _safe_parsed_filename(filename)
+    if ".." in image_name or "/" in image_name or "\\" in image_name:
+        raise HTTPException(status_code=400, detail="Invalid image name")
+    sp = sources_path(project_id)
+    pd = _parsed_dir(sp, filename)
+    img_path = pd / "imgs" / image_name
+    if not img_path.exists() or not img_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    mime_type, _ = mimetypes.guess_type(str(img_path))
+    if not mime_type:
+        mime_type = "application/octet-stream"
+    return FileResponse(
+        path=str(img_path),
         media_type=mime_type,
         headers={"Cache-Control": "public, max-age=86400"},
     )

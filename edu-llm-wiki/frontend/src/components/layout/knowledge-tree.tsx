@@ -38,7 +38,7 @@ export function KnowledgeTree() {
     formula: "Formulas",
     principle: "Principles",
     exercise: "Exercises",
-    source: "Sources",
+    source: "Imported",
     synthesis: "Synthesis",
     query: "Q&A",
     system: "System",

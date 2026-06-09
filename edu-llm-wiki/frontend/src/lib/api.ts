@@ -41,6 +41,10 @@ export const api = {
     const form = new FormData()
     form.append("file", file)
     const res = await fetch(`${BASE}/ingest/upload?${p()}`, { method: "POST", body: form })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Upload failed: ${res.status} ${text}`)
+    }
     return res.json() as Promise<{ filename: string; size: number }>
   },
   runIngest: (sourcePaths: string[], force = false) =>
@@ -55,7 +59,8 @@ export const api = {
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const reader = res.body!.getReader()
+    if (!res.body) throw new Error("No response body")
+    const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buf = ""
     while (true) {
@@ -88,7 +93,8 @@ export const api = {
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const reader = res.body!.getReader()
+    if (!res.body) throw new Error("No response body")
+    const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buf = ""
     while (true) {
@@ -157,14 +163,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ messages }),
     }),
-  chatStream: async function* (messages: { role: string; content: string }[]) {
+  chatStream: async function* (messages: { role: string; content: string }[], signal?: AbortSignal) {
     const res = await fetch(`${BASE}/chat/stream?${p()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages }),
+      signal,
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const reader = res.body!.getReader()
+    if (!res.body) throw new Error("No response body")
+    const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buf = ""
     while (true) {
@@ -212,6 +220,21 @@ export const api = {
   getEmbeddingSettings: () => request<EmbeddingSettings>(`${BASE}/settings/embedding`),
   saveEmbeddingSettings: (data: EmbeddingSettings) =>
     request<{ status: string }>(`${BASE}/settings/embedding`, { method: "PUT", body: JSON.stringify(data) }),
+  getPaddleocrSettings: () => request<PaddleocrSettings>(`${BASE}/settings/paddleocr`),
+  savePaddleocrSettings: (data: PaddleocrSettings) =>
+    request<{ status: string }>(`${BASE}/settings/paddleocr`, { method: "PUT", body: JSON.stringify(data) }),
+
+  // PaddleOCR document parsing
+  startParse: (filename: string) =>
+    request<ParseStatus>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}/parse?${p()}`, { method: "POST" }),
+  getParseStatus: (filename: string) =>
+    request<ParseStatus>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}/parse-status?${p()}`),
+  getAllParseStatuses: () =>
+    request<ParseStatus[]>(`${BASE}/ingest/parse-statuses?${p()}`),
+  parseAllPending: () =>
+    request<{ status: string; files: ParseStatus[] }>(`${BASE}/ingest/parse-all-pending?${p()}`, { method: "POST" }),
+  getParsedDoc: (filename: string) =>
+    request<{ filename: string; content: string }>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}/parsed-doc?${p()}`),
 }
 
 export interface LlmSettings {
@@ -228,4 +251,22 @@ export interface EmbeddingSettings {
   embedding_endpoint: string
   embedding_api_key: string
   embedding_model: string
+}
+
+export interface PaddleocrSettings {
+  paddleocr_token: string
+  paddleocr_model: string
+  paddleocr_orientation: boolean
+  paddleocr_unwarping: boolean
+  paddleocr_chart: boolean
+}
+
+export interface ParseStatus {
+  filename: string
+  status: "not_started" | "pending" | "running" | "done" | "failed"
+  page_count: number
+  image_count: number
+  error: string | null
+  markdown_path: string | null
+  job_id?: string
 }

@@ -13,10 +13,12 @@ from config import settings
 
 
 def wiki_path(project_id: str = "default") -> Path:
+    validate_project_id(project_id)
     return Path(settings.projects_dir) / project_id / "wiki"
 
 
 def sources_path(project_id: str = "default") -> Path:
+    validate_project_id(project_id)
     return Path(settings.projects_dir) / project_id / "sources"
 
 
@@ -204,6 +206,12 @@ def delete_wiki_page(relative_path: str, *, project_id: str = "default") -> bool
         # Clean up dead wikilinks in remaining pages
         page_id = relative_path.replace(".md", "")
         _cleanup_dead_links(page_id, project_id=project_id)
+        # Remove from vector index
+        try:
+            from services.vector_store import remove_page
+            remove_page(page_id, project_id=project_id)
+        except Exception:
+            pass
         return True
     return False
 
@@ -247,7 +255,7 @@ def set_ingest_cache(source_path: str, content_hash: str, *, project_id: str = "
 
 
 def update_index(new_pages: list[dict], *, project_id: str = "default"):
-    """Update index.md with new/modified pages."""
+    """Update index.md — merge new/updated pages into existing sections, preserving existing entries."""
     index_path = wiki_path(project_id) / "index.md"
     if not index_path.exists():
         return
@@ -255,15 +263,7 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
     fm, body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
     fm["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # Group pages by type
-    grouped: dict[str, list[str]] = {}
-    for page in new_pages:
-        ptype = page.get("type", "unknown")
-        if ptype not in grouped:
-            grouped[ptype] = []
-        grouped[ptype].append(f"- [[{page['path'].replace('.md', '')}]] - {page.get('title', '')}")
-
-    # Rebuild index sections
+    # Parse existing entries from the body to preserve them
     section_names = {
         "concept": "## 概念 (Concepts)",
         "formula": "## 公式 (Formulas)",
@@ -274,11 +274,39 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
         "query": "## 问答记录 (Queries)",
     }
 
+    # Collect existing links per type
+    existing: dict[str, set[str]] = {t: set() for t in section_names}
+    current_type = None
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            for t, header in section_names.items():
+                if stripped == header:
+                    current_type = t
+                    break
+            else:
+                current_type = None
+        elif stripped.startswith("- [[") and current_type:
+            path = stripped.split("[[", 1)[1].split("]]", 1)[0] if "[[" in stripped else ""
+            if path:
+                existing[current_type].add(path)
+
+    # Merge in new pages
+    new_paths: dict[str, set[str]] = {t: set() for t in section_names}
+    for page in new_pages:
+        ptype = page.get("type", "unknown")
+        if ptype in new_paths:
+            link = f"{page['path'].replace('.md', '')}]] - {page.get('title', '')}"
+            link = f"- [[{link}"
+            new_paths[ptype].add(link)
+
+    # Build sections
     sections = []
-    for ptype, name in section_names.items():
-        sections.append(name)
-        if ptype in grouped:
-            sections.extend(grouped[ptype])
+    for ptype, header in section_names.items():
+        sections.append(header)
+        all_entries = existing[ptype] | new_paths[ptype]
+        for entry in sorted(all_entries):
+            sections.append(entry)
         sections.append("")
 
     new_body = "\n".join(sections) if sections else body
@@ -290,6 +318,17 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
 
 # Only forbid filesystem-unsafe characters: / \ : * ? " < > |
 _PROJECT_NAME_RE = re.compile(r'^[^/\\:*?"<>|]+$')
+
+
+def validate_project_id(project_id: str) -> str:
+    """Validate and normalize project_id to prevent path traversal."""
+    if not project_id or not _PROJECT_NAME_RE.match(project_id):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Invalid project ID: {project_id!r}")
+    if project_id.startswith("."):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Invalid project ID: {project_id!r}")
+    return project_id
 
 
 def list_projects() -> list[dict]:
@@ -326,9 +365,18 @@ def delete_project(name: str) -> bool:
 # --- Conversation storage ---
 
 def conversations_dir(project_id: str = "default") -> Path:
+    validate_project_id(project_id)
     d = Path(settings.projects_dir) / project_id / "conversations"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _validate_conv_id(conv_id: str) -> str:
+    """Validate conversation ID to prevent path traversal."""
+    if not conv_id or ".." in conv_id or "/" in conv_id or "\\" in conv_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+    return conv_id
 
 
 def list_conversations(*, project_id: str = "default") -> list[dict]:
@@ -352,14 +400,20 @@ def list_conversations(*, project_id: str = "default") -> list[dict]:
 
 def get_conversation(conv_id: str, *, project_id: str = "default") -> dict | None:
     """Load a single conversation by ID."""
+    _validate_conv_id(conv_id)
     fp = conversations_dir(project_id) / f"{conv_id}.json"
     if not fp.exists():
         return None
-    return json.loads(fp.read_text(encoding="utf-8"))
+    try:
+        return json.loads(fp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def save_conversation(conv: dict, *, project_id: str = "default"):
     """Save (create or update) a conversation."""
+    conv_id = conv.get("id", "")
+    _validate_conv_id(conv_id)
     conv["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if "created" not in conv:
         conv["created"] = conv["updated"]
@@ -369,6 +423,7 @@ def save_conversation(conv: dict, *, project_id: str = "default"):
 
 def delete_conversation(conv_id: str, *, project_id: str = "default") -> bool:
     """Delete a conversation."""
+    _validate_conv_id(conv_id)
     fp = conversations_dir(project_id) / f"{conv_id}.json"
     if fp.exists():
         fp.unlink()

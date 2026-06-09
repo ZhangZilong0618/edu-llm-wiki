@@ -136,14 +136,17 @@ export function ChatPanel() {
     setStreaming(assistantId)
     setConvTitle(`Exercise: ${exercise.title}`)
 
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
       const apiMessages = [
         { role: "system" as const, content: "你是一位教育导师，请引导学生通过练习掌握知识。先出题，等学生作答后再给反馈和讲解。回答要简洁清晰。" },
         ...newMsgs.filter((m) => m.content !== "").map((m) => ({ role: m.role, content: m.content })),
       ]
 
-      let lastContent = ""
-      for await (const event of api.chatStream(apiMessages)) {
+let lastContent = ""
+      for await (const event of api.chatStream(apiMessages, controller.signal)) {
         if (event.type === "cited") {
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
@@ -153,10 +156,11 @@ export function ChatPanel() {
       }
 
       setMessages((prev) => {
-        autoSave(prev, `Exercise: ${exercise.title}`)
+        autoSave(prev, `[Exercise] ${exercise.title}`)
         return prev
       })
     } catch (e: any) {
+      if (e?.name === "AbortError") { setStreaming(null); return }
       setMessages((prev) => prev.map((m) =>
         m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
       ))
@@ -205,6 +209,9 @@ export function ChatPanel() {
       setConvTitle(input.slice(0, 50))
     }
 
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
       const systemMsg = mode === "exercise"
         ? [{ role: "system" as const, content: "你是一位教育导师，请引导学生通过练习掌握知识。先出题，等学生作答后再给反馈和讲解。" }]
@@ -219,7 +226,7 @@ export function ChatPanel() {
       ]
 
       let lastContent = ""
-      for await (const event of api.chatStream(apiMessages)) {
+for await (const event of api.chatStream(apiMessages, controller.signal)) {
         if (event.type === "cited") {
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
@@ -233,6 +240,7 @@ export function ChatPanel() {
         return prev
       })
     } catch (e: any) {
+      if (e?.name === "AbortError") { setStreaming(null); return }
       setMessages((prev) => prev.map((m) =>
         m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
       ))

@@ -129,10 +129,11 @@ Analyze the document and output a JSON object with the following structure:
 ```
 
 IMPORTANT for prerequisites:
-- Only list concepts/formulas/principles that are EXPLICITLY needed to understand this item
-- Prerequisites should be from the SAME document or from the existing wiki context
-- If no prerequisites exist (e.g., a truly foundational concept), use an empty array []
-- Use the EXACT name of the prerequisite as it appears in the concepts/formulas/principles list
+- Every concept/formula/principle MUST have a prerequisites array listing the names of concepts that must be understood BEFORE this one.
+- If a concept is truly foundational (no prerequisites), use an empty array []
+- Prerequisites should reference other items from the concepts/formulas/principles lists BY EXACT NAME
+- Think carefully about the learning order: what must a student know before understanding this item?
+- NEVER leave prerequisites out — even basic concepts can reference other foundational items
 
 CRITICAL: Output ONLY the JSON object, no other text. Ensure valid JSON.
 """
@@ -156,7 +157,7 @@ Based on the analysis, generate wiki pages. For each page, output a JSON object 
 - content: full markdown content with [[wikilinks]] for cross-references
 - sources: list of source file references
 - tags: list of relevant tags
-- prerequisites: list of page paths that must be understood BEFORE this page (e.g., ["concepts/lattice_wave.md"])
+- prerequisites: list of page paths that must be understood BEFORE this page (e.g., ["concepts/lattice_wave.md"]). EVERY page must have this field — use [] only for genuinely foundational topics with no prerequisites.
 
 Return a JSON array of page objects. The source summary MUST always be created.
 CRITICAL: Output ONLY the JSON array, no other text. Ensure valid JSON.

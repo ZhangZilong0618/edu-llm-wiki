@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { Check, X, AlertTriangle, Loader } from "lucide-react"
 
 export interface ToastState {
@@ -15,22 +15,31 @@ export function toast(state: ToastState | null) {
 export function ToastContainer() {
   const [toast, setToast] = useState<ToastState | null>(null)
   const [visible, setVisible] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
 
   pushToast = useCallback((t: ToastState | null) => {
+    clearTimer()
     if (t === null) {
       setVisible(false)
-      setTimeout(() => setToast(null), 300)
+      timerRef.current = setTimeout(() => setToast(null), 300)
     } else {
       setToast(t)
       requestAnimationFrame(() => setVisible(true))
       if (t.type !== "loading") {
-        setTimeout(() => {
+        timerRef.current = setTimeout(() => {
           setVisible(false)
-          setTimeout(() => setToast(null), 300)
+          timerRef.current = setTimeout(() => setToast(null), 300)
         }, 3000)
       }
     }
-  }, [])
+  }, [clearTimer])
 
   if (!toast) return null
 

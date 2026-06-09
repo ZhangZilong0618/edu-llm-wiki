@@ -2,13 +2,13 @@ import { cn } from "@/lib/cn"
 import { useAppStore, type ActiveView } from "@/stores/app-store"
 import { ProjectSelector } from "./project-selector"
 import {
-  BookOpen, FolderOpen, Search, GitGraph, ShieldCheck, Settings, GraduationCap
+  Upload, BookOpen, Search, GitGraph, ShieldCheck, Settings, GraduationCap
 } from "lucide-react"
 
 const items: { id: ActiveView; label: string; icon: React.ReactNode }[] = [
+  { id: "sources", label: "Import", icon: <Upload size={18} /> },
   { id: "wiki", label: "Knowledge Tree", icon: <BookOpen size={18} /> },
   { id: "learn", label: "Learning Path", icon: <GraduationCap size={18} /> },
-  { id: "sources", label: "Sources", icon: <FolderOpen size={18} /> },
   { id: "search", label: "Search", icon: <Search size={18} /> },
   { id: "graph", label: "Graph", icon: <GitGraph size={18} /> },
   { id: "lint", label: "Health Check", icon: <ShieldCheck size={18} /> },

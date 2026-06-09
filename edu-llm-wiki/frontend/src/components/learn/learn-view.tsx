@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Star,
   ChevronRight,
+  Play,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
@@ -230,7 +231,7 @@ export function LearnView() {
         </div>
         {!hasPrereqs && steps.length > 0 && (
           <p className="text-[11px] text-amber-600 bg-amber-50 dark:bg-amber-950/20 px-2 py-1 rounded">
-            No prerequisite data found. Re-ingest documents to generate ordered learning paths.
+            Learning order is approximate (based on topic type). Re-ingest documents to generate prerequisite relationships.
           </p>
         )}
         {/* Stats bar */}
@@ -270,48 +271,65 @@ export function LearnView() {
               {levelSteps.map((step) => {
                 const cfg = TYPE_CONFIG[step.node.node_type] ?? TYPE_CONFIG.concept
                 const Icon = cfg.icon
+                const isExercise = step.node.node_type === "exercise"
                 return (
-                  <button
+                  <div
                     key={step.node.id}
-                    onClick={() => selectPage(step.node.id)}
                     className="w-full text-left group rounded-lg border p-3 hover:bg-[var(--accent)] transition-colors"
                   >
-                    <div className="flex items-start gap-2.5">
-                      <div className={`shrink-0 mt-0.5 w-7 h-7 rounded-md flex items-center justify-center ${cfg.bg}`}>
-                        <Icon className={`h-3.5 w-3.5 ${cfg.color}`} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-medium truncate group-hover:text-[var(--primary)] transition-colors">
-                            {step.node.label}
-                          </span>
-                          {step.isBridge && (
-                            <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600">
-                              <Star className="h-2.5 w-2.5" />
-                              Key
+                    <button
+                      onClick={() => selectPage(step.node.id)}
+                      className="w-full text-left"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div className={`shrink-0 mt-0.5 w-7 h-7 rounded-md flex items-center justify-center ${cfg.bg}`}>
+                          <Icon className={`h-3.5 w-3.5 ${cfg.color}`} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium truncate group-hover:text-[var(--primary)] transition-colors">
+                              {step.node.label}
                             </span>
-                          )}
-                          {step.isGap && (
-                            <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-600">
-                              <AlertTriangle className="h-2.5 w-2.5" />
-                              Gap
-                            </span>
+                            {step.isBridge && (
+                              <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-600">
+                                <Star className="h-2.5 w-2.5" />
+                                Key
+                              </span>
+                            )}
+                            {step.isGap && (
+                              <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-600">
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                Gap
+                              </span>
+                            )}
+                          </div>
+                          {step.prerequisites.length > 0 && (
+                            <div className="flex items-center gap-1 mt-1 flex-wrap">
+                              <span className="text-[10px] text-[var(--muted-foreground)]">Requires:</span>
+                              {step.prerequisites.map((p, i) => (
+                                <span key={i} className="text-[10px] bg-[var(--muted)] px-1 py-0.5 rounded">
+                                  {p}
+                                </span>
+                              ))}
+                            </div>
                           )}
                         </div>
-                        {step.prerequisites.length > 0 && (
-                          <div className="flex items-center gap-1 mt-1 flex-wrap">
-                            <span className="text-[10px] text-[var(--muted-foreground)]">Requires:</span>
-                            {step.prerequisites.map((p, i) => (
-                              <span key={i} className="text-[10px] bg-[var(--muted)] px-1 py-0.5 rounded">
-                                {p}
-                              </span>
-                            ))}
-                          </div>
-                        )}
+                        <ChevronRight className="h-3.5 w-3.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-1" />
                       </div>
-                      <ChevronRight className="h-3.5 w-3.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-1" />
-                    </div>
-                  </button>
+                    </button>
+                    {isExercise && (
+                      <button
+                        onClick={() => {
+                          useAppStore.getState().setActiveView("chat")
+                          useAppStore.getState().selectPage(step.node.id)
+                        }}
+                        className="mt-2 flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
+                      >
+                        <Play className="h-3 w-3" />
+                        Practice
+                      </button>
+                    )}
+                  </div>
                 )
               })}
             </div>

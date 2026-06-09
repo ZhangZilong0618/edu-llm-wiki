@@ -1,6 +1,54 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
+import { ChevronDown, ChevronRight, Play } from "lucide-react"
+
+function ExerciseContent({ content }: { content: string }) {
+  const [showAnswer, setShowAnswer] = useState(false)
+  const [activeView] = useAppStore((s) => [s.activeView])
+
+  const parts = content.split(/(?=##\s*(?:解|答案|Answer|Solution|解答))/i)
+  const question = parts[0] || content
+  const answer = parts.length > 1 ? parts.slice(1).join("\n") : null
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase mb-2">题目</h3>
+        <Markdown>{question}</Markdown>
+      </div>
+      {answer ? (
+        <div className="border-t pt-3">
+          <button
+            onClick={() => setShowAnswer((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 hover:text-emerald-700 transition-colors"
+          >
+            {showAnswer ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            {showAnswer ? "Hide Answer" : "Show Answer"}
+          </button>
+          {showAnswer && (
+            <div className="mt-2 pl-3 border-l-2 border-emerald-300 dark:border-emerald-700">
+              <Markdown>{answer}</Markdown>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="border-t pt-3">
+          <p className="text-xs text-[var(--muted-foreground)] italic">No answer section found</p>
+        </div>
+      )}
+      {activeView !== "chat" && (
+        <button
+          onClick={() => useAppStore.getState().setActiveView("chat")}
+          className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
+        >
+          <Play className="h-3.5 w-3.5" />
+          Practice in Chat
+        </button>
+      )}
+    </div>
+  )
+}
 
 export function PreviewPanel() {
   const selectedPage = useAppStore((s) => s.selectedPage)
@@ -98,7 +146,11 @@ export function PreviewPanel() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4" ref={selectedPage ? scrollRef : undefined}>
-        <Markdown>{selectedPage.content || "*No content*"}</Markdown>
+        {selectedPage.page_type === "exercise" ? (
+          <ExerciseContent content={selectedPage.content || ""} />
+        ) : (
+          <Markdown>{selectedPage.content || "*No content*"}</Markdown>
+        )}
       </div>
     </div>
   )

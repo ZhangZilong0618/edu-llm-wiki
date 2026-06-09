@@ -28,9 +28,18 @@ class EmbeddingSettings(BaseModel):
     embedding_model: str = "nomic-embed-text"
 
 
+class PaddleocrSettings(BaseModel):
+    paddleocr_token: str = ""
+    paddleocr_model: str = "PaddleOCR-VL-1.6"
+    paddleocr_orientation: bool = False
+    paddleocr_unwarping: bool = False
+    paddleocr_chart: bool = False
+
+
 class AllSettings(BaseModel):
     llm: LlmSettings
     embedding: EmbeddingSettings
+    paddleocr: PaddleocrSettings
 
 
 def _read_env() -> dict[str, str]:
@@ -169,6 +178,33 @@ async def save_embedding_settings(data: EmbeddingSettings):
         "EMBEDDING_ENDPOINT": data.embedding_endpoint,
         "EMBEDDING_API_KEY": data.embedding_api_key,
         "EMBEDDING_MODEL": data.embedding_model,
+    }
+    _write_env(updates)
+    return {"status": "saved"}
+
+
+@router.get("/paddleocr")
+async def get_paddleocr_settings():
+    """Get PaddleOCR (document parsing) configuration."""
+    env = _read_env()
+    return {
+        "paddleocr_token": env.get("PADDLEOCR_TOKEN", ""),
+        "paddleocr_model": env.get("PADDLEOCR_MODEL", "PaddleOCR-VL-1.6"),
+        "paddleocr_orientation": env.get("PADDLEOCR_ORIENTATION", "false").lower() == "true",
+        "paddleocr_unwarping": env.get("PADDLEOCR_UNWARPING", "false").lower() == "true",
+        "paddleocr_chart": env.get("PADDLEOCR_CHART", "false").lower() == "true",
+    }
+
+
+@router.put("/paddleocr")
+async def save_paddleocr_settings(data: PaddleocrSettings):
+    """Save PaddleOCR configuration to .env."""
+    updates = {
+        "PADDLEOCR_TOKEN": data.paddleocr_token,
+        "PADDLEOCR_MODEL": data.paddleocr_model,
+        "PADDLEOCR_ORIENTATION": "true" if data.paddleocr_orientation else "false",
+        "PADDLEOCR_UNWARPING": "true" if data.paddleocr_unwarping else "false",
+        "PADDLEOCR_CHART": "true" if data.paddleocr_chart else "false",
     }
     _write_env(updates)
     return {"status": "saved"}

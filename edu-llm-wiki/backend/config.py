@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     embedding_enabled: bool = True
     embedding_model: str = "all-MiniLM-L6-v2"  # local model, ~80MB, 384-dim
 
+    # Document Parsing (PaddleOCR-VL via Baidu AI Studio)
+    paddleocr_token: str = ""
+    paddleocr_model: str = "PaddleOCR-VL-1.6"
+    paddleocr_orientation: bool = False
+    paddleocr_unwarping: bool = False
+    paddleocr_chart: bool = False
+
     # Server
     host: str = "127.0.0.1"
     port: int = 8000

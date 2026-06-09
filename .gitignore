@@ -59,6 +59,9 @@ htmlcov/
 # Runtime data (generated at runtime, not source)
 edu-llm-wiki/data/
 
+# Local test fixtures / course PDFs
+测试用的pdf/
+
 # Brainstorm assets (not tracked in source control)
 .superpowers/
 .claude/

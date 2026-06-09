@@ -23,6 +23,14 @@ async def create_project_endpoint(data: dict):
         return create_project(name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Filesystem error: {e}") from e
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal error: {type(e).__name__}: {e}") from e
 
 
 @router.delete("/{name}")
