@@ -52,6 +52,33 @@ TYPE_AFFINITY: dict[str, dict[str, float]] = {
 
 
 PREREQ_TYPE_ORDER = {"concept": 0, "formula": 1, "principle": 2, "source": 3, "exercise": 4, "synthesis": 5, "query": 6}
+MAX_GRAPH_DEGREE = 8
+
+
+def _prune_edges(edge_list: list[dict], max_degree: int = MAX_GRAPH_DEGREE) -> list[dict]:
+    """Keep the graph readable by limiting weak dense edges per node.
+
+    Direct/prerequisite relations are kept first; source-overlap-only edges are
+    useful context but can otherwise turn one lecture PDF into a complete graph.
+    """
+    priority = {"prerequisite": 3, "direct": 3, "source": 2, "related": 1}
+    degree: dict[str, int] = defaultdict(int)
+    pruned: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for edge in sorted(edge_list, key=lambda e: (-priority.get(e["edge_type"], 1), -e["weight"])):
+        key = tuple(sorted((edge["source"], edge["target"])))
+        if key in seen:
+            continue
+        keep = edge["edge_type"] in {"prerequisite", "direct", "source"}
+        if not keep:
+            keep = degree[edge["source"]] < max_degree and degree[edge["target"]] < max_degree
+        if keep:
+            seen.add(key)
+            pruned.append(edge)
+            degree[edge["source"]] += 1
+            degree[edge["target"]] += 1
+    return pruned
 
 
 def build_graph(*, project_id: str = "default") -> dict:
@@ -127,11 +154,22 @@ def build_graph(*, project_id: str = "default") -> dict:
         for tgt_id in targets:
             edge_set.add((min(src_id, tgt_id), max(src_id, tgt_id)))
 
-    for _src_path, node_set in source_map.items():
-        node_list = list(node_set)
-        for i in range(len(node_list)):
-            for j in range(i + 1, len(node_list)):
-                edge_set.add((min(node_list[i], node_list[j]), max(node_list[i], node_list[j])))
+    for src_path, node_set in source_map.items():
+        # Avoid complete graphs: a shared PDF source is context, not proof that
+        # every extracted page should be directly connected to every other page.
+        source_nodes = [node_id for node_id in node_set if page_map[node_id]["type"] == "source"]
+        if source_nodes:
+            for source_node in source_nodes:
+                for node_id in node_set:
+                    if node_id != source_node:
+                        edge_set.add((min(source_node, node_id), max(source_node, node_id)))
+        else:
+            node_list = sorted(node_set)
+            for i, node_id in enumerate(node_list):
+                # Fallback for legacy projects with no source summary page:
+                # connect only nearby extracted pages instead of all pairs.
+                for other in node_list[i + 1:i + 4]:
+                    edge_set.add((min(node_id, other), max(node_id, other)))
 
     # Prerequisite edges from frontmatter (directed: prereq -> dependent)
     for node_id, prereqs in prerequisite_map.items():
@@ -181,6 +219,10 @@ def build_graph(*, project_id: str = "default") -> dict:
         elif (b, a) in prereq_directed:
             edge_type = "prerequisite"
             prereq_source = b
+        elif direct_score > 0:
+            edge_type = "direct"
+        elif source_score > 0 and (type_a == "source" or type_b == "source"):
+            edge_type = "source"
         else:
             # Infer from wikilink direction + type hierarchy
             # If A links to B, A references B — B is likely a prerequisite of A
@@ -209,6 +251,8 @@ def build_graph(*, project_id: str = "default") -> dict:
             "edge_type": edge_type,
             "weight": total,
         })
+
+    edge_list = _prune_edges(edge_list)
 
     # Community detection
     communities = []

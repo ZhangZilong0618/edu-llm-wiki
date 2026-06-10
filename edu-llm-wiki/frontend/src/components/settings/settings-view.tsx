@@ -206,7 +206,7 @@ export function SettingsView() {
             id="llm"
             icon={<Settings2 size={16} />}
             title="LLM Provider"
-            summary="Chat, ingest, lint, and exercise generation."
+            summary="Chat, ingest, research, and exercise generation."
             footer={
               <SaveButton
                 saved={llmSaved}

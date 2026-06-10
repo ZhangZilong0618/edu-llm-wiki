@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
-import { Send, Loader2, Plus, Trash2, MessageSquare, Dumbbell, MessageCircle, ChevronRight, Square, BookOpen } from "lucide-react"
+import { toast } from "@/components/ui/toast"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus } from "lucide-react"
 
 interface Message {
   id: string
@@ -11,7 +12,6 @@ interface Message {
   cited?: { path: string; title: string; snippet: string }[]
 }
 
-type ChatMode = "ask" | "practice"
 type ScopeType = "whole_wiki" | "current_page" | "selected_source"
 
 let idCounter = Date.now()
@@ -30,13 +30,11 @@ export function ChatPanel() {
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState<string | null>(null)
   const [convTitle, setConvTitle] = useState("")
-  const [mode, setMode] = useState<ChatMode>("ask")
   const [scopeType, setScopeType] = useState<ScopeType>("whole_wiki")
   const [chatStatus, setChatStatus] = useState<string | null>(null)
-  const [exercises, setExercises] = useState<{ path: string; title: string; content: string }[]>([])
-  const [exerciseIdx, setExerciseIdx] = useState(0)
-  const [loadingExercises, setLoadingExercises] = useState(false)
+  const [recognizingImage, setRecognizingImage] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const skipLoadRef = useRef(false)
@@ -101,106 +99,6 @@ export function ChatPanel() {
     }, 500)
   }, [convTitle, setConversations])
 
-  // Load exercises when switching to exercise mode
-  const loadExercises = useCallback(async () => {
-    setLoadingExercises(true)
-    try {
-      const pages = await api.listPages()
-      const exercisePages = pages.filter((p: any) => p.type === "exercise")
-      if (exercisePages.length === 0) {
-        setExercises([])
-        setLoadingExercises(false)
-        return
-      }
-      const loaded = await Promise.all(
-        exercisePages.slice(0, 20).map(async (p: any) => {
-          try {
-            const full = await api.getPage(p.path)
-            return { path: p.path, title: p.title, content: full.content || "" }
-          } catch {
-            return { path: p.path, title: p.title, content: "" }
-          }
-        })
-      )
-      setExercises(loaded.filter((e) => e.content))
-      setExerciseIdx(0)
-    } catch {
-      setExercises([])
-    }
-    setLoadingExercises(false)
-  }, [])
-
-  const startExercise = useCallback(async () => {
-    if (exercises.length === 0) return
-    const exercise = exercises[exerciseIdx]
-    const prompt = `请基于以下练习内容，给我出一道题目。先出题，等我作答后再给反馈和讲解。\n\n## ${exercise.title}\n\n${exercise.content.slice(0, 3000)}`
-
-    let currentConvId = convId
-    if (!currentConvId) {
-      currentConvId = nextId()
-      skipLoadRef.current = true
-      setConvId(currentConvId)
-    }
-
-    const userMsg: Message = { id: nextId(), role: "user", content: `[Exercise] ${exercise.title}` }
-    const assistantId = nextId()
-    const newMsgs = [...messages, userMsg, { id: assistantId, role: "assistant" as const, content: "" }]
-    setMessages(newMsgs)
-    setStreaming(assistantId)
-    setChatStatus("Preparing practice question...")
-    setConvTitle(`Exercise: ${exercise.title}`)
-
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      const apiMessages = newMsgs.filter((m) => m.content !== "").map((m) => ({ role: m.role, content: m.content }))
-
-let lastContent = ""
-      for await (const event of api.chatStream(apiMessages, controller.signal, {
-        mode: "practice",
-        scope: { type: "whole_wiki" },
-        options: { answer_style: "socratic", citation_required: true },
-      })) {
-        if (event.type === "status") {
-          setChatStatus(event.text)
-        } else if (event.type === "cited" || event.type === "sources" || event.type === "final_citations") {
-          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
-        } else if (event.type === "content") {
-          lastContent += event.text
-          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
-        } else if (event.type === "replace") {
-          lastContent = event.text
-          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
-        }
-      }
-
-      setMessages((prev) => {
-        autoSave(prev, `[Exercise] ${exercise.title}`)
-        return prev
-      })
-    } catch (e: any) {
-      if (e?.name === "AbortError") { setStreaming(null); return }
-      setMessages((prev) => prev.map((m) =>
-        m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
-      ))
-    }
-    setStreaming(null)
-    setChatStatus(null)
-  }, [exercises, exerciseIdx, messages, convId, autoSave, setConvId])
-
-  const nextExercise = () => {
-    if (exerciseIdx < exercises.length - 1) {
-      setExerciseIdx((i) => i + 1)
-    }
-  }
-
-  const prevExercise = () => {
-    if (exerciseIdx > 0) {
-      setExerciseIdx((i) => i - 1)
-    }
-  }
-
   const handleStop = () => {
     if (abortRef.current) {
       abortRef.current.abort()
@@ -251,12 +149,12 @@ let lastContent = ""
       }))
 
       let lastContent = ""
-for await (const event of api.chatStream(apiMessages, controller.signal, {
-        mode,
+      for await (const event of api.chatStream(apiMessages, controller.signal, {
+        mode: "ask",
         scope: effectiveScope,
         options: {
           citation_required: true,
-          answer_style: mode === "practice" ? "socratic" : "concise",
+          answer_style: "concise",
         },
       })) {
         if (event.type === "status") {
@@ -284,7 +182,7 @@ for await (const event of api.chatStream(apiMessages, controller.signal, {
     }
     setStreaming(null)
     setChatStatus(null)
-  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, mode, chatScope])
+  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope])
 
   const handleNewConv = () => {
     setConvId(null)
@@ -303,16 +201,34 @@ for await (const event of api.chatStream(apiMessages, controller.signal, {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean }
+    if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
   }
 
-  const handleModeChange = (newMode: ChatMode) => {
-    setMode(newMode)
-    if (newMode === "practice" && exercises.length === 0) {
-      loadExercises()
+  const handleImageUpload = async (file: File | null | undefined) => {
+    if (!file) return
+    setRecognizingImage(true)
+    setChatStatus("正在识别图片...")
+    try {
+      const res = await api.recognizeChatImage(file)
+      const extracted = res.text.trim()
+      if (!extracted) {
+        toast({ type: "error", message: "没有识别到可用文字" })
+        return
+      }
+      const block = `我拍照上传了一道题，请先基于识别内容回答。如果识别有误，请指出需要我确认的地方。\n\n## 图片识别结果\n\n${extracted}`
+      setInput((prev) => prev.trim() ? `${prev.trim()}\n\n${block}` : block)
+      toast({ type: "success", message: "图片已识别，结果已填入输入框" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "图片识别失败" })
+    } finally {
+      setRecognizingImage(false)
+      setChatStatus(null)
+      if (imageInputRef.current) imageInputRef.current.value = ""
     }
   }
 
@@ -361,30 +277,12 @@ for await (const event of api.chatStream(apiMessages, controller.signal, {
 
       {/* Chat area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Mode and scope */}
+        {/* Scope */}
         <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b bg-[var(--background)]">
-          <button
-            onClick={() => handleModeChange("ask")}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
-              mode === "ask"
-                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
-            }`}
-          >
+          <div className="flex items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs text-[var(--primary-foreground)]">
             <MessageCircle size={12} />
             Ask
-          </button>
-          <button
-            onClick={() => handleModeChange("practice")}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition-colors ${
-              mode === "practice"
-                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                : "text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
-            }`}
-          >
-            <Dumbbell size={12} />
-            Practice
-          </button>
+          </div>
           <div className="ml-2 h-4 w-px bg-[var(--border)]" />
           <select
             value={scopeType}
@@ -401,57 +299,16 @@ for await (const event of api.chatStream(apiMessages, controller.signal, {
             {scopeType === "selected_source" && selectedSourceName ? selectedSourceName : null}
             {scopeType === "whole_wiki" ? "Using all wiki pages" : null}
           </span>
-          {mode === "practice" && exercises.length > 0 && (
-            <div className="ml-auto flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
-              <button onClick={prevExercise} disabled={exerciseIdx === 0} className="p-0.5 rounded hover:bg-[var(--accent)] disabled:opacity-30">
-                <ChevronRight size={12} className="rotate-180" />
-              </button>
-              <span>{exerciseIdx + 1} / {exercises.length}</span>
-              <button onClick={nextExercise} disabled={exerciseIdx === exercises.length - 1} className="p-0.5 rounded hover:bg-[var(--accent)] disabled:opacity-30">
-                <ChevronRight size={12} />
-              </button>
-            </div>
-          )}
         </div>
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {isEmpty && mode === "ask" && (
+          {isEmpty && (
             <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
               <div className="text-center">
                 <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-20" />
                 <p className="text-lg mb-2">Knowledge Wiki Assistant</p>
                 <p>Ask with citations from your selected scope.</p>
-              </div>
-            </div>
-          )}
-
-          {isEmpty && mode === "practice" && (
-            <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
-              <div className="text-center">
-                <Dumbbell className="h-10 w-10 mx-auto mb-3 opacity-20" />
-                {loadingExercises ? (
-                  <>
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2 opacity-40" />
-                    <p>Loading exercises...</p>
-                  </>
-                ) : exercises.length === 0 ? (
-                  <>
-                    <p className="text-sm font-medium">No exercises found</p>
-                    <p className="text-xs mt-1">Import documents with exercises to practice here.</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm font-medium">Ready to practice!</p>
-                    <p className="text-xs mt-1">{exercises.length} exercises available. Click below to start.</p>
-                    <button
-                      onClick={startExercise}
-                      className="mt-3 px-4 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-xs hover:opacity-90 transition-opacity"
-                    >
-                      Start Exercise
-                    </button>
-                  </>
-                )}
               </div>
             </div>
           )}
@@ -506,45 +363,32 @@ for await (const event of api.chatStream(apiMessages, controller.signal, {
 
         {/* Input */}
         <div className="shrink-0 p-3 border-t">
-          {/* Exercise next button */}
-          {mode === "practice" && exercises.length > 0 && !isEmpty && (
-            <div className="mb-2 flex items-center gap-2">
-              <button
-                onClick={startExercise}
-                disabled={!!streaming}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition-colors disabled:opacity-50"
-              >
-                <Dumbbell size={12} />
-                {messages.length === 0 ? "Start Exercise" : "This Question Again"}
-              </button>
-              {exerciseIdx < exercises.length - 1 && (
-                <button
-                  onClick={() => { nextExercise(); startExercise() }}
-                  disabled={!!streaming}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border hover:bg-[var(--accent)] transition-colors disabled:opacity-50"
-                >
-                  Next Question
-                  <ChevronRight size={12} />
-                </button>
-              )}
-            </div>
-          )}
           <div className="flex gap-2">
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => handleImageUpload(e.target.files?.[0])}
+            />
+            <button
+              onClick={() => imageInputRef.current?.click()}
+              disabled={!!streaming || recognizingImage}
+              className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] disabled:opacity-50 transition-colors"
+              title="拍照或上传题目图片"
+            >
+              {recognizingImage ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+            </button>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={
-                mode === "practice"
-                  ? "Type your answer..."
-                  : convId
-                    ? "Ask a follow-up..."
-                    : "Ask a question about your knowledge base..."
-              }
+              placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
               className="flex-1 resize-none rounded-lg border px-3 py-2 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
               rows={2}
             />
-{streaming ? (
+            {streaming ? (
               <button
                 onClick={handleStop}
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"

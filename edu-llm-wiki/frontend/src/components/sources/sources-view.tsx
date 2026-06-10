@@ -473,41 +473,49 @@ export function SourcesView() {
               {viewableExt(f.name) && (
                 <button
                   onClick={(e) => { e.stopPropagation(); handlePreview(f.name) }}
-                  className="p-1 rounded hover:bg-blue-100 text-blue-600"
-                  title="Preview file"
+                  className="group relative p-1 rounded hover:bg-blue-100 text-blue-600"
+                  title="预览原始文件"
+                  aria-label="预览原始文件"
                 >
                   <Eye size={14} />
+                  <IconTooltip>预览原始文件</IconTooltip>
                 </button>
               )}
               <button
                 onClick={(e) => { e.stopPropagation(); handleIngest(f.name) }}
                 disabled={!!ingesting}
-                className="p-1 rounded hover:bg-green-100 text-green-600 disabled:opacity-50"
-                title="Process with LLM"
+                className="group relative p-1 rounded hover:bg-green-100 text-green-600 disabled:opacity-50"
+                title="用 LLM 生成知识 Wiki"
+                aria-label="用 LLM 生成知识 Wiki"
               >
                 {ingesting === f.name ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                <IconTooltip>生成知识 Wiki</IconTooltip>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteWiki(f.name) }}
-                className={`p-1 rounded transition-colors ${
+                className={`group relative p-1 rounded transition-colors ${
                   confirmDeleteWiki === f.name
                     ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
                     : "hover:bg-amber-100 text-amber-600"
                 }`}
-                title={confirmDeleteWiki === f.name ? "Click again to delete generated wiki pages" : "Delete generated wiki pages only"}
+                title={confirmDeleteWiki === f.name ? "再次点击确认删除该文件生成的 Wiki 页面" : "仅删除该文件生成的 Wiki 页面"}
+                aria-label={confirmDeleteWiki === f.name ? "再次点击确认删除该文件生成的 Wiki 页面" : "仅删除该文件生成的 Wiki 页面"}
               >
                 <ScanSearch size={14} />
+                <IconTooltip>{confirmDeleteWiki === f.name ? "再次点击确认" : "删除生成的 Wiki"}</IconTooltip>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDelete(f.name) }}
-                className={`p-1 rounded transition-colors ${
+                className={`group relative p-1 rounded transition-colors ${
                   confirmDelete === f.name
                     ? "bg-red-100 text-red-600 hover:bg-red-200"
                     : "hover:bg-red-100 text-red-600"
                 }`}
-                title={confirmDelete === f.name ? "Click again to confirm delete" : "Delete"}
+                title={confirmDelete === f.name ? "再次点击确认删除源文件" : "删除源文件"}
+                aria-label={confirmDelete === f.name ? "再次点击确认删除源文件" : "删除源文件"}
               >
                 <Trash2 size={14} />
+                <IconTooltip>{confirmDelete === f.name ? "再次点击确认" : "删除源文件"}</IconTooltip>
               </button>
             </div>
           )
@@ -524,6 +532,14 @@ export function SourcesView() {
   )
 }
 
+function IconTooltip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="pointer-events-none absolute right-full top-1/2 z-20 mr-1 -translate-y-1/2 whitespace-nowrap rounded border border-[var(--border)] bg-white px-2 py-1 text-[11px] font-medium text-slate-700 opacity-0 shadow-md transition-opacity group-hover:opacity-100">
+      {children}
+    </span>
+  )
+}
+
 function ParseStatusIcon({
   status,
   parseable,
@@ -534,23 +550,30 @@ function ParseStatusIcon({
   onReparse: () => void
 }) {
   if (!parseable) {
-    return <span className="w-4 h-4" />
+    return (
+      <span className="group relative w-4 h-4" title="该文件类型不需要 OCR 解析">
+        <IconTooltip>无需 OCR 解析</IconTooltip>
+      </span>
+    )
   }
   if (!status || status.status === "not_started") {
     return (
       <button
         onClick={(e) => { e.stopPropagation(); onReparse() }}
-        className="p-1 rounded text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
-        title="Click to parse with PaddleOCR-VL"
+        className="group relative p-1 rounded text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+        title="用 PaddleOCR-VL 解析文档"
+        aria-label="用 PaddleOCR-VL 解析文档"
       >
         <ScanSearch size={12} />
+        <IconTooltip>解析文档</IconTooltip>
       </button>
     )
   }
   if (status.status === "pending" || status.status === "running") {
     return (
-      <span className="p-1 text-blue-500" title={`Parsing: ${status.page_count} pages`}>
+      <span className="group relative p-1 text-blue-500" title={`正在解析: ${status.page_count} 页`}>
         <Loader2 size={12} className="animate-spin" />
+        <IconTooltip>正在解析</IconTooltip>
       </span>
     )
   }
@@ -558,20 +581,23 @@ function ParseStatusIcon({
     return (
       <button
         onClick={(e) => { e.stopPropagation(); onReparse() }}
-        className="p-1 rounded text-red-500 hover:bg-red-50"
-        title={`Parse failed: ${status.error || "unknown"}. Click to retry.`}
+        className="group relative p-1 rounded text-red-500 hover:bg-red-50"
+        title={`解析失败: ${status.error || "未知错误"}。点击重试。`}
+        aria-label="解析失败，点击重试"
       >
         <AlertCircle size={12} />
+        <IconTooltip>解析失败，重试</IconTooltip>
       </button>
     )
   }
   // done
   return (
     <span
-      className="p-1 text-emerald-500"
-      title={`Parsed: ${status.page_count} pages, ${status.image_count} images`}
+      className="group relative p-1 text-emerald-500"
+      title={`已解析: ${status.page_count} 页, ${status.image_count} 张图片`}
     >
       <CheckCircle2 size={12} />
+      <IconTooltip>已完成解析</IconTooltip>
     </span>
   )
 }

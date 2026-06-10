@@ -15,8 +15,16 @@ export default function App() {
 
   // Load projects list on mount
   useEffect(() => {
-    api.listProjects().then(setProjects).catch(console.error)
-  }, [])
+    api.listProjects()
+      .then((projects) => {
+        setProjects(projects)
+        const current = useAppStore.getState().currentProject
+        if (projects.length > 0 && !projects.some((p) => p.name === current)) {
+          useAppStore.getState().setCurrentProject("default")
+        }
+      })
+      .catch(console.error)
+  }, [setProjects])
 
   // Sync project ID and load data when project changes
   useEffect(() => {

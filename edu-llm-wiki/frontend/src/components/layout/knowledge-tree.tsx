@@ -1,7 +1,10 @@
 import { useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
-import { ChevronDown, ChevronRight, FileText, Hash, Sigma, Scale3D, Pencil, BookOpen, FolderOpen } from "lucide-react"
+import { toast } from "@/components/ui/toast"
+import { ChevronDown, ChevronRight, FileText, Hash, Sigma, Scale3D, Pencil, BookOpen, FolderOpen, Loader2, Search, X } from "lucide-react"
+import type { SearchResult } from "@/types/wiki"
+import { displayWikiTitle } from "@/lib/wiki-title"
 
 const typeIcons: Record<string, React.ReactNode> = {
   concept: <Hash size={14} />,
@@ -28,6 +31,7 @@ export function KnowledgeTree() {
   const selectedPage = useAppStore((s) => s.selectedPage)
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const { searchQuery, setSearchQuery, searchResults, setSearchResults, isSearching, setIsSearching } = useAppStore()
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(() => new Set(["source"]))
 
   const grouped: Record<string, typeof wikiPages> = {}
@@ -59,6 +63,38 @@ export function KnowledgeTree() {
     }
   }
 
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) {
+      setSearchResults([])
+      return
+    }
+    setIsSearching(true)
+    try {
+      const resp = await api.search(searchQuery)
+      setSearchResults(resp.results)
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "Search failed" })
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  const clearSearch = () => {
+    setSearchQuery("")
+    setSearchResults([])
+  }
+
+  const handleSearchSelect = async (r: SearchResult) => {
+    try {
+      const page = await api.getPage(r.path)
+      useAppStore.getState().setSelectedSource(null)
+      setSelectedPage(page)
+      setActiveView("wiki")
+    } catch {
+      toast({ type: "error", message: "Failed to load page" })
+    }
+  }
+
   const toggleType = (type: string) => {
     setCollapsedTypes((prev) => {
       const next = new Set(prev)
@@ -69,10 +105,84 @@ export function KnowledgeTree() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto p-2">
-      <h2 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase px-2 py-1 mb-1">
-        Knowledge Wiki
-      </h2>
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="shrink-0 border-b p-2">
+        <h2 className="mb-2 px-2 py-1 text-xs font-semibold uppercase text-[var(--muted-foreground)]">
+          Knowledge Wiki
+        </h2>
+        <div className="flex gap-1.5">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              placeholder="Search wiki..."
+              className="h-8 w-full rounded-md border bg-[var(--background)] pl-7 pr-7 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+            />
+            {searchQuery && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                title="Clear search"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={handleSearch}
+            disabled={isSearching || !searchQuery.trim()}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
+            title="Search"
+          >
+            {isSearching ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-2">
+      {(searchQuery || searchResults.length > 0) && (
+        <div className="mb-3 rounded-md border bg-[var(--background)]">
+          <div className="flex items-center gap-2 border-b px-2 py-1.5">
+            <span className="text-xs font-medium">Search Results</span>
+            <span className="ml-auto text-[10px] text-[var(--muted-foreground)]">
+              {isSearching ? "Searching..." : `${searchResults.length} found`}
+            </span>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {searchResults.map((r) => (
+              <button
+                key={r.path}
+                onClick={() => handleSearchSelect(r)}
+                className="w-full border-b px-2 py-2 text-left last:border-b-0 hover:bg-[var(--accent)]"
+              >
+                <div className="flex items-center gap-1">
+                  {r.title_match && (
+                    <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-[9px] font-medium text-yellow-800">
+                      Title
+                    </span>
+                  )}
+                  {r.vector_score != null && (
+                    <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[9px] font-medium text-purple-800">
+                      Semantic
+                    </span>
+                  )}
+                </div>
+                <h3 className="mt-1 truncate text-xs font-medium">{r.title}</h3>
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--muted-foreground)]">{r.snippet}</p>
+              </button>
+            ))}
+            {searchResults.length === 0 && !isSearching && (
+              <p className="px-2 py-3 text-xs text-[var(--muted-foreground)]">
+                Press Enter to search this wiki.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {[...TYPE_ORDER, ...Object.keys(grouped).filter((type) => !TYPE_ORDER.includes(type))].map((type) => {
         const pages = grouped[type] || []
         const collapsed = collapsedTypes.has(type)
@@ -100,7 +210,7 @@ export function KnowledgeTree() {
                     fontWeight: selectedPage?.path === p.path ? 500 : 400,
                   }}
                 >
-                  {p.title}
+                  {displayWikiTitle(p)}
                 </button>
               )) : (
                 <p className="px-4 py-1 text-xs text-[var(--muted-foreground)] opacity-60">No pages yet</p>
@@ -123,6 +233,7 @@ export function KnowledgeTree() {
           </button>
         </div>
       )}
+      </div>
     </div>
   )
 }

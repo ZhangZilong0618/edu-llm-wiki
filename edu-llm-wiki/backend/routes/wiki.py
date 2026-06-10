@@ -1,4 +1,4 @@
-"""API routes for wiki page CRUD and lint."""
+"""API routes for wiki page CRUD."""
 
 from fastapi import APIRouter, HTTPException, Query
 

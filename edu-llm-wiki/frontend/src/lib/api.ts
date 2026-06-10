@@ -1,11 +1,17 @@
 import type { WikiPage, SearchResponse, GraphData, GraphInsight, ChatResponse, IngestResult, Project } from "@/types/wiki"
 
 const BASE = "/api"
+const PROJECT_STORAGE_KEY = "edu-llm-wiki.currentProject"
 
-let _projectId = "default"
+let _projectId = typeof window === "undefined"
+  ? "default"
+  : window.localStorage.getItem(PROJECT_STORAGE_KEY) || "default"
 
 export function setProjectId(id: string) {
   _projectId = id
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(PROJECT_STORAGE_KEY, id)
+  }
 }
 
 function p() {
@@ -198,6 +204,16 @@ export const api = {
       }
     }
   },
+  recognizeChatImage: async (file: File) => {
+    const form = new FormData()
+    form.append("file", file)
+    const res = await fetch(`${BASE}/chat/image-ocr?${p()}`, { method: "POST", body: form })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Image recognition failed: ${res.status} ${text}`)
+    }
+    return res.json() as Promise<{ filename: string; content_type: string; text: string }>
+  },
 
   // Conversations
   listConversations: () => request<{ id: string; title: string; message_count: number; created: string; updated: string }[]>(`${BASE}/conversations?${p()}`),
@@ -210,8 +226,29 @@ export const api = {
   deleteConversation: (id: string) =>
     request<{ status: string }>(`${BASE}/conversations/${id}?${p()}`, { method: "DELETE" }),
 
-  // Lint
-  runLint: () => request<Record<string, unknown>>(`${BASE}/lint/run?${p()}`, { method: "POST" }),
+  // Exercises
+  checkExercise: (data: {
+    question: string
+    student_answer: string
+    reference_answer?: string | null
+    page_title?: string
+    page_path?: string
+    context?: string
+  }) =>
+    request<{
+      level: "empty" | "weak" | "partial" | "good"
+      title: string
+      detail: string
+      matched: string[]
+      missing: string[]
+      suggested_answer?: string | null
+      source: string
+    }>(`${BASE}/exercises/check?${p()}`, { method: "POST", body: JSON.stringify(data) }),
+  completeExerciseSolution: (data: { page_path: string; note?: string }) =>
+    request<{ status: string; solution: string; page: WikiPage }>(
+      `${BASE}/exercises/complete-solution?${p()}`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
 
   // Health
   health: () => request<{ status: string; version: string }>(`${BASE}/health`),
@@ -240,6 +277,18 @@ export const api = {
     request<{ status: string; files: ParseStatus[] }>(`${BASE}/ingest/parse-all-pending?${p()}`, { method: "POST" }),
   getParsedDoc: (filename: string) =>
     request<{ filename: string; content: string }>(`${BASE}/ingest/sources/${encodeURIComponent(filename)}/parsed-doc?${p()}`),
+
+  // Deep research
+  runResearch: (data: { page_path: string; action: string; note?: string }) =>
+    request<{ action: string; title: string; content: string; related_pages: WikiPageSummary[] }>(
+      `${BASE}/research/run?${p()}`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  saveResearchNote: (data: { page_path: string; title: string; content: string }) =>
+    request<{ status: string; page: WikiPage }>(
+      `${BASE}/research/save-note?${p()}`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
 }
 
 export interface LlmSettings {

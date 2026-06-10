@@ -102,6 +102,29 @@ function renderMathChildren(children: ReactNode, keyPrefix = "raw-math"): ReactN
 }
 
 const components: any = {
+  h1({ children, ...props }: any) {
+    const text = typeof children === "string" ? children : ""
+    const isResearch = text.includes("深入探究")
+    return (
+      <h1 className={`text-xl font-bold mt-6 mb-3 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
+        {isResearch && <span className="mr-1.5">🔬</span>}
+        {children}
+      </h1>
+    )
+  },
+  h2({ children, ...props }: any) {
+    const text = typeof children === "string" ? children : ""
+    const isResearch = text.includes("深入探究")
+    return (
+      <h2 className={`text-lg font-semibold mt-5 mb-2 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
+        {isResearch && <span className="mr-1.5">🔬</span>}
+        {children}
+      </h2>
+    )
+  },
+  h3({ children, ...props }: any) {
+    return <h3 className="text-base font-semibold mt-4 mb-2" {...props}>{children}</h3>
+  },
   a({ href, children, ...props }: any) {
     const selectPage = useAppStore.getState().selectPage
     if (href?.startsWith("/wiki/")) {

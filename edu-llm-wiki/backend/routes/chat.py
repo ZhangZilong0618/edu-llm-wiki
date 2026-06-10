@@ -2,8 +2,10 @@
 
 import json
 import re
+import tempfile
+from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from models.chat import ChatRequest, ChatResponse, ChatScope, CitedPage
@@ -95,6 +97,51 @@ def _filter_actual_citations(response: str, cited: list[dict]) -> tuple[str, lis
     if bracket_numbers:
         return cleaned, [c for i, c in enumerate(cited, start=1) if i in bracket_numbers]
     return cleaned, []
+
+
+@router.post("/image-ocr")
+async def image_ocr(
+    file: UploadFile = File(...),
+    project_id: str = Query("default"),
+):
+    """Extract question text from an uploaded/captured image for chat input.
+
+    Uses PaddleOCR-VL instead of the chat LLM, so text-only LLMs such as
+    DeepSeek can still answer after OCR converts the photo to text.
+    """
+    del project_id  # Reserved for future per-project OCR history.
+    content_type = file.content_type or ""
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file.")
+
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty image.")
+    if len(image_bytes) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image is too large. Please upload an image under 12MB.")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
+        suffix = ".png"
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(image_bytes)
+            temp_path = Path(tmp.name)
+        from services.paddleocr import parse_file_to_markdown
+        text = await parse_file_to_markdown(temp_path)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Image recognition failed: {str(e)[:240]}") from e
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+    return {
+        "filename": file.filename or "photo",
+        "content_type": content_type,
+        "text": text.strip(),
+    }
 
 
 def _scope_seed_results(scope: ChatScope, *, project_id: str = "default") -> list[dict]:

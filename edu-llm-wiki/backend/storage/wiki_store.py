@@ -26,7 +26,7 @@ def ensure_dirs(project_id: str = "default"):
     """Create wiki directory structure."""
     dirs = [
         "concepts", "formulas", "principles", "exercises", "sources",
-        "synthesis", "queries", "media"
+        "synthesis", "queries", "systems", "media"
     ]
     wp = wiki_path(project_id)
     for d in dirs:
@@ -69,11 +69,15 @@ type: system
 - **source**: 来源摘要，对原始文档的总结
 - **synthesis**: 综合分析，跨来源的对比和综合
 - **query**: 问答记录，保存的有价值问答
+- **system**: 学习指引、质量提醒、维护规则和导入策略
 
 ## 命名规范
 - 概念页: `concepts/{概念名}.md`
 - 公式页: `formulas/{公式名}.md`
 - 习题页: `exercises/{题目标题}.md`
+- 综合页: `synthesis/{主题}.md`
+- 问答页: `queries/{问题标题}.md`
+- 系统页: `systems/{指引标题}.md`
 
 ## 链接语法
 使用 `[[页面路径]]` 语法进行交叉引用。
@@ -100,6 +104,10 @@ updated: ""
 ## 来源 (Sources)
 
 ## 综合分析 (Synthesis)
+
+## 问答记录 (Queries)
+
+## 系统指引 (System)
 """, encoding="utf-8")
 
 
@@ -313,6 +321,7 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
         "source": "## 来源 (Sources)",
         "synthesis": "## 综合分析 (Synthesis)",
         "query": "## 问答记录 (Queries)",
+        "system": "## 系统指引 (System)",
     }
 
     # Collect existing links per type
@@ -375,6 +384,7 @@ def rebuild_index(*, project_id: str = "default"):
         "source": "## 来源 (Sources)",
         "synthesis": "## 综合分析 (Synthesis)",
         "query": "## 问答记录 (Queries)",
+        "system": "## 系统指引 (System)",
     }
     grouped: dict[str, list[dict]] = {t: [] for t in section_names}
     for page in pages:

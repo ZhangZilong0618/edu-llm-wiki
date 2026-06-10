@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   BookOpen,
@@ -10,16 +10,20 @@ import {
   FlaskConical,
   GraduationCap,
   HelpCircle,
+  Loader2,
   Layers,
   Lightbulb,
   MessageCircle,
   Play,
   RefreshCw,
   RotateCcw,
+  Send,
   Star,
+  X,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
+import { Markdown } from "@/components/markdown"
 import type { GraphData, GraphNode } from "@/types/wiki"
 
 type ItemStatus = "not_started" | "done" | "needs_review"
@@ -44,6 +48,17 @@ interface LearningStage {
   title: string
   description: string
   items: LearningItem[]
+}
+
+interface TutorMessage {
+  id: string
+  role: "user" | "assistant"
+  content: string
+}
+
+let tutorIdCounter = Date.now()
+function nextTutorId() {
+  return `${++tutorIdCounter}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 const STAGE_META: Record<StageId, { title: string; description: string }> = {
@@ -216,6 +231,13 @@ export function LearnView() {
   const [error, setError] = useState<string | null>(null)
   const [goal, setGoal] = useState("system")
   const [collapsedStages, setCollapsedStages] = useState<Set<StageId>>(new Set())
+  const [tutorItem, setTutorItem] = useState<LearningItem | null>(null)
+  const [tutorMessages, setTutorMessages] = useState<TutorMessage[]>([])
+  const [tutorInput, setTutorInput] = useState("")
+  const [tutorStreaming, setTutorStreaming] = useState(false)
+  const [tutorStatus, setTutorStatus] = useState<string | null>(null)
+  const [tutorTopPercent, setTutorTopPercent] = useState(50)
+  const splitContainerRef = useRef<HTMLDivElement>(null)
   const currentProject = useAppStore((s) => s.currentProject)
   const selectPage = useAppStore((s) => s.selectPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
@@ -265,14 +287,103 @@ export function LearnView() {
   }, [selectPage, updateStatus])
 
   const askTutor = useCallback(async (item: LearningItem) => {
-    await selectPage(item.path)
-    setActiveView("chat")
-  }, [selectPage, setActiveView])
+    setTutorItem(item)
+    setTutorMessages([
+      {
+        id: nextTutorId(),
+        role: "assistant",
+        content: `我会围绕 **${item.title}** 辅导你。你可以问“这页怎么学”“给我举例”“我哪里没理解”，也可以直接贴你的困惑。`,
+      },
+    ])
+    setTutorInput("")
+    void selectPage(item.path)
+  }, [selectPage])
+
+  const sendTutorMessage = useCallback(async () => {
+    if (!tutorItem || !tutorInput.trim() || tutorStreaming) return
+
+    const userText = tutorInput.trim()
+    const assistantId = nextTutorId()
+    const nextMessages: TutorMessage[] = [
+      ...tutorMessages,
+      { id: nextTutorId(), role: "user", content: userText },
+      { id: assistantId, role: "assistant", content: "" },
+    ]
+    setTutorMessages(nextMessages)
+    setTutorInput("")
+    setTutorStreaming(true)
+    setTutorStatus("Reading current learning item...")
+
+    try {
+      let lastContent = ""
+      const apiMessages = [
+        {
+          role: "user",
+          content: [
+            `你是学习路径中的 Tutor，当前学习节点是：${tutorItem.title}`,
+            `节点类型：${tutorItem.type}`,
+            `学习原因：${tutorItem.reason}`,
+            tutorItem.prerequisites.length ? `前置知识：${tutorItem.prerequisites.join("、")}` : "",
+            "",
+            `学生问题：${userText}`,
+          ].filter(Boolean).join("\n"),
+        },
+      ]
+
+      for await (const event of api.chatStream(apiMessages, undefined, {
+        mode: "ask",
+        scope: { type: "current_page", page_path: tutorItem.path },
+        options: { citation_required: true, answer_style: "socratic" },
+      })) {
+        if (event.type === "status") {
+          setTutorStatus(event.text)
+        } else if (event.type === "content") {
+          lastContent += event.text
+          setTutorMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+        } else if (event.type === "replace") {
+          lastContent = event.text
+          setTutorMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+        }
+      }
+    } catch (e: any) {
+      setTutorMessages((prev) => prev.map((m) =>
+        m.id === assistantId ? { ...m, content: `Tutor failed: ${e?.message || e}` } : m
+      ))
+    } finally {
+      setTutorStreaming(false)
+      setTutorStatus(null)
+    }
+  }, [tutorInput, tutorItem, tutorMessages, tutorStreaming])
 
   const practiceItem = useCallback(async (item: LearningItem) => {
     await selectPage(item.path)
     setActiveView("wiki")
   }, [selectPage, setActiveView])
+
+  const startTutorResize = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const container = splitContainerRef.current
+    if (!container) return
+
+    document.body.style.cursor = "row-resize"
+    document.body.style.userSelect = "none"
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const rect = container.getBoundingClientRect()
+      const next = ((moveEvent.clientY - rect.top) / rect.height) * 100
+      setTutorTopPercent(Math.min(78, Math.max(22, next)))
+    }
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove)
+      document.removeEventListener("mouseup", onUp)
+      document.body.style.cursor = ""
+      document.body.style.userSelect = ""
+    }
+
+    document.addEventListener("mousemove", onMove)
+    document.addEventListener("mouseup", onUp)
+  }
 
   const toggleStage = (stageId: StageId) => {
     setCollapsedStages((prev) => {
@@ -345,9 +456,13 @@ export function LearnView() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4">
-        {nextItem && (
-          <section className="mb-5 border-b pb-4">
+      <div ref={splitContainerRef} className="flex min-h-0 flex-1 flex-col">
+        <div
+          className={`${tutorItem ? "min-h-[160px] shrink-0" : "flex-1"} min-h-0 overflow-y-auto px-4 py-4`}
+          style={tutorItem ? { flexBasis: `${tutorTopPercent}%` } : undefined}
+        >
+          {nextItem && (
+            <section className="mb-5 border-b pb-4">
             <div className="mb-2 flex items-center gap-2">
               <Play className="h-4 w-4 text-[var(--primary)]" />
               <h2 className="text-sm font-semibold">Continue Learning</h2>
@@ -372,14 +487,14 @@ export function LearnView() {
                 <IconButton label="Done" onClick={() => updateStatus(nextItem.id, "done")} icon={<Check size={14} />} />
               </div>
             </div>
-          </section>
-        )}
+            </section>
+          )}
 
-        {stages.map((stage, index) => {
-          const collapsed = collapsedStages.has(stage.id)
-          const stageDone = stage.items.filter((item) => item.status === "done").length
-          return (
-            <section key={stage.id} className="mb-5">
+          {stages.map((stage, index) => {
+            const collapsed = collapsedStages.has(stage.id)
+            const stageDone = stage.items.filter((item) => item.status === "done").length
+            return (
+              <section key={stage.id} className="mb-5">
               <button
                 onClick={() => toggleStage(stage.id)}
                 className="mb-2 flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--accent)]"
@@ -411,11 +526,125 @@ export function LearnView() {
                   ))}
                 </div>
               )}
-            </section>
-          )
-        })}
+              </section>
+            )
+          })}
+        </div>
+
+        {tutorItem && (
+          <>
+            <div
+              onMouseDown={startTutorResize}
+              className="group flex h-2 shrink-0 cursor-row-resize items-center justify-center border-y bg-[var(--muted)]/40 hover:bg-[var(--primary)]/10"
+              title="Drag to resize tutor"
+            >
+              <div className="h-0.5 w-10 rounded-full bg-[var(--border)] group-hover:bg-[var(--primary)]" />
+            </div>
+            <TutorPanel
+              item={tutorItem}
+              messages={tutorMessages}
+              input={tutorInput}
+              streaming={tutorStreaming}
+              status={tutorStatus}
+              onInput={setTutorInput}
+              onSend={sendTutorMessage}
+              onClose={() => setTutorItem(null)}
+            />
+          </>
+        )}
       </div>
     </div>
+  )
+}
+
+function TutorPanel({
+  item,
+  messages,
+  input,
+  streaming,
+  status,
+  onInput,
+  onSend,
+  onClose,
+}: {
+  item: LearningItem
+  messages: TutorMessage[]
+  input: string
+  streaming: boolean
+  status: string | null
+  onInput: (value: string) => void
+  onSend: () => void
+  onClose: () => void
+}) {
+  return (
+    <section className="flex min-h-[160px] flex-1 flex-col bg-[var(--background)]">
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
+        <MessageCircle className="h-4 w-4 text-[var(--primary)]" />
+        <div className="min-w-0">
+          <h2 className="truncate text-sm font-semibold">Tutor</h2>
+          <p className="truncate text-[11px] text-[var(--muted-foreground)]">{item.title}</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="ml-auto rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+          title="Close tutor"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <div className="space-y-3">
+          {messages.map((message) => (
+            <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[86%] rounded-lg px-3 py-2 text-sm ${
+                  message.role === "user"
+                    ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                    : "bg-[var(--muted)] text-[var(--foreground)]"
+                }`}
+              >
+                {message.role === "assistant" ? <Markdown>{message.content || "..."}</Markdown> : <p className="whitespace-pre-wrap">{message.content}</p>}
+              </div>
+            </div>
+          ))}
+          {streaming && (
+            <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {status || "Tutor is thinking..."}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t p-3">
+        <div className="flex gap-2">
+          <textarea
+            value={input}
+            onChange={(e) => onInput(e.target.value)}
+            onKeyDown={(e) => {
+              const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean }
+              if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault()
+                onSend()
+              }
+            }}
+            placeholder="Ask about this learning item..."
+            rows={2}
+            className="min-w-0 flex-1 resize-none rounded-md border bg-[var(--background)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+          />
+          <button
+            onClick={onSend}
+            disabled={!input.trim() || streaming}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
+            title="Send"
+          >
+            {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          </button>
+        </div>
+      </div>
+    </section>
   )
 }
 

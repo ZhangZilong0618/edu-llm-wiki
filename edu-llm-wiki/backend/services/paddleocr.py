@@ -317,6 +317,30 @@ async def parse_source_async(source_filename: str, *, project_id: str = "default
     return await _run_parse(source_filename, project_id=project_id)
 
 
+async def parse_file_to_markdown(file_path: Path) -> str:
+    """Parse a standalone image/PDF with PaddleOCR-VL and return markdown.
+
+    This lightweight path is used by chat photo upload. It does not persist
+    sidecar files or import the image into the knowledge base.
+    """
+    job_id = await asyncio.to_thread(_submit_job, file_path)
+    result = await asyncio.to_thread(_poll_job, job_id)
+    json_url = result.get("resultUrl", {}).get("jsonUrl")
+    if not json_url:
+        raise RuntimeError("PaddleOCR result URL missing")
+    parsed_pages = await asyncio.to_thread(_fetch_results, json_url)
+    if not parsed_pages:
+        raise RuntimeError("PaddleOCR returned no parsed pages")
+
+    parts: list[str] = []
+    for idx, page in enumerate(parsed_pages):
+        md = page.get("markdown", {})
+        text = (md.get("text") or "").strip()
+        if text:
+            parts.append(f"## Page {idx + 1}\n\n{text}")
+    return "\n\n---\n\n".join(parts).strip()
+
+
 async def parse_all_pending(*, project_id: str = "default", file_exts: set[str] | None = None) -> list[dict]:
     """Parse all sources that don't yet have a successful parse result.
 

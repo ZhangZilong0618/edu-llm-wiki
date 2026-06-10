@@ -1,7 +1,23 @@
 import { create } from "zustand"
 import type { SearchResult, WikiPage } from "@/types/wiki"
 
-export type ActiveView = "wiki" | "sources" | "search" | "graph" | "lint" | "settings" | "learn" | "chat"
+export type ActiveView = "wiki" | "sources" | "search" | "graph" | "settings" | "learn" | "chat"
+
+const PROJECT_STORAGE_KEY = "edu-llm-wiki.currentProject"
+const ACTIVE_VIEW_STORAGE_KEY = "edu-llm-wiki.activeView"
+const ACTIVE_VIEWS: ActiveView[] = ["wiki", "sources", "search", "graph", "settings", "learn", "chat"]
+
+function initialProject(): string {
+  if (typeof window === "undefined") return "default"
+  return window.localStorage.getItem(PROJECT_STORAGE_KEY) || "default"
+}
+
+function initialActiveView(): ActiveView {
+  if (typeof window === "undefined") return "wiki"
+  const saved = window.localStorage.getItem(ACTIVE_VIEW_STORAGE_KEY)
+  if (saved === "search" || saved === "lint") return "wiki"
+  return ACTIVE_VIEWS.includes(saved as ActiveView) ? (saved as ActiveView) : "wiki"
+}
 
 export interface IngestProgress {
   filename: string
@@ -71,13 +87,24 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  activeView: "wiki",
-  setActiveView: (view) => set({ activeView: view }),
+  activeView: initialActiveView(),
+  setActiveView: (view) => {
+    const nextView = view === "search" ? "wiki" : view
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ACTIVE_VIEW_STORAGE_KEY, nextView)
+    }
+    set({ activeView: nextView })
+  },
 
   projects: [],
   setProjects: (list) => set({ projects: list }),
-  currentProject: "default",
-  setCurrentProject: (name) => set({ currentProject: name }),
+  currentProject: initialProject(),
+  setCurrentProject: (name) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PROJECT_STORAGE_KEY, name)
+    }
+    set({ currentProject: name })
+  },
 
   selectedPage: null,
   setSelectedPage: (page) => set({ selectedPage: page }),

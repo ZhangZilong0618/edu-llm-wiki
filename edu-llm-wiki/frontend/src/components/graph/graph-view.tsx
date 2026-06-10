@@ -45,6 +45,33 @@ function layoutIterations(count: number): number {
   return 100
 }
 
+function normalizeGraphPositions(graph: Graph, targetSpan: number) {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+
+  graph.forEachNode((node, attrs) => {
+    const x = Number(attrs.x ?? 0)
+    const y = Number(attrs.y ?? 0)
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  })
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+  const span = Math.max(maxX - minX, maxY - minY, 1)
+  const scale = targetSpan / span
+
+  graph.forEachNode((node, attrs) => {
+    graph.setNodeAttribute(node, "x", (Number(attrs.x ?? 0) - centerX) * scale)
+    graph.setNodeAttribute(node, "y", (Number(attrs.y ?? 0) - centerY) * scale)
+  })
+}
+
 // ─── Inner Components ─────────────────────────────────────────────
 
 function GraphLoader({
@@ -68,12 +95,12 @@ function GraphLoader({
     const maxSize = Math.max(...data.nodes.map((n) => n.size), 1)
     const cx = 0
     const cy = 0
-    const radius = 5
+    const radius = Math.max(4, Math.sqrt(data.nodes.length) * 1.8 * spacing)
 
     for (let i = 0; i < data.nodes.length; i++) {
       const node = data.nodes[i]
       const angle = (2 * Math.PI * i) / data.nodes.length
-      const size = 4 + (Math.sqrt(node.size) / Math.sqrt(maxSize)) * 16
+      const size = 5 + (Math.sqrt(node.size) / Math.sqrt(maxSize)) * 7
       const color = colorMode === "community" && node.community >= 0
         ? COMMUNITY_COLORS[node.community % COMMUNITY_COLORS.length]
         : nodeColor(node.node_type)
@@ -117,17 +144,40 @@ function GraphLoader({
         iterations: layoutIterations(data.nodes.length),
         settings: {
           ...settings,
-          gravity: 1,
-          scalingRatio: spacing * 2,
-          strongGravityMode: true,
+          gravity: 0.25,
+          scalingRatio: spacing * 4,
+          slowDown: 2,
+          strongGravityMode: false,
           barnesHutOptimize: data.nodes.length > 50,
         },
       })
     }
 
+    normalizeGraphPositions(graph, Math.max(8, Math.sqrt(data.nodes.length) * 2.4 * spacing))
     loadGraph(graph)
+    sigma.getCamera().animatedReset({ duration: 0 })
     sigma.refresh()
   }, [data, colorMode, nodeScale, spacing, loadGraph, sigma])
+
+  return null
+}
+
+function GraphViewportSync({ fitKey }: { fitKey: string }) {
+  const sigma = useSigma()
+
+  useEffect(() => {
+    const container = sigma.getContainer()
+    const refresh = () => {
+      sigma.refresh()
+      window.setTimeout(() => {
+        sigma.refresh()
+      }, 80)
+    }
+    const observer = new ResizeObserver(refresh)
+    observer.observe(container)
+    refresh()
+    return () => observer.disconnect()
+  }, [fitKey, sigma])
 
   return null
 }
@@ -686,6 +736,7 @@ export function GraphView() {
               }}
             >
               <GraphLoader data={visibleData} colorMode={colorMode} nodeScale={nodeScale} spacing={spacing} />
+              <GraphViewportSync fitKey={`${selectedNode || ""}:${showInsights ? "insights" : "graph"}`} />
               <EventHandler onNodeClick={handleNodeClick} onHoverChange={setHoverState} />
               <GraphSettings
                 hoverState={hoverState}
