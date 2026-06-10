@@ -31,6 +31,12 @@ GENERATE_TEST_PROMPT = """你是 Edu-LLM-Wiki 的测验出题助手。你的任�
 - explanation 要能教学，指出关键原理或理由。
 - 数学公式用 LaTeX：行内 $...$，块级 $$...$$。
 
+多样性硬性要求（必须遵守）：
+- 同一份请求中每道题都要从不同角度切入：概念辨析 / 数值计算 / 适用边界与失效条件 / 易错陷阱 / 真实应用案例，至少覆盖 3 种不同视角。
+- 题面、考查点、所用数据/公式、选项表述都必须各自不同，绝不允许"换皮"重复。
+- 如果 user 提示里给出了"最近已出过的题面"，必须主动绕开那些角度，不要与之重复或高度相似。
+- 同一 seed 字段相同的请求之间要刻意拉开差异；seed 不同则视为全新一批题目，不要参考任何之前的结果。
+
 JSON schema:
 {
   "questions": [
@@ -188,6 +194,27 @@ def _question_from_exercise(page: dict, index: int, allowed_types: set[str], dif
     )
 
 
+def _recent_question_prompts(project_id: str, limit: int = 20) -> list[str]:
+    """Collect recent question prompts from stored test sessions, newest first.
+
+    Used as negative examples in the LLM prompt to encourage diversity between
+    consecutive test generations for the same wiki content.
+    """
+    prompts: list[tuple[str, str]] = []
+    for path in _tests_dir(project_id).glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        created = str(data.get("created_at") or "")
+        for question in data.get("questions", []) or []:
+            prompt_text = str(question.get("prompt") or "").strip()
+            if prompt_text:
+                prompts.append((created, prompt_text))
+    prompts.sort(key=lambda item: item[0], reverse=True)
+    return [text for _, text in prompts[:limit]]
+
+
 def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[TestQuestion], str]:
     allowed_types = set(req.question_types or []) & QUESTION_TYPES or QUESTION_TYPES
     pages = list_wiki_pages(project_id=project_id)
@@ -200,10 +227,9 @@ def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[Te
             continue
         if req.scope == "source" and req.source and req.source not in (page.get("sources", []) or []):
             continue
-        if page.get("page_type") == "exercise":
-            question = _question_from_exercise(page, len(extracted) + 1, allowed_types, req.difficulty)
-            if question:
-                extracted.append(question)
+        # Exercise pages are no longer lifted verbatim into the new test — the
+        # generator now produces fresh questions from the concept/formula/principle
+        # context below, which avoids regenerating identical items.
         if page.get("page_type") in {"concept", "formula", "principle", "source", "synthesis"} and len(context_parts) < 24:
             context_parts.append(
                 f"### {page['title']} ({page['page_type']})\n路径：{page['path']}\n来源：{', '.join(page.get('sources', []) or [])}\n{page.get('content', '')[:1800]}"
@@ -211,12 +237,15 @@ def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[Te
     return extracted[: req.question_count], "\n\n".join(context_parts)
 
 
-async def _generate_questions(req: TestCreateRequest, project_id: str, existing_count: int, context: str) -> list[TestQuestion]:
+async def _generate_questions(req: TestCreateRequest, project_id: str, existing_count: int, context: str, recent_prompts: list[str] | None = None) -> list[TestQuestion]:
     needed = max(0, req.question_count - existing_count)
     if needed <= 0:
         return []
     if not context.strip():
         return []
+
+    seed = (req.seed or "").strip() or f"auto-{uuid.uuid4().hex[:8]}"
+    recent_block = "\n".join(f"- {text[:200]}" for text in (recent_prompts or [])) or "无"
 
     user = f"""请生成 {needed} 道测试题。
 
@@ -224,6 +253,10 @@ scope: {req.scope}
 source: {req.source or "全部"}
 requested_types: {", ".join(req.question_types)}
 difficulty: {req.difficulty}
+seed: {seed}
+
+最近已出过的题面（请避免重复或高度相似）：
+{recent_block}
 
 Wiki 内容：
 {context[:22000]}
@@ -231,7 +264,7 @@ Wiki 内容：
     raw = await chat_complete(
         system_prompt=f"{GENERATE_TEST_PROMPT}\n\n{language_instruction()}",
         messages=[{"role": "user", "content": user}],
-        temperature=0.25,
+        temperature=0.8,
         max_tokens=3500,
         response_format={"type": "json_object"},
     )
@@ -383,7 +416,8 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
 @router.post("", response_model=TestSession)
 async def create_test(req: TestCreateRequest, project_id: str = Query("default")) -> TestSession:
     extracted, context = _candidate_context(req, project_id)
-    generated = await _generate_questions(req, project_id, len(extracted), context)
+    recent_prompts = _recent_question_prompts(project_id, limit=20)
+    generated = await _generate_questions(req, project_id, len(extracted), context, recent_prompts)
     questions = (extracted + generated)[: req.question_count]
     if not questions:
         raise HTTPException(status_code=400, detail="No wiki content available to create a test")

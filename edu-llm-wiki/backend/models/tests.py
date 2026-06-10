@@ -9,6 +9,11 @@ class TestCreateRequest(BaseModel):
     question_types: list[str] = ["multiple_choice", "fill_blank", "short_answer"]
     difficulty: str = "mixed"
     mode: str = "practice"
+    # Caller-provided seed used to encourage question diversity between
+    # consecutive generations. Frontend fills this with a timestamp/random
+    # suffix; the backend echoes it into the prompt and may fall back to a
+    # server-side UUID when missing.
+    seed: str | None = None
 
 
 class TestAnswerRequest(BaseModel):

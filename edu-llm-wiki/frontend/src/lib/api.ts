@@ -348,6 +348,9 @@ export interface TestCreateRequest {
   question_types: string[]
   difficulty: string
   mode: string
+  /** Optional seed echoed into the LLM prompt to encourage diversity
+   *  across consecutive generations. Frontend auto-fills this. */
+  seed?: string
 }
 
 export interface TestQuestion {

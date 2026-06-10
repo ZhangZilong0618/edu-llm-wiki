@@ -107,6 +107,9 @@ export function TestsView() {
         ...form,
         title: form.title?.trim() || undefined,
         source: form.scope === "source" ? form.source : null,
+        // Auto-inject a fresh seed each time so the backend can drive
+        // diversity instead of returning a near-identical question set.
+        seed: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       })
       setActiveSession(session)
       setCurrentIndex(0)
