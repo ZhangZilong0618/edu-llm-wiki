@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type DragEvent } from "react"
 import { Group, Panel, Separator } from "react-resizable-panels"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
-import { Markdown } from "@/components/markdown"
+import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { BookOpenCheck, CheckCircle2, ChevronDown, ChevronRight, HelpCircle, ImagePlus, Loader2, Microscope, Network, RotateCcw, Save, Sparkles, X } from "lucide-react"
 import type { WikiPage } from "@/types/wiki"
@@ -609,7 +609,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                     }`}>
                       {option.key}
                     </span>
-                    <span className="min-w-0 whitespace-pre-wrap leading-relaxed">{option.text}</span>
+                    <span className="min-w-0 whitespace-pre-wrap leading-relaxed"><InlineMarkdown>{option.text}</InlineMarkdown></span>
                   </button>
                 )
               })}

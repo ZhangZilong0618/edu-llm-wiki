@@ -189,7 +189,7 @@ const components: any = {
 }
 
 export function Markdown({ children }: { children: string }) {
-  const processed = useMemo(() => convertLatexDelimiters(processWikiLinks(stripFrontmatter(children))), [children])
+  const processed = useMemo(() => convertLatexDelimiters(processWikiLinks(stripFrontmatter(wrapBareLatexCommands(children)))), [children])
 
   return (
     <div className="markdown-body">
@@ -201,5 +201,24 @@ export function Markdown({ children }: { children: string }) {
         {processed}
       </ReactMarkdown>
     </div>
+  )
+}
+
+export function InlineMarkdown({ children }: { children: string }) {
+  const processed = useMemo(() => convertLatexDelimiters(processWikiLinks(stripFrontmatter(wrapBareLatexCommands(children)))), [children])
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeRaw, rehypeKatex]}
+      components={{
+        ...components,
+        p({ children: pChildren, ...props }: any) {
+          return <span className="leading-relaxed" {...props}>{renderMathChildren(pChildren, "inline-p")}</span>
+        },
+      }}
+    >
+      {processed}
+    </ReactMarkdown>
   )
 }
