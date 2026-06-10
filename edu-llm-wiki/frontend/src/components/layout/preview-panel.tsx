@@ -536,7 +536,14 @@ function ExerciseContent({ page }: { page: WikiPage }) {
   return (
     <div className="space-y-5">
       <section className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">题目</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">题目</h3>
+          {exerciseKind.kind === "choice" && exerciseKind.options.length >= 2 && (
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
+              单选题
+            </span>
+          )}
+        </div>
         <div className="rounded-md border-l-4 border-[var(--primary)]/60 bg-[var(--muted)]/35 px-4 py-3">
           <Markdown>{exerciseKind.kind === "choice" ? exerciseKind.prompt : question}</Markdown>
         </div>
