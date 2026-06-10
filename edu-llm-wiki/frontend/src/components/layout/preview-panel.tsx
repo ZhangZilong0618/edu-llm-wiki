@@ -605,7 +605,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                   return (
                     <button
                       key={option.key}
-                      disabled={checked}
+                      disabled={checked || checking}
                       onClick={() => {
                         if (selected) {
                           setUserAnswer("")
