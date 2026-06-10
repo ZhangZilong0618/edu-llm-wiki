@@ -187,6 +187,7 @@ IMPORTANT for prerequisites:
 IMPORTANT for type classification:
 - Put equations, coefficients, variables with equations, and named mathematical expressions in formulas, not concepts.
 - Formula names MUST be semantic names, not raw equations or LaTeX. Prefer the physical quantity, law, or relationship name itself, such as "电导率", "布拉格定律", "密度", "热容关系", "Kohn-Sham 方程". Do not add "公式" just to make a title. Never use titles like "J=\\sigma E", "\\rho=m/V", "a=b\\ne c", or "\\Delta V=\\alpha\\Delta T".
+- When describing formulas or equations in the output, write all math using proper LaTeX syntax: inline math must be wrapped in $...$ (e.g., $\\sigma$, $\\varepsilon$), and display equations must be wrapped in $$...$$ (e.g., $$E = \\sigma \\varepsilon$$). Do NOT leave bare LaTeX commands like \\sigma or \\varepsilon without delimiters.
 - Put laws, theorems, mechanisms, effects, and named rules in principles when they describe a general relationship or causal rule.
 - Put worked examples, review questions, homework questions, and calculation prompts in exercises, even if no full solution is present.
 - When creating exercises, keep question types diverse when the source material allows it:
@@ -242,6 +243,7 @@ Type coverage rules:
 - Create synthesis pages for every item in analysis.synthesis. Synthesis pages MUST be useful study pages, not summaries only. Use sections: "## 核心综合", "## 关联知识", "## 易混点/对比", "## 进一步问题". Link related pages with [[...]] where possible.
 - Create query pages for every item in analysis.q_and_a. Query pages MUST use sections: "## 问题", "## 回答", "## 为什么重要", "## 相关知识". They should be concise, searchable, and suitable for later chat retrieval.
 - Create system pages for every item in analysis.system_notes. System pages MUST use sections: "## 用途", "## 推荐学习顺序", "## 复习策略", "## 质量提醒". They should guide the learner or wiki maintainer, not duplicate lesson content.
+- CRITICAL: All mathematical content must be formatted with proper LaTeX delimiters: inline math as $...$ (e.g., $\\sigma$, $\\varepsilon$, $E = \\sigma \\varepsilon$) and display equations as $$...$$. Never write bare LaTeX commands like \\sigma or \\varepsilon without $...$ delimiters.
 - Use source only for document summaries, never for ordinary concepts/formulas/principles/exercises.
 - If synthesis, q_and_a, or system_notes are empty but the document has meaningful educational content, create one concise page of each type from the available analysis.
 - Do not create empty or placeholder pages. Every generated page must contain concrete information from the document analysis.

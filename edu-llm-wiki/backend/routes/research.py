@@ -110,6 +110,7 @@ async def run_research(req: ResearchRequest, project_id: str = Query("default"))
 
 输出要求：
 - 使用中文 Markdown。
+- 所有数学公式必须使用 LaTeX：行内 $...$（如 $\\sigma$、$\\varepsilon$），块级 $$...$$。不要写裸 LaTeX 命令。
 - 内容要具体、可教学、能回流到 wiki。
 - 不要编造不存在的来源；如果是不确定推断，要明确说明。
 - 根据动作组织 3-5 个短小清晰的小节。

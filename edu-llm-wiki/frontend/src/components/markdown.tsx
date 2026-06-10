@@ -26,6 +26,23 @@ function convertLatexDelimiters(text: string): string {
   return text
 }
 
+function wrapBareLatexCommands(text: string): string {
+  // Match common LaTeX commands that appear outside of $...$ delimiters
+  // Examples: \sigma, \varepsilon, \alpha, \beta, \gamma, \Delta, \pi, \mu, etc.
+  const latexCommands = [
+    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta",
+    "iota", "kappa", "lambda", "mu", "nu", "xi", "pi", "rho", "sigma", "tau", "upsilon",
+    "phi", "chi", "psi", "omega", "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma",
+    "Upsilon", "Phi", "Psi", "Omega", "partial", "infty", "sum", "prod", "int", "oint",
+    "sqrt", "frac", "mathrm", "mathbf", "mathit", "mathcal", "mathbb", "mathfrak",
+    "left", "right", "langle", "rangle", "lbrace", "rbrace", "lceil", "rceil", "lfloor", "rfloor",
+    "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "lim", "max", "min",
+    "det", "dim", "ker", "deg", "arg", "gcd", "Pr", "hom",
+  ]
+  const pattern = new RegExp(`(?<!\\$)(?<!\\\\)\\\\(${latexCommands.join("|")})(?!\\w)`, "g")
+  return text.replace(pattern, (_, cmd) => `$\\${cmd}$`)
+}
+
 function processWikiLinks(text: string): string {
   return text.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, path: string, label: string) => {
     const clean = path.trim().replace(/\.md$/, "")

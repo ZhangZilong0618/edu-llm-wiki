@@ -22,6 +22,7 @@ SYSTEM_PROMPT = """你是 Edu-LLM-Wiki 的练习判题助手。你的任务是�
 - 优先检查：使用的原理、关键公式、变量含义、推导关系、最终表达式、单位/条件。
 - 如果参考解答是“待补充/请结合文档...”一类占位内容，请根据题目和上下文自行判断，并给出 suggested_answer。
 - matched 和 missing 要写学生能看懂的中文/符号短语，不要写 LaTeX 命令内部词如 frac、left、right。
+- suggested_answer 中如有数学公式，必须使用 LaTeX：行内 $...$（如 $\\sigma$、$\\varepsilon$），块级 $$...$$。不要写裸 LaTeX 命令。
 - detail 用中文，具体指出下一步怎么改。
 
 只返回 JSON，不要 markdown，不要额外解释。JSON schema:
@@ -43,7 +44,7 @@ COMPLETE_SOLUTION_PROMPT = """你是 Edu-LLM-Wiki 的习题解析生成助手。
 - 用中文。
 - 如果是计算题，必须写出已知量、使用的原理/公式、推导步骤、最终表达式；必要时解释变量含义。
 - 如果是概念题，必须给出清晰答案、判断依据、常见误区。
-- 使用 Markdown 和 LaTeX：行内 $...$，块级 $$...$$。
+- 使用 Markdown 和 LaTeX：行内 $...$（如 $\\sigma$、$\\varepsilon$），块级 $$...$$。不要写裸 LaTeX 命令。
 - 不要写“请结合文档”“待补充”“需要查阅原文”这类占位话。
 - 如果上下文不足，也要基于题目和相关页面给出最合理的教学解法，并标明关键假设。
 """
@@ -58,7 +59,7 @@ REWRITE_EXERCISE_PROMPT = """你是 Edu-LLM-Wiki 的习题修复助手。你的�
 - 如果 type 是 multiple_choice，choices 必须包含 3-5 个可见选项，格式为 A. ... / B. ... / C. ... / D. ...。
 - 如果无法合理补全选项，不要用 multiple_choice，改成 fill_blank 或 short_answer。
 - 如果 question 使用 （ ） 或 ____，且答案不是选项集合，则优先用 fill_blank，并清除答案开头残留的 A./B./C./D.。
-- solution 要能直接作为标准解析，说明正确答案和理由。
+- solution 要能直接作为标准解析，说明正确答案和理由。解析中的数学公式必须使用 LaTeX：行内 $...$（如 $\\sigma$、$\\varepsilon$），块级 $$...$$。不要写裸 LaTeX 命令。
 - 内容必须基于题目、当前解析和同源 wiki 上下文，不要编造与材料无关的选项。
 
 JSON schema:
