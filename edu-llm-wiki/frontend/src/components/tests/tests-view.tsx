@@ -495,7 +495,7 @@ function TestWorkspace({
             </section>
           )}
 
-          {(submitted || session.mode === "practice") && question.explanation && (
+          {submitted && question.explanation && (
             <section className="rounded-lg border p-4">
               <h3 className="mb-2 text-sm font-semibold">解析</h3>
               <Markdown>{question.explanation}</Markdown>
