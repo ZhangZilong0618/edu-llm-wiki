@@ -591,10 +591,10 @@ function ExerciseContent({ page }: { page: WikiPage }) {
         </div>
         <div className="p-3">
           {exerciseKind.kind === "choice" && exerciseKind.options.length >= 2 ? (
-            <div className="space-y-3">
-              {/* 选择题区域 */}
-              <div className="space-y-3">
-                {exerciseKind.options.map((option) => {
+            <div className="space-y-4">
+              {/* 选择题选项区域 - 类似在线测试 */}
+              <div className="space-y-2">
+                {exerciseKind.options.map((option, index) => {
                   const selected = userAnswer.startsWith(`${option.key}.`)
                   const checked = check?.level !== undefined
                   const isCorrect = referenceAnswer && referenceAnswer.startsWith(`${option.key}.`)
@@ -614,30 +614,30 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                         }
                         setCheck(null)
                       }}
-                      className={`flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-all ${
+                      className={`group flex w-full items-center gap-4 rounded-xl border-2 px-5 py-4 text-left transition-all duration-200 ${
                         checked
                           ? showCorrect
-                            ? "border-emerald-300 bg-emerald-50 ring-1 ring-emerald-300 dark:border-emerald-800 dark:bg-emerald-950/20"
+                            ? "border-emerald-400 bg-emerald-50/80 shadow-sm dark:border-emerald-700 dark:bg-emerald-950/30"
                             : showWrong
-                              ? "border-red-300 bg-red-50 ring-1 ring-red-300 dark:border-red-800 dark:bg-red-950/20"
-                              : "border-slate-200 bg-[var(--muted)]/20 dark:border-slate-800"
+                              ? "border-red-400 bg-red-50/80 shadow-sm dark:border-red-700 dark:bg-red-950/30"
+                              : "border-slate-200 bg-[var(--muted)]/10 dark:border-slate-800"
                           : selected
-                            ? "border-[var(--primary)] bg-[var(--primary)]/5 ring-2 ring-[var(--primary)]/20"
-                            : "border-slate-200 hover:border-[var(--primary)]/40 hover:bg-[var(--muted)]/20 dark:border-slate-800"
+                            ? "border-[var(--primary)] bg-[var(--primary)]/5 shadow-md ring-1 ring-[var(--primary)]/20"
+                            : "border-slate-200 bg-[var(--background)] hover:border-[var(--primary)]/50 hover:bg-[var(--muted)]/10 hover:shadow-sm dark:border-slate-800"
                       }`}
                     >
-                      {/* 选项编号 */}
+                      {/* 选项编号 - 圆形单选按钮样式 */}
                       <div
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-sm font-bold transition-colors ${
+                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 text-base font-bold transition-all duration-200 ${
                           checked
                             ? showCorrect
-                              ? "border-emerald-500 bg-emerald-500 text-white"
+                              ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
                               : showWrong
-                                ? "border-red-500 bg-red-500 text-white"
+                                ? "border-red-500 bg-red-500 text-white shadow-sm"
                                 : "border-slate-300 text-slate-400 dark:border-slate-700"
                             : selected
-                              ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]"
-                              : "border-slate-300 text-slate-500 dark:border-slate-700"
+                              ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] shadow-sm"
+                              : "border-slate-300 text-slate-500 group-hover:border-[var(--primary)]/60 dark:border-slate-700"
                         }`}
                       >
                         {option.key}
@@ -645,18 +645,33 @@ function ExerciseContent({ page }: { page: WikiPage }) {
 
                       {/* 选项文本 */}
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm leading-relaxed whitespace-pre-wrap"><InlineMarkdown>{option.text}</InlineMarkdown></div>
+                        <div className="text-base leading-relaxed whitespace-pre-wrap text-[var(--foreground)]">
+                          <InlineMarkdown>{option.text}</InlineMarkdown>
+                        </div>
                       </div>
 
                       {/* 正确/错误标记 */}
                       {checked && showCorrect && (
-                        <div className="shrink-0 text-emerald-600 font-bold text-sm">
-                          ✓ 正确答案
+                        <div className="shrink-0 flex items-center gap-1 text-emerald-600 font-bold text-sm">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          正确答案
                         </div>
                       )}
                       {checked && showWrong && (
-                        <div className="shrink-0 text-red-600 font-bold text-sm">
-                          ✗ 错误
+                        <div className="shrink-0 flex items-center gap-1 text-red-600 font-bold text-sm">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                          错误
+                        </div>
+                      )}
+                      {!checked && selected && (
+                        <div className="shrink-0 text-[var(--primary)]">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
                         </div>
                       )}
                     </button>
@@ -666,13 +681,13 @@ function ExerciseContent({ page }: { page: WikiPage }) {
 
               {/* 操作按钮 */}
               {!check && (
-                <div className="flex items-center gap-2 pt-2">
+                <div className="flex items-center gap-3 pt-2">
                   <button
                     onClick={runCheck}
                     disabled={!userAnswer.trim() || checking}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-5 py-2.5 text-sm font-medium text-[var(--primary-foreground)] disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-6 py-3 text-sm font-semibold text-[var(--primary-foreground)] shadow-sm hover:shadow-md transition-shadow disabled:opacity-50"
                   >
-                    {checking ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    {checking ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
                     {checking ? "判题中..." : "提交答案"}
                   </button>
                   <button
@@ -680,16 +695,16 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                       setUserAnswer("")
                       setCheck(null)
                     }}
-                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2.5 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    className="inline-flex items-center gap-2 rounded-lg border px-4 py-3 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)] transition-colors"
                   >
-                    <RotateCcw size={14} />
+                    <RotateCcw size={16} />
                     清除选择
                   </button>
                   <button
                     onClick={() => setShowHint((v) => !v)}
-                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2.5 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    className="inline-flex items-center gap-2 rounded-lg border px-4 py-3 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)] transition-colors"
                   >
-                    <HelpCircle size={14} />
+                    <HelpCircle size={16} />
                     提示
                   </button>
                 </div>
@@ -697,51 +712,62 @@ function ExerciseContent({ page }: { page: WikiPage }) {
 
               {/* 判题反馈 */}
               {check && (
-                <div className={`mt-2 rounded-lg border px-4 py-3 ${
+                <div className={`rounded-xl border-2 px-5 py-4 ${
                   check.level === "good"
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100"
                     : check.level === "partial"
-                      ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
-                      : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"
+                      ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+                      : "border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-100"
                 }`}>
-                  <div className="font-semibold text-sm">{check.title}</div>
-                  <p className="mt-1 text-sm leading-relaxed">{check.detail}</p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={`flex h-6 w-6 items-center justify-center rounded-full text-sm font-bold ${
+                      check.level === "good"
+                        ? "bg-emerald-500 text-white"
+                        : check.level === "partial"
+                          ? "bg-amber-500 text-white"
+                          : "bg-red-500 text-white"
+                    }`}>
+                      {check.level === "good" ? "✓" : check.level === "partial" ? "△" : "✗"}
+                    </div>
+                    <div className="font-bold text-base">{check.title}</div>
+                  </div>
+                  <p className="text-sm leading-relaxed">{check.detail}</p>
                   {(check.matched.length > 0 || check.missing.length > 0) && (
-                    <div className="mt-3 grid gap-2 text-xs">
+                    <div className="mt-3 space-y-1 text-sm">
                       {check.matched.length > 0 && (
-                        <div className="flex items-start gap-1">
-                          <span className="font-semibold text-emerald-700 dark:text-emerald-300">✓ 已覆盖：</span>
-                          {check.matched.join("、")}
+                        <div className="flex items-start gap-2">
+                          <span className="font-bold text-emerald-700 dark:text-emerald-300">✓ 已覆盖：</span>
+                          <span>{check.matched.join("、")}</span>
                         </div>
                       )}
                       {check.missing.length > 0 && (
-                        <div className="flex items-start gap-1">
-                          <span className="font-semibold text-amber-700 dark:text-amber-300">○ 建议补充：</span>
-                          {check.missing.join("、")}
+                        <div className="flex items-start gap-2">
+                          <span className="font-bold text-amber-700 dark:text-amber-300">○ 建议补充：</span>
+                          <span>{check.missing.join("、")}</span>
                         </div>
                       )}
                     </div>
                   )}
-                  <div className="mt-3 flex items-center gap-2">
+                  <div className="mt-4 flex items-center gap-2">
                     <button
                       onClick={() => {
                         setCheck(null)
                         setUserAnswer("")
                       }}
-                      className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                      className="inline-flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)] transition-colors"
                     >
-                      <RotateCcw size={13} />
+                      <RotateCcw size={14} />
                       再试一次
                     </button>
                     <button
                       onClick={() => setShowAnswer(true)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30 transition-colors"
                     >
                       查看解析
                     </button>
                     <button
                       onClick={() => setDone(true)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30 transition-colors"
                     >
                       标记完成
                     </button>
@@ -750,9 +776,11 @@ function ExerciseContent({ page }: { page: WikiPage }) {
               )}
 
               {showHint && !check && (
-                <p className="rounded bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
-                  {hint}
-                </p>
+                <div className="rounded-lg bg-[var(--muted)]/50 px-4 py-3 border border-[var(--border)]">
+                  <p className="text-sm text-[var(--muted-foreground)] leading-relaxed">
+                    <span className="font-semibold text-[var(--foreground)]">💡 提示：</span> {hint}
+                  </p>
+                </div>
               )}
             </div>
           ) : exerciseKind.kind === "blank" ? (
