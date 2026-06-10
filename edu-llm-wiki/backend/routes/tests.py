@@ -102,18 +102,62 @@ def _write_session(session: TestSession, project_id: str) -> None:
     )
 
 
-def _extract_json(text: str) -> dict:
+def _strip_code_fence(text: str) -> str:
     cleaned = text.strip()
+    # Common ```json / ``` markdown fence (allow language tag and trailing fence).
     if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = re.sub(r"^```(?:json|JSON)?\s*", "", cleaned, count=1)
+        cleaned = re.sub(r"\s*```\s*$", "", cleaned, count=1)
+    return cleaned.strip()
+
+
+def _balanced_json_slice(text: str) -> str | None:
+    """Find the first balanced {...} JSON object in text, ignoring braces inside strings."""
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_str = False
+        escape = False
+        for end in range(start, len(text)):
+            ch = text[end]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : end + 1]
+        start = text.find("{", start + 1)
+    return None
+
+
+def _extract_json(text: str) -> dict:
+    cleaned = _strip_code_fence(text)
+    if not cleaned:
+        raise json.JSONDecodeError("Empty response", "", 0)
+
+    # Fast path: whole response is JSON.
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", cleaned)
-        if not match:
-            raise
-        return json.loads(match.group(0))
+        pass
+
+    # Fallback: find the first balanced JSON object, tolerating leading
+    # explanatory text or stray characters the model might emit when the
+    # temperature is high (e.g. "Here is your JSON: {...}").
+    candidate = _balanced_json_slice(cleaned)
+    if not candidate:
+        raise json.JSONDecodeError("No JSON object found in response", cleaned, 0)
+    return json.loads(candidate)
 
 
 def _section(content: str, names: tuple[str, ...]) -> str:
@@ -264,11 +308,37 @@ Wiki 内容：
     raw = await chat_complete(
         system_prompt=f"{GENERATE_TEST_PROMPT}\n\n{language_instruction()}",
         messages=[{"role": "user", "content": user}],
-        temperature=0.8,
+        temperature=0.7,
         max_tokens=3500,
         response_format={"type": "json_object"},
     )
-    data = _extract_json(raw)
+    try:
+        data = _extract_json(raw)
+    except json.JSONDecodeError as first_err:
+        # High temperature sometimes leaks prose or truncates output. Retry
+        # once with a stricter system prompt and lower temperature to recover
+        # a valid JSON object before giving up.
+        retry_raw = await chat_complete(
+            system_prompt=(
+                "You are a JSON generator. Output ONLY a single JSON object "
+                "matching the schema. No markdown, no commentary, no code fence."
+            ),
+            messages=[{"role": "user", "content": user}],
+            temperature=0.2,
+            max_tokens=3500,
+            response_format={"type": "json_object"},
+        )
+        try:
+            data = _extract_json(retry_raw)
+        except json.JSONDecodeError as second_err:
+            snippet = (retry_raw or raw or "")[:240].replace("\n", " ")
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"AI did not return valid JSON. first={first_err.msg}; "
+                    f"retry={second_err.msg}; head={snippet!r}"
+                ),
+            ) from second_err
     questions: list[TestQuestion] = []
     for item in data.get("questions", []):
         if not isinstance(item, dict):
