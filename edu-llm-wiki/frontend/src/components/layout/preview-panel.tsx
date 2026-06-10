@@ -584,35 +584,169 @@ function ExerciseContent({ page }: { page: WikiPage }) {
         </div>
         <div className="p-3">
           {exerciseKind.kind === "choice" && exerciseKind.options.length >= 2 ? (
-            <div className="space-y-2">
-              {exerciseKind.options.map((option) => {
-                const selected = userAnswer.startsWith(`${option.key}.`)
-                return (
+            <div className="space-y-3">
+              {/* 选择题区域 */}
+              <div className="space-y-3">
+                {exerciseKind.options.map((option) => {
+                  const selected = userAnswer.startsWith(`${option.key}.`)
+                  const checked = check?.level !== undefined
+                  const isCorrect = referenceAnswer && referenceAnswer.startsWith(`${option.key}.`)
+                  const isUserChoice = selected
+                  const showCorrect = checked && isCorrect
+                  const showWrong = checked && isUserChoice && !isCorrect
+
+                  return (
+                    <button
+                      key={option.key}
+                      disabled={checked}
+                      onClick={() => {
+                        if (selected) {
+                          setUserAnswer("")
+                        } else {
+                          setUserAnswer(`${option.key}. ${option.text}`)
+                        }
+                        setCheck(null)
+                      }}
+                      className={`flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-all ${
+                        checked
+                          ? showCorrect
+                            ? "border-emerald-300 bg-emerald-50 ring-1 ring-emerald-300 dark:border-emerald-800 dark:bg-emerald-950/20"
+                            : showWrong
+                              ? "border-red-300 bg-red-50 ring-1 ring-red-300 dark:border-red-800 dark:bg-red-950/20"
+                              : "border-slate-200 bg-[var(--muted)]/20 dark:border-slate-800"
+                          : selected
+                            ? "border-[var(--primary)] bg-[var(--primary)]/5 ring-2 ring-[var(--primary)]/20"
+                            : "border-slate-200 hover:border-[var(--primary)]/40 hover:bg-[var(--muted)]/20 dark:border-slate-800"
+                      }`}
+                    >
+                      {/* 选项编号 */}
+                      <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-sm font-bold transition-colors ${
+                          checked
+                            ? showCorrect
+                              ? "border-emerald-500 bg-emerald-500 text-white"
+                              : showWrong
+                                ? "border-red-500 bg-red-500 text-white"
+                                : "border-slate-300 text-slate-400 dark:border-slate-700"
+                            : selected
+                              ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]"
+                              : "border-slate-300 text-slate-500 dark:border-slate-700"
+                        }`}
+                      >
+                        {option.key}
+                      </div>
+
+                      {/* 选项文本 */}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm leading-relaxed whitespace-pre-wrap"><InlineMarkdown>{option.text}</InlineMarkdown></div>
+                      </div>
+
+                      {/* 正确/错误标记 */}
+                      {checked && showCorrect && (
+                        <div className="shrink-0 text-emerald-600 font-bold text-sm">
+                          ✓ 正确答案
+                        </div>
+                      )}
+                      {checked && showWrong && (
+                        <div className="shrink-0 text-red-600 font-bold text-sm">
+                          ✗ 错误
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* 操作按钮 */}
+              {!check && (
+                <div className="flex items-center gap-2 pt-2">
                   <button
-                    key={option.key}
+                    onClick={runCheck}
+                    disabled={!userAnswer.trim() || checking}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-5 py-2.5 text-sm font-medium text-[var(--primary-foreground)] disabled:opacity-50"
+                  >
+                    {checking ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    {checking ? "判题中..." : "提交答案"}
+                  </button>
+                  <button
                     onClick={() => {
-                      if (selected) {
-                        setUserAnswer("")
-                      } else {
-                        setUserAnswer(`${option.key}. ${option.text}`)
-                      }
+                      setUserAnswer("")
                       setCheck(null)
                     }}
-                    className={`flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                      selected
-                        ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
-                        : "hover:bg-[var(--accent)]"
-                    }`}
+                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2.5 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                   >
-                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
-                      selected ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]" : "text-[var(--muted-foreground)]"
-                    }`}>
-                      {option.key}
-                    </span>
-                    <span className="min-w-0 whitespace-pre-wrap leading-relaxed"><InlineMarkdown>{option.text}</InlineMarkdown></span>
+                    <RotateCcw size={14} />
+                    清除选择
                   </button>
-                )
-              })}
+                  <button
+                    onClick={() => setShowHint((v) => !v)}
+                    className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2.5 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                  >
+                    <HelpCircle size={14} />
+                    提示
+                  </button>
+                </div>
+              )}
+
+              {/* 判题反馈 */}
+              {check && (
+                <div className={`mt-2 rounded-lg border px-4 py-3 ${
+                  check.level === "good"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
+                    : check.level === "partial"
+                      ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+                      : "border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"
+                }`}>
+                  <div className="font-semibold text-sm">{check.title}</div>
+                  <p className="mt-1 text-sm leading-relaxed">{check.detail}</p>
+                  {(check.matched.length > 0 || check.missing.length > 0) && (
+                    <div className="mt-3 grid gap-2 text-xs">
+                      {check.matched.length > 0 && (
+                        <div className="flex items-start gap-1">
+                          <span className="font-semibold text-emerald-700 dark:text-emerald-300">✓ 已覆盖：</span>
+                          {check.matched.join("、")}
+                        </div>
+                      )}
+                      {check.missing.length > 0 && (
+                        <div className="flex items-start gap-1">
+                          <span className="font-semibold text-amber-700 dark:text-amber-300">○ 建议补充：</span>
+                          {check.missing.join("、")}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setCheck(null)
+                        setUserAnswer("")
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    >
+                      <RotateCcw size={13} />
+                      再试一次
+                    </button>
+                    <button
+                      onClick={() => setShowAnswer(true)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                    >
+                      查看解析
+                    </button>
+                    <button
+                      onClick={() => setDone(true)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-1.5 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                    >
+                      标记完成
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {showHint && !check && (
+                <p className="rounded bg-[var(--muted)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
+                  {hint}
+                </p>
+              )}
             </div>
           ) : exerciseKind.kind === "blank" ? (
             <div className="space-y-2">
@@ -645,48 +779,50 @@ function ExerciseContent({ page }: { page: WikiPage }) {
               className="min-h-32 w-full resize-y rounded-md border bg-[var(--background)] px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
             />
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              onClick={runCheck}
-              disabled={!(exerciseKind.kind === "blank" ? formatBlankAnswer(blankAnswers) : userAnswer).trim() || checking || recognizingImage}
-              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
-            >
-              {checking ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
-              {checking ? "判题中..." : "检查"}
-            </button>
-            <button
-              onClick={() => setShowHint((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-            >
-              <HelpCircle size={13} />
-              提示
-            </button>
-            <button
-              onClick={() => {
-                setUserAnswer("")
-                setBlankAnswers([])
-                setCheck(null)
-                setShowAnswer(false)
-                setDone(false)
-              }}
-              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-            >
-              <RotateCcw size={13} />
-              重置
-            </button>
-            <button
-              onClick={() => setDone(true)}
-              className="sm:ml-auto inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-2 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
-            >
-              标记完成
-            </button>
-          </div>
-          {showHint && (
+          {exerciseKind.kind !== "choice" || exerciseKind.options.length < 2 ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                onClick={runCheck}
+                disabled={!(exerciseKind.kind === "blank" ? formatBlankAnswer(blankAnswers) : userAnswer).trim() || checking || recognizingImage}
+                className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
+              >
+                {checking ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                {checking ? "判题中..." : "检查"}
+              </button>
+              <button
+                onClick={() => setShowHint((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              >
+                <HelpCircle size={13} />
+                提示
+              </button>
+              <button
+                onClick={() => {
+                  setUserAnswer("")
+                  setBlankAnswers([])
+                  setCheck(null)
+                  setShowAnswer(false)
+                  setDone(false)
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              >
+                <RotateCcw size={13} />
+                重置
+              </button>
+              <button
+                onClick={() => setDone(true)}
+                className="sm:ml-auto inline-flex items-center gap-1.5 rounded-md border border-emerald-500 px-3 py-2 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+              >
+                标记完成
+              </button>
+            </div>
+          ) : null}
+          {showHint && (exerciseKind.kind !== "choice" || exerciseKind.options.length < 2) && (
             <p className="mt-2 rounded bg-[var(--muted)] px-2 py-1.5 text-xs text-[var(--muted-foreground)]">
               {hint}
             </p>
           )}
-          {check && (
+          {check && (exerciseKind.kind !== "choice" || exerciseKind.options.length < 2) && (
             <div className={`mt-2 rounded-md border px-3 py-2 text-xs ${feedbackTone}`}>
               <div className="font-medium">{check.title}</div>
               <p className="mt-1 leading-relaxed">{check.detail}</p>
