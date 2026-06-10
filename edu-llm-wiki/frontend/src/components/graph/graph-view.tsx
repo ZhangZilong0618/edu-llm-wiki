@@ -18,6 +18,23 @@ const TYPE_COLORS: Record<string, string> = {
   synthesis: "#ec4899",
 }
 
+const TYPE_LABELS: Record<string, string> = {
+  concept: "概念",
+  formula: "公式",
+  principle: "原理",
+  exercise: "练习",
+  source: "来源",
+  synthesis: "综合",
+  unknown: "其他",
+}
+
+const EDGE_LABELS: Record<string, string> = {
+  prerequisite: "前置知识",
+  direct: "直接引用",
+  source: "同一来源",
+  related: "相关",
+}
+
 const COMMUNITY_COLORS = [
   "#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6",
   "#ec4899", "#06b6d4", "#84cc16", "#f97316", "#6366f1",
@@ -26,9 +43,33 @@ const COMMUNITY_COLORS = [
 
 type ColorMode = "type" | "community"
 type HoverState = { node: string; neighbors: Set<string>; hoveredEdge: string | null } | null
+type SelectedNodeData = {
+  node: GraphNode
+  neighbors: { node: GraphNode; edgeType: string; weight: number }[]
+  degree: number
+}
+
+const DEFAULT_HIDDEN_TYPES = ["source", "unknown"]
 
 function nodeColor(type: string): string {
   return TYPE_COLORS[type] || "#94a3b8"
+}
+
+function typeLabel(type: string): string {
+  return TYPE_LABELS[type] || type
+}
+
+function edgeLabel(type: string): string {
+  return EDGE_LABELS[type] || "相关"
+}
+
+function readableLabel(label: string, max = 22): string {
+  const clean = label.replace(/\.(md|pdf|docx?|pptx?)$/i, "").replace(/[_-]+/g, " ").trim()
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
+}
+
+function isStrongEdge(edge: { edge_type: string; weight: number }): boolean {
+  return edge.edge_type === "direct" || edge.edge_type === "prerequisite" || edge.weight >= 8
 }
 
 function mixColor(color: string, mix: string, ratio: number): string {
@@ -42,7 +83,7 @@ function mixColor(color: string, mix: string, ratio: number): string {
 function layoutIterations(count: number): number {
   if (count > 500) return 30
   if (count > 200) return 60
-  return 100
+  return 80
 }
 
 function normalizeGraphPositions(graph: Graph, targetSpan: number) {
@@ -72,6 +113,71 @@ function normalizeGraphPositions(graph: Graph, targetSpan: number) {
   })
 }
 
+function packGraphComponents(graph: Graph) {
+  const visited = new Set<string>()
+  const components: string[][] = []
+
+  graph.forEachNode((start) => {
+    if (visited.has(start)) return
+    const stack = [start]
+    const component: string[] = []
+    visited.add(start)
+    while (stack.length > 0) {
+      const node = stack.pop()
+      if (!node) continue
+      component.push(node)
+      for (const next of graph.neighbors(node)) {
+        if (visited.has(next)) continue
+        visited.add(next)
+        stack.push(next)
+      }
+    }
+    components.push(component)
+  })
+
+  if (components.length <= 1) return
+
+  const boxes = components
+    .sort((a, b) => b.length - a.length)
+    .map((nodes) => {
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+      for (const node of nodes) {
+        const x = Number(graph.getNodeAttribute(node, "x") ?? 0)
+        const y = Number(graph.getNodeAttribute(node, "y") ?? 0)
+        minX = Math.min(minX, x)
+        maxX = Math.max(maxX, x)
+        minY = Math.min(minY, y)
+        maxY = Math.max(maxY, y)
+      }
+      return {
+        nodes,
+        centerX: (minX + maxX) / 2,
+        centerY: (minY + maxY) / 2,
+        width: Math.max(maxX - minX, 1),
+        height: Math.max(maxY - minY, 1),
+      }
+    })
+
+  const cols = Math.ceil(Math.sqrt(boxes.length))
+  const rows = Math.ceil(boxes.length / cols)
+  const cellW = Math.max(...boxes.map((box) => box.width)) + 0.7
+  const cellH = Math.max(...boxes.map((box) => box.height)) + 0.7
+
+  boxes.forEach((box, index) => {
+    const col = index % cols
+    const row = Math.floor(index / cols)
+    const targetX = (col - (cols - 1) / 2) * cellW
+    const targetY = (row - (rows - 1) / 2) * cellH
+    for (const node of box.nodes) {
+      graph.setNodeAttribute(node, "x", Number(graph.getNodeAttribute(node, "x") ?? 0) - box.centerX + targetX)
+      graph.setNodeAttribute(node, "y", Number(graph.getNodeAttribute(node, "y") ?? 0) - box.centerY + targetY)
+    }
+  })
+}
+
 // ─── Inner Components ─────────────────────────────────────────────
 
 function GraphLoader({
@@ -95,7 +201,7 @@ function GraphLoader({
     const maxSize = Math.max(...data.nodes.map((n) => n.size), 1)
     const cx = 0
     const cy = 0
-    const radius = Math.max(4, Math.sqrt(data.nodes.length) * 1.8 * spacing)
+    const radius = Math.max(2.5, Math.sqrt(data.nodes.length) * 0.9 * spacing)
 
     for (let i = 0; i < data.nodes.length; i++) {
       const node = data.nodes[i]
@@ -110,7 +216,8 @@ function GraphLoader({
         y: cy + radius * Math.sin(angle),
         size: size * nodeScale,
         color,
-        label: node.label,
+        label: readableLabel(node.label),
+        fullLabel: node.label,
         nodeType: node.node_type,
         community: node.community,
       })
@@ -128,10 +235,11 @@ function GraphLoader({
           const t = (edge.weight - minW) / weightRange
           const opacity = 0.12 + t * 0.78
           graph.addEdgeWithKey(key, edge.source, edge.target, {
-            size: 0.3 + t * 3.7,
-            color: `rgba(71,85,105,${opacity})`,
+            size: 0.4 + t * 2.4,
+            color: `rgba(100,116,139,${Math.min(opacity, 0.48)})`,
             weight: edge.weight,
-            label: edge.weight.toFixed(1),
+            edgeType: edge.edge_type,
+            label: edgeLabel(edge.edge_type),
           })
         }
       }
@@ -144,16 +252,18 @@ function GraphLoader({
         iterations: layoutIterations(data.nodes.length),
         settings: {
           ...settings,
-          gravity: 0.25,
-          scalingRatio: spacing * 4,
-          slowDown: 2,
+          gravity: 0.9,
+          scalingRatio: spacing * 1.7,
+          slowDown: 3,
           strongGravityMode: false,
           barnesHutOptimize: data.nodes.length > 50,
         },
       })
     }
 
-    normalizeGraphPositions(graph, Math.max(8, Math.sqrt(data.nodes.length) * 2.4 * spacing))
+    normalizeGraphPositions(graph, Math.max(3.8, Math.sqrt(data.nodes.length) * 0.9 * spacing))
+    packGraphComponents(graph)
+    normalizeGraphPositions(graph, Math.max(3.6, Math.sqrt(data.nodes.length) * 0.75 * spacing))
     loadGraph(graph)
     sigma.getCamera().animatedReset({ duration: 0 })
     sigma.refresh()
@@ -197,8 +307,8 @@ function GraphSettings({
     setSettings({
       hideEdgesOnMove: true,
       hideLabelsOnMove: true,
-      labelDensity: nodeCount > 200 ? 0.2 : 0.4,
-      labelRenderedSizeThreshold: nodeCount > 200 ? 14 : 6,
+      labelDensity: nodeCount > 200 ? 0.08 : nodeCount > 80 ? 0.16 : 0.28,
+      labelRenderedSizeThreshold: nodeCount > 200 ? 16 : nodeCount > 80 ? 11 : 8,
       nodeReducer: (_node, attrs) => {
         const result = { ...attrs }
         const hasHover = !!hoverState
@@ -388,13 +498,13 @@ function EdgeLabelOverlay({ hoverState }: { hoverState: HoverState }) {
       const sy = graph.getNodeAttribute(ext[0], "y") as number
       const tx = graph.getNodeAttribute(ext[1], "x") as number
       const ty = graph.getNodeAttribute(ext[1], "y") as number
-      const weight = graph.getEdgeAttribute(edge, "weight") as number
+      const edgeType = graph.getEdgeAttribute(edge, "edgeType") as string
       const vp = sigma.framedGraphToViewport({ x: (sx + tx) / 2, y: (sy + ty) / 2 })
       labels.push({
         key: edge,
         x: rect.left + vp.x,
         y: rect.top + vp.y - 8,
-        text: weight.toFixed(1),
+        text: edgeLabel(edgeType),
       })
     })
   } else if (hoverState.hoveredEdge) {
@@ -405,13 +515,13 @@ function EdgeLabelOverlay({ hoverState }: { hoverState: HoverState }) {
       const sy = graph.getNodeAttribute(ext[0], "y") as number
       const tx = graph.getNodeAttribute(ext[1], "x") as number
       const ty = graph.getNodeAttribute(ext[1], "y") as number
-      const weight = graph.getEdgeAttribute(edge, "weight") as number
+      const edgeType = graph.getEdgeAttribute(edge, "edgeType") as string
       const vp = sigma.framedGraphToViewport({ x: (sx + tx) / 2, y: (sy + ty) / 2 })
       labels.push({
         key: edge,
         x: rect.left + vp.x,
         y: rect.top + vp.y - 8,
-        text: weight.toFixed(1),
+        text: edgeLabel(edgeType),
       })
     }
   }
@@ -474,13 +584,14 @@ export function GraphView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [selectedNodeData, setSelectedNodeData] = useState<{ node: GraphNode; neighbors: GraphNode[]; degree: number } | null>(null)
+  const [selectedNodeData, setSelectedNodeData] = useState<SelectedNodeData | null>(null)
   const [colorMode, setColorMode] = useState<ColorMode>("type")
   const [hoverState, setHoverState] = useState<HoverState>(null)
   const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set())
   const [showFilters, setShowFilters] = useState(false)
   const [showInsights, setShowInsights] = useState(false)
-  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set())
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_TYPES))
+  const [showWeakLinks, setShowWeakLinks] = useState(false)
   const [nodeScale, setNodeScale] = useState(1)
   const [spacing, setSpacing] = useState(1)
   const [graphSearch, setGraphSearch] = useState("")
@@ -511,13 +622,16 @@ export function GraphView() {
       setSelectedNodeData(null)
       return
     }
-    const neighborIds = new Set<string>()
+    const relationMap = new Map<string, { edgeType: string; weight: number }>()
     for (const e of data.edges) {
-      if (e.source === selectedNode) neighborIds.add(e.target)
-      if (e.target === selectedNode) neighborIds.add(e.source)
+      if (e.source === selectedNode) relationMap.set(e.target, { edgeType: e.edge_type, weight: e.weight })
+      if (e.target === selectedNode) relationMap.set(e.source, { edgeType: e.edge_type, weight: e.weight })
     }
-    const neighbors = data.nodes.filter((n) => neighborIds.has(n.id))
-    setSelectedNodeData({ node, neighbors, degree: neighborIds.size })
+    const neighbors = data.nodes
+      .filter((n) => relationMap.has(n.id))
+      .map((n) => ({ node: n, ...(relationMap.get(n.id) || { edgeType: "related", weight: 0 }) }))
+      .sort((a, b) => b.weight - a.weight)
+    setSelectedNodeData({ node, neighbors, degree: neighbors.length })
   }, [selectedNode, data])
 
   // Filter by hidden types
@@ -531,8 +645,8 @@ export function GraphView() {
 
   const filteredEdges = useMemo(() => {
     if (!data) return []
-    return data.edges.filter((e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target))
-  }, [data, filteredNodeIds])
+    return data.edges.filter((e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target) && (showWeakLinks || isStrongEdge(e)))
+  }, [data, filteredNodeIds, showWeakLinks])
 
   // Graph search
   const searchResults = useMemo(() => {
@@ -580,7 +694,9 @@ export function GraphView() {
   }, [data])
 
   const totalHidden = data ? data.nodes.length - filteredNodes.length : 0
-  const filtersActive = hiddenTypes.size > 0 || nodeScale !== 1 || spacing !== 1
+  const weakHidden = data ? data.edges.filter((e) => !isStrongEdge(e)).length : 0
+  const hiddenTypesChanged = hiddenTypes.size !== DEFAULT_HIDDEN_TYPES.length || DEFAULT_HIDDEN_TYPES.some((type) => !hiddenTypes.has(type))
+  const filtersActive = hiddenTypesChanged || showWeakLinks || nodeScale !== 1 || spacing !== 1
   const searchActive = graphSearch.trim().length > 0
   const hasInsights = data && data.insights.length > 0
 
@@ -588,7 +704,7 @@ export function GraphView() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--muted-foreground)]">
         <RefreshCw className="h-8 w-8 animate-spin opacity-50" />
-        <p className="text-sm">Building graph...</p>
+        <p className="text-sm">正在整理知识图谱...</p>
       </div>
     )
   }
@@ -606,8 +722,8 @@ export function GraphView() {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
         <div className="text-center">
-          <p className="text-lg mb-2">No graph data yet</p>
-          <p>Import documents and run ingest to build the knowledge graph.</p>
+          <p className="text-lg mb-2">还没有图谱数据</p>
+          <p>导入文献并生成 wiki 后，这里会显示知识点之间的关系。</p>
         </div>
       </div>
     )
@@ -620,18 +736,23 @@ export function GraphView() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Network className="h-4 w-4 text-[var(--muted-foreground)]" />
-            <span className="text-sm font-medium">Knowledge Graph</span>
+            <span className="text-sm font-medium">知识图谱</span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
             <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">
-              {searchResults.nodes.length}/{data.nodes.length} nodes
+              {searchResults.nodes.length}/{data.nodes.length} 个知识点
             </span>
             <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">
-              {searchResults.edges.length}/{data.edges.length} edges
+              {searchResults.edges.length}/{data.edges.length} 条关系
             </span>
             {totalHidden > 0 && (
               <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-600">
-                {totalHidden} hidden
+                已隐藏 {totalHidden}
+              </span>
+            )}
+            {!showWeakLinks && weakHidden > 0 && (
+              <span className="rounded bg-slate-500/10 px-1.5 py-0.5">
+                弱关系已收起
               </span>
             )}
           </div>
@@ -648,7 +769,7 @@ export function GraphView() {
                 onChange={(e) => setGraphSearch(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Escape") { setGraphSearch(""); setSearchOpen(false) } }}
                 className="h-7 w-full rounded-md border bg-[var(--background)] pl-7 pr-7 text-xs outline-none focus:border-[var(--primary)]"
-                placeholder="Search nodes..."
+                placeholder="搜索知识点..."
               />
               <button
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -666,6 +787,7 @@ export function GraphView() {
           {/* Filter toggle */}
           <button
             onClick={() => setShowFilters((v) => !v)}
+            title="筛选显示内容"
             className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${showFilters ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
           >
             <Filter className="h-3 w-3" />
@@ -674,7 +796,8 @@ export function GraphView() {
           {/* Fillters reset */}
           {filtersActive && (
             <button
-              onClick={() => { setHiddenTypes(new Set()); setNodeScale(1); setSpacing(1) }}
+              onClick={() => { setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES)); setShowWeakLinks(false); setNodeScale(1); setSpacing(1) }}
+              title="恢复默认视图"
               className="h-7 px-2 text-xs rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] flex items-center gap-1"
             >
               <RotateCcw className="h-3 w-3" />
@@ -684,12 +807,14 @@ export function GraphView() {
           {/* Color mode */}
           <button
             onClick={() => setColorMode("type")}
+            title="按知识类型着色"
             className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${colorMode === "type" ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
           >
             <Tag className="h-3 w-3" />
           </button>
           <button
             onClick={() => setColorMode("community")}
+            title="按知识簇着色"
             className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${colorMode === "community" ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
           >
             <Layers className="h-3 w-3" />
@@ -699,6 +824,7 @@ export function GraphView() {
           {hasInsights && (
             <button
               onClick={() => setShowInsights((v) => !v)}
+              title="查看图谱诊断"
               className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${showInsights ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
             >
               {data.insights.length}
@@ -713,7 +839,7 @@ export function GraphView() {
           {!visibleData || visibleData.nodes.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-[var(--muted-foreground)]">
               <Search className="h-8 w-8 opacity-40" />
-              <p className="text-sm">{searchActive ? "No matching nodes" : "No visible nodes"}</p>
+              <p className="text-sm">{searchActive ? "没有匹配的知识点" : "当前筛选下没有可见节点"}</p>
             </div>
           ) : (
             <SigmaContainer
@@ -732,7 +858,7 @@ export function GraphView() {
                 labelDensity: 0.1,
                 labelRenderedSizeThreshold: 2,
                 hideLabelsOnMove: false,
-                stagePadding: 30,
+                stagePadding: 90,
               }}
             >
               <GraphLoader data={visibleData} colorMode={colorMode} nodeScale={nodeScale} spacing={spacing} />
@@ -759,14 +885,26 @@ export function GraphView() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1 font-semibold">
                   <Filter className="h-3 w-3" />
-                  Filters
+                  图谱筛选
                 </div>
               </div>
+
+              <label className="flex items-center gap-2 rounded-md border px-2 py-1.5">
+                <input
+                  type="checkbox"
+                  checked={showWeakLinks}
+                  onChange={(e) => setShowWeakLinks(e.target.checked)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium">显示弱关系</span>
+                  <span className="block text-[10px] text-[var(--muted-foreground)]">默认收起来源相同、相关度较低的边</span>
+                </span>
+              </label>
 
               {/* Node scale slider */}
               <label className="block space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-[var(--muted-foreground)]">Node size</span>
+                  <span className="text-[var(--muted-foreground)]">节点大小</span>
                   <span>{Math.round(nodeScale * 100)}%</span>
                 </div>
                 <input
@@ -780,7 +918,7 @@ export function GraphView() {
               {/* Spacing slider */}
               <label className="block space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-[var(--muted-foreground)]">Spacing</span>
+                  <span className="text-[var(--muted-foreground)]">间距</span>
                   <span>{Math.round(spacing * 100)}%</span>
                 </div>
                 <input
@@ -793,7 +931,7 @@ export function GraphView() {
 
               {/* Type toggles */}
               <div className="space-y-1">
-                <div className="font-medium text-[var(--muted-foreground)]">Node types</div>
+                <div className="font-medium text-[var(--muted-foreground)]">知识类型</div>
                 {Object.entries(typeCounts).map(([type, count]) => (
                   <label key={type} className="flex items-center gap-1.5">
                     <input
@@ -808,7 +946,7 @@ export function GraphView() {
                       }}
                     />
                     <span className="w-2 h-2 rounded-full" style={{ background: nodeColor(type) }} />
-                    <span className="truncate">{type}</span>
+                    <span className="truncate">{typeLabel(type)}</span>
                     <span className="text-[var(--muted-foreground)] ml-auto">{count}</span>
                   </label>
                 ))}
@@ -820,7 +958,7 @@ export function GraphView() {
           <div className="absolute bottom-3 left-3 rounded-lg border bg-[var(--background)]/90 backdrop-blur-sm px-2.5 py-1.5 text-xs shadow-sm max-w-[220px]">
             <div className="flex items-center gap-1 mb-1">
               <span className="font-semibold text-xs">
-                {colorMode === "type" ? "Node Types" : "Communities"}
+                {colorMode === "type" ? "知识类型" : "知识簇"}
               </span>
             </div>
             {colorMode === "type"
@@ -837,7 +975,7 @@ export function GraphView() {
                       })}
                     >
                       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: nodeColor(type) }} />
-                      <span className="text-[var(--muted-foreground)] truncate">{type}</span>
+                      <span className="text-[var(--muted-foreground)] truncate">{typeLabel(type)}</span>
                       <span className="text-[var(--muted-foreground)]/60 ml-auto">{count}</span>
                     </div>
                   )
@@ -857,7 +995,7 @@ export function GraphView() {
         {showInsights && hasInsights && (
           <div className="w-72 shrink-0 border-l bg-[var(--background)] overflow-y-auto">
             <div className="flex items-center justify-between px-3 py-2 border-b">
-              <span className="text-sm font-medium">Insights</span>
+              <span className="text-sm font-medium">图谱诊断</span>
               <button onClick={() => setShowInsights(false)} className="p-0.5 rounded hover:bg-[var(--muted)]">
                 <X className="h-4 w-4" />
               </button>
@@ -903,10 +1041,10 @@ export function GraphView() {
                   className="w-2.5 h-2.5 rounded-full"
                   style={{ background: nodeColor(selectedNodeData.node.node_type) }}
                 />
-                <span className="text-xs font-medium capitalize">{selectedNodeData.node.node_type}</span>
+                <span className="text-xs font-medium">{typeLabel(selectedNodeData.node.node_type)}</span>
                 {selectedNodeData.node.community >= 0 && (
                   <span className="text-xs text-[var(--muted-foreground)] ml-auto">
-                    Community {selectedNodeData.node.community}
+                    知识簇 {selectedNodeData.node.community + 1}
                   </span>
                 )}
               </div>
@@ -915,11 +1053,11 @@ export function GraphView() {
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-md bg-[var(--muted)] p-2 text-center">
                   <div className="text-lg font-semibold">{selectedNodeData.degree}</div>
-                  <div className="text-xs text-[var(--muted-foreground)]">Connections</div>
+                  <div className="text-xs text-[var(--muted-foreground)]">关联</div>
                 </div>
                 <div className="rounded-md bg-[var(--muted)] p-2 text-center">
                   <div className="text-lg font-semibold">{selectedNodeData.node.size}</div>
-                  <div className="text-xs text-[var(--muted-foreground)]">References</div>
+                  <div className="text-xs text-[var(--muted-foreground)]">引用</div>
                 </div>
               </div>
 
@@ -932,17 +1070,17 @@ export function GraphView() {
                 className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md border hover:bg-[var(--accent)] transition-colors"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
-                Open in Wiki
+                打开页面
               </button>
 
               {/* Neighbors */}
               {selectedNodeData.neighbors.length > 0 && (
                 <div>
                   <div className="text-xs font-medium text-[var(--muted-foreground)] mb-2">
-                    Connected Nodes ({selectedNodeData.neighbors.length})
+                    相关知识点 ({selectedNodeData.neighbors.length})
                   </div>
                   <div className="space-y-1 max-h-60 overflow-y-auto">
-                    {selectedNodeData.neighbors.map((n) => (
+                    {selectedNodeData.neighbors.map(({ node: n, edgeType }) => (
                       <button
                         key={n.id}
                         onClick={() => setSelectedNode(n.id)}
@@ -953,8 +1091,8 @@ export function GraphView() {
                           style={{ background: nodeColor(n.node_type) }}
                         />
                         <span className="truncate">{n.label}</span>
-                        <span className="text-[var(--muted-foreground)] ml-auto capitalize text-[10px]">
-                          {n.node_type}
+                        <span className="ml-auto shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
+                          {edgeLabel(edgeType)}
                         </span>
                       </button>
                     ))}

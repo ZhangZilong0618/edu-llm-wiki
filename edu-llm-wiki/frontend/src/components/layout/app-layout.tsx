@@ -9,12 +9,13 @@ import { GraphView } from "@/components/graph/graph-view"
 import { SettingsView } from "@/components/settings/settings-view"
 import { ChatPanel } from "@/components/chat/chat-panel"
 import { LearnView } from "@/components/learn/learn-view"
+import { TestsView } from "@/components/tests/tests-view"
 
 export function AppLayout() {
   const activeView = useAppStore((s) => s.activeView)
   const currentProject = useAppStore((s) => s.currentProject)
   const isSourcesView = activeView === "sources"
-  const hideSidebars = activeView === "settings" || activeView === "graph"
+  const hideSidebars = activeView === "settings" || activeView === "graph" || activeView === "tests"
   const hidePreview = isSourcesView || hideSidebars
 
   const renderSidebar = () => {
@@ -34,6 +35,8 @@ export function AppLayout() {
         return <GraphView key={currentProject} />
       case "learn":
         return <LearnView key={currentProject} />
+      case "tests":
+        return <TestsView key={currentProject} />
       case "sources":
         return <SourcePreview />
       default:

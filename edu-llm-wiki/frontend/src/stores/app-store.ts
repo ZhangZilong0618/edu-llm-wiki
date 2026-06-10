@@ -1,11 +1,11 @@
 import { create } from "zustand"
 import type { SearchResult, WikiPage } from "@/types/wiki"
 
-export type ActiveView = "wiki" | "sources" | "search" | "graph" | "settings" | "learn" | "chat"
+export type ActiveView = "wiki" | "sources" | "search" | "graph" | "settings" | "learn" | "chat" | "tests"
 
 const PROJECT_STORAGE_KEY = "edu-llm-wiki.currentProject"
 const ACTIVE_VIEW_STORAGE_KEY = "edu-llm-wiki.activeView"
-const ACTIVE_VIEWS: ActiveView[] = ["wiki", "sources", "search", "graph", "settings", "learn", "chat"]
+const ACTIVE_VIEWS: ActiveView[] = ["wiki", "sources", "search", "graph", "settings", "learn", "chat", "tests"]
 
 function initialProject(): string {
   if (typeof window === "undefined") return "default"
@@ -32,6 +32,11 @@ export interface IngestProgress {
     updated?: number
   }[]
   error?: string
+}
+
+export interface OperationState {
+  label: string
+  startedAt: number
 }
 
 interface AppState {
@@ -67,6 +72,15 @@ interface AppState {
   ingestProgress: IngestProgress | null
   setIngestProgress: (p: IngestProgress | null) => void
   updateIngestProgress: (fn: (prev: IngestProgress | null) => IngestProgress | null) => void
+
+  // Long-running UI operations survive view switches.
+  operations: Record<string, OperationState>
+  beginOperation: (key: string, label?: string) => void
+  endOperation: (key: string) => void
+
+  // Per-page research notes/results should survive preview unmounts.
+  researchStates: Record<string, unknown>
+  updateResearchState: (path: string, patch: Record<string, unknown>, initial?: Record<string, unknown>) => void
 
   // Knowledge tree pages
   wikiPages: { path: string; title: string; type: string; summary: string }[]
@@ -137,6 +151,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   ingestProgress: null,
   setIngestProgress: (p) => set({ ingestProgress: p }),
   updateIngestProgress: (fn) => set((s) => ({ ingestProgress: fn(s.ingestProgress) })),
+
+  operations: {},
+  beginOperation: (key, label = "处理中") => set((s) => ({
+    operations: {
+      ...s.operations,
+      [key]: { label, startedAt: Date.now() },
+    },
+  })),
+  endOperation: (key) => set((s) => {
+    const next = { ...s.operations }
+    delete next[key]
+    return { operations: next }
+  }),
+
+  researchStates: {},
+  updateResearchState: (path, patch, initial = {}) => set((s) => ({
+    researchStates: {
+      ...s.researchStates,
+      [path]: {
+        ...(s.researchStates[path] as Record<string, unknown> | undefined || initial),
+        ...patch,
+      },
+    },
+  })),
 
   wikiPages: [],
   setWikiPages: (pages) => set({ wikiPages: pages }),

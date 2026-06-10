@@ -241,6 +241,7 @@ export const api = {
       detail: string
       matched: string[]
       missing: string[]
+      evidence: string[]
       suggested_answer?: string | null
       source: string
     }>(`${BASE}/exercises/check?${p()}`, { method: "POST", body: JSON.stringify(data) }),
@@ -289,6 +290,19 @@ export const api = {
       `${BASE}/research/save-note?${p()}`,
       { method: "POST", body: JSON.stringify(data) }
     ),
+
+  // Tests
+  listTests: () => request<TestSummary[]>(`${BASE}/tests?${p()}`),
+  createTest: (data: TestCreateRequest) =>
+    request<TestSession>(`${BASE}/tests?${p()}`, { method: "POST", body: JSON.stringify(data) }),
+  getTest: (id: string) => request<TestSession>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`),
+  submitTest: (id: string, answers: Record<string, string | string[]>) =>
+    request<TestSession>(`${BASE}/tests/${encodeURIComponent(id)}/submit?${p()}`, {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    }),
+  deleteTest: (id: string) =>
+    request<{ status: string; id: string }>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`, { method: "DELETE" }),
 }
 
 export interface LlmSettings {
@@ -324,4 +338,64 @@ export interface ParseStatus {
   error: string | null
   markdown_path: string | null
   job_id?: string
+}
+
+export interface TestCreateRequest {
+  title?: string
+  scope: "wiki" | "source"
+  source?: string | null
+  question_count: number
+  question_types: string[]
+  difficulty: string
+  mode: string
+}
+
+export interface TestQuestion {
+  id: string
+  type: "multiple_choice" | "fill_blank" | "short_answer"
+  prompt: string
+  options: string[]
+  blanks: number
+  answer: string | string[]
+  explanation: string
+  related_page: string | null
+  concepts: string[]
+  difficulty: string
+}
+
+export interface TestAttempt {
+  question_id: string
+  user_answer: string | string[]
+  score: number
+  max_score: number
+  level: "empty" | "weak" | "partial" | "good"
+  feedback: string
+  correct_answer: string | string[]
+}
+
+export interface TestSession {
+  id: string
+  title: string
+  scope: string
+  source: string | null
+  mode: string
+  difficulty: string
+  status: "active" | "submitted"
+  questions: TestQuestion[]
+  attempts: TestAttempt[]
+  score: number | null
+  max_score: number | null
+  created_at: string
+  submitted_at: string | null
+}
+
+export interface TestSummary {
+  id: string
+  title: string
+  status: "active" | "submitted"
+  question_count: number
+  score: number | null
+  max_score: number | null
+  created_at: string
+  submitted_at: string | null
 }

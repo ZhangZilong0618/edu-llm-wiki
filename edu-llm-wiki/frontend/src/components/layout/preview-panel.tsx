@@ -141,6 +141,7 @@ type AnswerCheck = {
   detail: string
   matched: string[]
   missing: string[]
+  evidence?: string[]
 }
 
 type ChoiceOption = {
@@ -328,6 +329,7 @@ function checkAnswer(answer: string, solution: string | null): AnswerCheck {
       detail: "先写一点你的思路：已知量是什么、要求什么、准备用哪个公式或原理。",
       matched: [],
       missing: [],
+      evidence: [],
     }
   }
   if (normalized.length < 8 || LOW_EFFORT_RE.test(normalized)) {
@@ -337,6 +339,7 @@ function checkAnswer(answer: string, solution: string | null): AnswerCheck {
       detail: "现在更像是在表达“不会”。请至少写出一个可检查的步骤，例如使用的原理、关键公式、变量含义或最终表达式。",
       matched: [],
       missing: solution ? extractKeyTerms(solution).slice(0, 5) : [],
+      evidence: solution ? ["本地检查基于当前题目的参考解析。"] : [],
     }
   }
   if (!solution) {
@@ -346,6 +349,7 @@ function checkAnswer(answer: string, solution: string | null): AnswerCheck {
       detail: "这道题没有解析区，暂时无法自动对照标准答案；建议补充标准解答后再检查。",
       matched: [],
       missing: [],
+      evidence: [],
     }
   }
 
@@ -362,6 +366,7 @@ function checkAnswer(answer: string, solution: string | null): AnswerCheck {
       detail: "你的回答覆盖了主要要点。下一步可以对照解析检查符号、单位、推导顺序和最终表达式是否完整。",
       matched,
       missing,
+      evidence: ["本地检查基于你的回答与当前题目参考解析中的关键词覆盖情况。"],
     }
   }
   if (coverage >= 0.25 || matched.length >= 2) {
@@ -371,6 +376,7 @@ function checkAnswer(answer: string, solution: string | null): AnswerCheck {
       detail: "建议补上缺失的关键量、公式或推导关系。计算题不要只写结论，最好写出从已知量到目标量的列式过程。",
       matched,
       missing,
+      evidence: ["本地检查基于你的回答与当前题目参考解析中的关键词覆盖情况。"],
     }
   }
   return {
@@ -379,23 +385,52 @@ function checkAnswer(answer: string, solution: string | null): AnswerCheck {
     detail: "先看提示，尝试写出本题使用的原理和关键公式；目前回答里没有覆盖参考解析中的核心信息。",
     matched,
     missing,
+    evidence: ["本地检查基于你的回答与当前题目参考解析中的关键词覆盖情况。"],
   }
+}
+
+function CheckEvidence({ evidence, compact = false }: { evidence?: string[]; compact?: boolean }) {
+  const items = (evidence || []).filter((item) => item.trim()).slice(0, 6)
+  if (items.length === 0) return null
+
+  return (
+    <div className={compact ? "mt-2 space-y-1" : "mt-3 space-y-1 text-sm"}>
+      <div className="font-medium">判题依据：</div>
+      <ul className="list-disc space-y-1 pl-4 leading-relaxed">
+        {items.map((item, index) => (
+          <li key={`${index}-${item.slice(0, 16)}`}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 function ExerciseContent({ page }: { page: WikiPage }) {
   const content = page.content
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
+  const operations = useAppStore((s) => s.operations)
+  const beginOperation = useAppStore((s) => s.beginOperation)
+  const endOperation = useAppStore((s) => s.endOperation)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const [showAnswer, setShowAnswer] = useState(false)
   const [showHint, setShowHint] = useState(false)
   const [userAnswer, setUserAnswer] = useState("")
   const [blankAnswers, setBlankAnswers] = useState<string[]>([])
   const [check, setCheck] = useState<AnswerCheck | null>(null)
-  const [checking, setChecking] = useState(false)
-  const [recognizingImage, setRecognizingImage] = useState(false)
+  const [answerUnlocked, setAnswerUnlocked] = useState(false)
   const [draggingImage, setDraggingImage] = useState(false)
-  const [completingAction, setCompletingAction] = useState<"complete" | "regenerate" | null>(null)
   const [done, setDone] = useState(false)
+  const checkKey = `exercise:check:${page.path}`
+  const recognizeKey = `exercise:recognize:${page.path}`
+  const completeKey = `exercise:complete:${page.path}`
+  const regenerateKey = `exercise:regenerate:${page.path}`
+  const checking = Boolean(operations[checkKey])
+  const recognizingImage = Boolean(operations[recognizeKey])
+  const completingAction: "complete" | "regenerate" | null = operations[completeKey]
+    ? "complete"
+    : operations[regenerateKey]
+      ? "regenerate"
+      : null
 
   useEffect(() => {
     setShowAnswer(false)
@@ -403,8 +438,8 @@ function ExerciseContent({ page }: { page: WikiPage }) {
     setUserAnswer("")
     setBlankAnswers([])
     setCheck(null)
+    setAnswerUnlocked(false)
     setDraggingImage(false)
-    setCompletingAction(null)
     setDone(false)
   }, [page.path])
 
@@ -417,6 +452,8 @@ function ExerciseContent({ page }: { page: WikiPage }) {
   const inferredReferenceAnswer = inferReferenceAnswer(question, parsedReferenceAnswer)
   const exerciseKind = parseExerciseKind(question, explicitExerciseType, explicitExerciseOptions, inferredReferenceAnswer || parsedReferenceAnswer)
   const referenceAnswer = cleanReferenceAnswerForKind(inferredReferenceAnswer, exerciseKind)
+  const currentAnswerText = exerciseKind.kind === "blank" ? formatBlankAnswer(blankAnswers) : userAnswer
+  const canRevealAnswer = answerUnlocked || done
   const needsSolution = !hasUsefulSolution(parsedReferenceAnswer)
   const hint = buildHint(question, referenceAnswer)
   const feedbackTone = check?.level === "good"
@@ -426,13 +463,15 @@ function ExerciseContent({ page }: { page: WikiPage }) {
       : "border-slate-200 bg-slate-100 text-[var(--muted-foreground)] dark:border-slate-800 dark:bg-slate-900"
 
   const runCheck = async () => {
-    const answerForCheck = exerciseKind.kind === "blank" ? formatBlankAnswer(blankAnswers) : userAnswer
+    const answerForCheck = currentAnswerText
     const fallback = checkAnswer(answerForCheck, referenceAnswer)
     if (fallback.level === "empty") {
+      setShowAnswer(false)
+      setAnswerUnlocked(false)
       setCheck(fallback)
       return
     }
-    setChecking(true)
+    beginOperation(checkKey, "AI 判题中")
     try {
       const res = await api.checkExercise({
         question,
@@ -448,17 +487,21 @@ function ExerciseContent({ page }: { page: WikiPage }) {
         detail: res.detail,
         matched: res.matched || [],
         missing: res.missing || [],
+        evidence: res.evidence || [],
       })
+      setAnswerUnlocked(true)
     } catch (e: any) {
       setCheck({ ...fallback, title: `${fallback.title}（本地兜底）` })
+      setAnswerUnlocked(true)
       toast({ type: "error", message: `AI 判题失败，已使用本地检查: ${e?.message || e}` })
     } finally {
-      setChecking(false)
+      endOperation(checkKey)
     }
   }
 
   const completeSolution = async (regenerate = false) => {
-    setCompletingAction(regenerate ? "regenerate" : "complete")
+    const operationKey = regenerate ? regenerateKey : completeKey
+    beginOperation(operationKey, regenerate ? "重新生成解析中" : "补全答案中")
     const shouldRepairQuestion = regenerate && exerciseKind.kind === "choice" && exerciseKind.options.length < 2
     try {
       const res = await api.completeExerciseSolution({
@@ -472,11 +515,12 @@ function ExerciseContent({ page }: { page: WikiPage }) {
       setSelectedPage(res.page)
       setShowAnswer(true)
       setCheck(null)
+      setAnswerUnlocked(true)
       toast({ type: "success", message: regenerate ? "已重新生成并替换解析" : "已补全并写回答案" })
     } catch (e: any) {
       toast({ type: "error", message: `${regenerate ? "重新生成解析" : "补全答案"}失败: ${e?.message || e}` })
     } finally {
-      setCompletingAction(null)
+      endOperation(operationKey)
     }
   }
 
@@ -486,7 +530,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
       toast({ type: "error", message: "请拖入图片文件" })
       return
     }
-    setRecognizingImage(true)
+    beginOperation(recognizeKey, "图片识别中")
     try {
       const res = await api.recognizeChatImage(file)
       const extracted = res.text.trim()
@@ -503,7 +547,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
     } catch (e: any) {
       toast({ type: "error", message: `图片识别失败: ${e?.message || e}` })
     } finally {
-      setRecognizingImage(false)
+      endOperation(recognizeKey)
       if (imageInputRef.current) imageInputRef.current.value = ""
     }
   }
@@ -607,14 +651,16 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                     <button
                       key={option.key}
                       disabled={checked || checking}
-                      onClick={() => {
-                        if (selected) {
-                          setUserAnswer("")
-                        } else {
-                          setUserAnswer(`${option.key}. ${option.text}`)
-                        }
-                        setCheck(null)
-                      }}
+                  onClick={() => {
+                    if (selected) {
+                      setUserAnswer("")
+                      setShowAnswer(false)
+                    } else {
+                      setUserAnswer(`${option.key}. ${option.text}`)
+                    }
+                    setCheck(null)
+                    setAnswerUnlocked(false)
+                  }}
                       className={`group flex w-full items-center gap-4 rounded-xl border-2 px-5 py-4 text-left transition-all duration-200 ${
                         checked
                           ? showCorrect
@@ -749,23 +795,28 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                       )}
                     </div>
                   )}
+                  <CheckEvidence evidence={check.evidence} />
                   <div className="mt-4 flex items-center gap-2">
                     <button
                       onClick={() => {
                         setCheck(null)
                         setUserAnswer("")
+                        setShowAnswer(false)
+                        setAnswerUnlocked(false)
                       }}
                       className="inline-flex items-center gap-1.5 rounded-lg border px-4 py-2 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)] transition-colors"
                     >
                       <RotateCcw size={14} />
                       再试一次
                     </button>
-                    <button
-                      onClick={() => setShowAnswer(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30 transition-colors"
-                    >
-                      查看解析
-                    </button>
+                    {check.level !== "empty" && (
+                      <button
+                        onClick={() => setShowAnswer(true)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30 transition-colors"
+                      >
+                        查看解析
+                      </button>
+                    )}
                     <button
                       onClick={() => setDone(true)}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500 px-4 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30 transition-colors"
@@ -797,6 +848,8 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                       setBlankAnswers(next)
                       setUserAnswer(formatBlankAnswer(next))
                       setCheck(null)
+                      setAnswerUnlocked(false)
+                      setShowAnswer(false)
                     }}
                     className="h-9 w-full rounded-md border bg-[var(--background)] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                     placeholder="填写答案..."
@@ -810,6 +863,8 @@ function ExerciseContent({ page }: { page: WikiPage }) {
               onChange={(e) => {
                 setUserAnswer(e.target.value)
                 setCheck(null)
+                setAnswerUnlocked(false)
+                setShowAnswer(false)
               }}
               placeholder="在这里写你的解题思路或答案..."
               className="min-h-32 w-full resize-y rounded-md border bg-[var(--background)] px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
@@ -819,7 +874,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={runCheck}
-                disabled={!(exerciseKind.kind === "blank" ? formatBlankAnswer(blankAnswers) : userAnswer).trim() || checking || recognizingImage}
+                disabled={!currentAnswerText.trim() || checking || recognizingImage}
                 className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
               >
                 {checking ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
@@ -838,6 +893,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                   setBlankAnswers([])
                   setCheck(null)
                   setShowAnswer(false)
+                  setAnswerUnlocked(false)
                   setDone(false)
                 }}
                 className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
@@ -878,12 +934,13 @@ function ExerciseContent({ page }: { page: WikiPage }) {
                   )}
                 </div>
               )}
+              <CheckEvidence evidence={check.evidence} compact />
             </div>
           )}
         </div>
       </section>
 
-      {referenceAnswer ? (
+      {referenceAnswer && canRevealAnswer ? (
         <div className="border-t pt-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -908,7 +965,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
               当前答案来自临时推断或原解析占位，可以补全后写回 wiki。
             </p>
           )}
-          {showAnswer && (
+          {showAnswer && canRevealAnswer && (
             <div className="mt-2 pl-3 border-l-2 border-emerald-300 dark:border-emerald-700">
               <Markdown>{referenceAnswer}</Markdown>
             </div>
@@ -945,11 +1002,16 @@ function ResearchPanel({
   onStateChange: (patch: Partial<ResearchPanelState>) => void
   onClose: () => void
 }) {
-  const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const selectPage = useAppStore((s) => s.selectPage)
+  const operations = useAppStore((s) => s.operations)
+  const beginOperation = useAppStore((s) => s.beginOperation)
+  const endOperation = useAppStore((s) => s.endOperation)
   const actions = researchActionsFor(page.page_type)
+  const runKey = `research:run:${page.path}`
+  const saveKey = `research:save:${page.path}`
+  const loading = Boolean(operations[runKey])
+  const saving = Boolean(operations[saveKey])
   const selectedAction = actions.some((action) => action.id === state.selectedAction)
     ? state.selectedAction
     : actions[0]?.id || "explain"
@@ -968,7 +1030,7 @@ function ResearchPanel({
       toast({ type: "error", message: "先写一下自定义研究提示词" })
       return
     }
-    setLoading(true)
+    beginOperation(runKey, "深入研究中")
     onStateChange({ editingResult: false })
     try {
       const res = await api.runResearch({ page_path: page.path, action: selectedAction, note: state.note })
@@ -976,13 +1038,13 @@ function ResearchPanel({
     } catch (e: any) {
       toast({ type: "error", message: `深入探究失败: ${e?.message || e}` })
     } finally {
-      setLoading(false)
+      endOperation(runKey)
     }
   }
 
   const saveNote = async () => {
     if (!state.result) return
-    setSaving(true)
+    beginOperation(saveKey, "保存研究笔记中")
     try {
       const res = await api.saveResearchNote({ page_path: page.path, title: state.result.title, content: state.result.content })
       setSelectedPage(res.page)
@@ -990,7 +1052,7 @@ function ResearchPanel({
     } catch (e: any) {
       toast({ type: "error", message: `保存失败: ${e?.message || e}` })
     } finally {
-      setSaving(false)
+      endOperation(saveKey)
     }
   }
 
@@ -1203,7 +1265,8 @@ export function PreviewPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [researchOpen, setResearchOpen] = useState(false)
   const [editingPage, setEditingPage] = useState(false)
-  const [researchStates, setResearchStates] = useState<Record<string, ResearchPanelState>>({})
+  const researchStates = useAppStore((s) => s.researchStates)
+  const updateResearchStateInStore = useAppStore((s) => s.updateResearchState)
 
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0)
@@ -1281,15 +1344,9 @@ export function PreviewPanel() {
     )
   }
 
-  const currentResearchState = researchStates[selectedPage.path] || defaultResearchState(selectedPage)
+  const currentResearchState = (researchStates[selectedPage.path] as ResearchPanelState | undefined) || defaultResearchState(selectedPage)
   const updateResearchState = (patch: Partial<ResearchPanelState>) => {
-    setResearchStates((prev) => ({
-      ...prev,
-      [selectedPage.path]: {
-        ...(prev[selectedPage.path] || defaultResearchState(selectedPage)),
-        ...patch,
-      },
-    }))
+    updateResearchStateInStore(selectedPage.path, patch, defaultResearchState(selectedPage))
   }
 
   return (

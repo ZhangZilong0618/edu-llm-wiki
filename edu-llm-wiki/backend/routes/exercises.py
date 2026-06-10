@@ -23,6 +23,7 @@ SYSTEM_PROMPT = """你是 Edu-LLM-Wiki 的练习判题助手。你的任务是�
 - 优先检查：使用的原理、关键公式、变量含义、推导关系、最终表达式、单位/条件。
 - 如果参考解答是“待补充/请结合文档...”一类占位内容，请根据题目和上下文自行判断，并给出 suggested_answer。
 - matched 和 missing 要写学生能看懂的中文/符号短语，不要写 LaTeX 命令内部词如 frac、left、right。
+- evidence 写 2-5 条判题依据，说明你根据参考解答、当前页面、相关概念/公式/原理中的哪些内容做出判断；每条要简洁、可被学生理解。
 - suggested_answer 中如有数学公式，必须使用 LaTeX：行内 $...$（如 $\\sigma$、$\\varepsilon$），块级 $$...$$。不要写裸 LaTeX 命令。
 - detail 用中文，具体指出下一步怎么改。
 
@@ -33,6 +34,7 @@ SYSTEM_PROMPT = """你是 Edu-LLM-Wiki 的练习判题助手。你的任务是�
   "detail": "具体反馈",
   "matched": ["已覆盖要点"],
   "missing": ["建议补充要点"],
+  "evidence": ["判题依据"],
   "suggested_answer": "可选。标准解法或关键公式"
 }
 """
@@ -203,10 +205,26 @@ async def check_exercise(
     project_id: str = Query("default"),
 ) -> ExerciseCheckResponse:
     page_context = req.context or ""
+    related_context = ""
     if not page_context and req.page_path:
         page = read_wiki_page(req.page_path, project_id=project_id)
         if page:
             page_context = page.get("content", "")
+            related_context = _related_context(page, project_id=project_id)
+    elif req.page_path:
+        page = read_wiki_page(req.page_path, project_id=project_id)
+        if page:
+            related_context = _related_context(page, project_id=project_id)
+
+    evidence_context = "\n\n".join(
+        part
+        for part in [
+            f"参考解答：\n{_trim(req.reference_answer, 2500)}" if req.reference_answer else "",
+            f"当前页面内容：\n{_trim(page_context, 4000)}" if page_context else "",
+            f"相关知识页：\n{_trim(related_context, 4000)}" if related_context else "",
+        ]
+        if part
+    )
 
     user_prompt = f"""请判这道练习。
 
@@ -224,6 +242,9 @@ async def check_exercise(
 
 当前页面上下文：
 {_trim(page_context, 4000)}
+
+判题依据候选：
+{evidence_context or "无"}
 """
 
     raw = await chat_complete(
@@ -235,12 +256,21 @@ async def check_exercise(
     )
     data = _extract_json(raw)
     level = data.get("level") if data.get("level") in {"empty", "weak", "partial", "good"} else "partial"
+    evidence = [str(x) for x in data.get("evidence", []) if str(x).strip()][:6]
+    if not evidence:
+        if req.reference_answer:
+            evidence.append(f"参考解答：{_trim(req.reference_answer, 180)}")
+        if req.page_title or req.page_path:
+            evidence.append(f"当前习题页：{req.page_title or req.page_path}")
+        if page_context:
+            evidence.append("当前页面上下文提供了题目、解析或相关知识点。")
     return ExerciseCheckResponse(
         level=level,
         title=str(data.get("title") or "AI 判题反馈"),
         detail=str(data.get("detail") or "已完成判题，请对照建议修改答案。"),
         matched=[str(x) for x in data.get("matched", []) if str(x).strip()][:8],
         missing=[str(x) for x in data.get("missing", []) if str(x).strip()][:8],
+        evidence=evidence,
         suggested_answer=str(data.get("suggested_answer") or "") or None,
         source="ai",
     )

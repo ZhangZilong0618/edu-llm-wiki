@@ -16,6 +16,7 @@ class ExerciseCheckResponse(BaseModel):
     detail: str
     matched: list[str] = []
     missing: list[str] = []
+    evidence: list[str] = []
     suggested_answer: str | None = None
     source: str = "ai"
 

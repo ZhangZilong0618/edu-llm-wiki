@@ -33,7 +33,10 @@ export function SourcesView() {
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const importSelected = useAppStore((s) => s.importSelectedSource)
   const setImportSelected = useAppStore((s) => s.setImportSelectedSource)
-  const [uploading, setUploading] = useState(false)
+  const operations = useAppStore((s) => s.operations)
+  const beginOperation = useAppStore((s) => s.beginOperation)
+  const endOperation = useAppStore((s) => s.endOperation)
+  const uploading = Boolean(operations["sources:upload"])
   const [ingesting, setIngesting] = useState<string>("")
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -117,7 +120,7 @@ export function SourcesView() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
-    setUploading(true)
+    beginOperation("sources:upload", "上传文件中")
     let ok = 0
     let fail = 0
     const uploaded: string[] = []
@@ -137,7 +140,7 @@ export function SourcesView() {
     } catch {
       toast({ type: "error", message: "Failed to refresh file list" })
     }
-    setUploading(false)
+    endOperation("sources:upload")
     if (fileInputRef.current) fileInputRef.current.value = ""
     if (fail > 0) {
       toast({ type: "error", message: `${ok} file(s) uploaded, ${fail} failed` })
