@@ -139,6 +139,7 @@ async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str =
     matching the old Tauri system's behavior.
     """
     from services.graph_engine import build_graph
+    from services import mastery as _mastery
 
     RELEVANCE_THRESHOLD = 2.0
 
@@ -180,6 +181,19 @@ async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str =
                 "title_match": False,
                 "vector_score": None,
             })
+
+    # v2: mark every node surfaced through search as "exposed" so the mastery
+    # store reflects what the user has actually seen in retrieval.
+    seen: set[str] = set()
+    for r in new_results:
+        nid = r["path"].replace(".md", "")
+        if nid in seen:
+            continue
+        seen.add(nid)
+        try:
+            _mastery.record_exposure(node_id=nid, project_id=project_id)
+        except Exception:
+            pass
 
     return sorted(new_results, key=lambda x: -x["score"])
 

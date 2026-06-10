@@ -1,1115 +1,242 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from "react"
-import { createPortal } from "react-dom"
-import Graph from "graphology"
-import { SigmaContainer, useLoadGraph, useRegisterEvents, useSetSettings, useSigma } from "@react-sigma/core"
-import "@react-sigma/core/lib/style.css"
-import forceAtlas2 from "graphology-layout-forceatlas2"
-import { Network, RefreshCw, ZoomIn, ZoomOut, Maximize, Tag, Layers, Filter, X, Search, RotateCcw, ExternalLink } from "lucide-react"
-import { api } from "@/lib/api"
+// v2 entry: orchestrates the canvas, filter panel, node-detail sidebar,
+// learning path panel and live event stream. State lives here so it can
+// persist across view changes; each child component is dumb.
+
+import { useEffect, useMemo, useState } from "react"
+import { GitFork, RefreshCw } from "lucide-react"
+
 import { useAppStore } from "@/stores/app-store"
-import type { GraphData, GraphNode } from "@/types/wiki"
+import { api, type LearningPathResponse } from "@/lib/api"
+import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki"
 
-const TYPE_COLORS: Record<string, string> = {
-  concept: "#3b82f6",
-  formula: "#8b5cf6",
-  principle: "#f59e0b",
-  exercise: "#10b981",
-  source: "#6b7280",
-  synthesis: "#ec4899",
-}
-
-const TYPE_LABELS: Record<string, string> = {
-  concept: "概念",
-  formula: "公式",
-  principle: "原理",
-  exercise: "练习",
-  source: "来源",
-  synthesis: "综合",
-  unknown: "其他",
-}
-
-const EDGE_LABELS: Record<string, string> = {
-  prerequisite: "前置知识",
-  direct: "直接引用",
-  source: "同一来源",
-  related: "相关",
-}
-
-const COMMUNITY_COLORS = [
-  "#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6",
-  "#ec4899", "#06b6d4", "#84cc16", "#f97316", "#6366f1",
-  "#14b8a6", "#a855f7",
-]
-
-type ColorMode = "type" | "community"
-type HoverState = { node: string; neighbors: Set<string>; hoveredEdge: string | null } | null
-type SelectedNodeData = {
-  node: GraphNode
-  neighbors: { node: GraphNode; edgeType: string; weight: number }[]
-  degree: number
-}
-
-const DEFAULT_HIDDEN_TYPES = ["source", "unknown"]
-
-function nodeColor(type: string): string {
-  return TYPE_COLORS[type] || "#94a3b8"
-}
-
-function typeLabel(type: string): string {
-  return TYPE_LABELS[type] || type
-}
-
-function edgeLabel(type: string): string {
-  return EDGE_LABELS[type] || "相关"
-}
-
-function readableLabel(label: string, max = 22): string {
-  const clean = label.replace(/\.(md|pdf|docx?|pptx?)$/i, "").replace(/[_-]+/g, " ").trim()
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
-}
-
-function isStrongEdge(edge: { edge_type: string; weight: number }): boolean {
-  return edge.edge_type === "direct" || edge.edge_type === "prerequisite" || edge.weight >= 8
-}
-
-function mixColor(color: string, mix: string, ratio: number): string {
-  const hex = (c: string, i: number) => parseInt(c.slice(i * 2 + 1, i * 2 + 3), 16)
-  const r = Math.round(hex(color, 0) + (hex(mix, 0) - hex(color, 0)) * ratio)
-  const g = Math.round(hex(color, 1) + (hex(mix, 1) - hex(color, 1)) * ratio)
-  const b = Math.round(hex(color, 2) + (hex(mix, 2) - hex(color, 2)) * ratio)
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`
-}
-
-function layoutIterations(count: number): number {
-  if (count > 500) return 30
-  if (count > 200) return 60
-  return 80
-}
-
-function normalizeGraphPositions(graph: Graph, targetSpan: number) {
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-
-  graph.forEachNode((node, attrs) => {
-    const x = Number(attrs.x ?? 0)
-    const y = Number(attrs.y ?? 0)
-    minX = Math.min(minX, x)
-    maxX = Math.max(maxX, x)
-    minY = Math.min(minY, y)
-    maxY = Math.max(maxY, y)
-  })
-
-  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return
-  const centerX = (minX + maxX) / 2
-  const centerY = (minY + maxY) / 2
-  const span = Math.max(maxX - minX, maxY - minY, 1)
-  const scale = targetSpan / span
-
-  graph.forEachNode((node, attrs) => {
-    graph.setNodeAttribute(node, "x", (Number(attrs.x ?? 0) - centerX) * scale)
-    graph.setNodeAttribute(node, "y", (Number(attrs.y ?? 0) - centerY) * scale)
-  })
-}
-
-function packGraphComponents(graph: Graph) {
-  const visited = new Set<string>()
-  const components: string[][] = []
-
-  graph.forEachNode((start) => {
-    if (visited.has(start)) return
-    const stack = [start]
-    const component: string[] = []
-    visited.add(start)
-    while (stack.length > 0) {
-      const node = stack.pop()
-      if (!node) continue
-      component.push(node)
-      for (const next of graph.neighbors(node)) {
-        if (visited.has(next)) continue
-        visited.add(next)
-        stack.push(next)
-      }
-    }
-    components.push(component)
-  })
-
-  if (components.length <= 1) return
-
-  const boxes = components
-    .sort((a, b) => b.length - a.length)
-    .map((nodes) => {
-      let minX = Infinity
-      let maxX = -Infinity
-      let minY = Infinity
-      let maxY = -Infinity
-      for (const node of nodes) {
-        const x = Number(graph.getNodeAttribute(node, "x") ?? 0)
-        const y = Number(graph.getNodeAttribute(node, "y") ?? 0)
-        minX = Math.min(minX, x)
-        maxX = Math.max(maxX, x)
-        minY = Math.min(minY, y)
-        maxY = Math.max(maxY, y)
-      }
-      return {
-        nodes,
-        centerX: (minX + maxX) / 2,
-        centerY: (minY + maxY) / 2,
-        width: Math.max(maxX - minX, 1),
-        height: Math.max(maxY - minY, 1),
-      }
-    })
-
-  const cols = Math.ceil(Math.sqrt(boxes.length))
-  const rows = Math.ceil(boxes.length / cols)
-  const cellW = Math.max(...boxes.map((box) => box.width)) + 0.7
-  const cellH = Math.max(...boxes.map((box) => box.height)) + 0.7
-
-  boxes.forEach((box, index) => {
-    const col = index % cols
-    const row = Math.floor(index / cols)
-    const targetX = (col - (cols - 1) / 2) * cellW
-    const targetY = (row - (rows - 1) / 2) * cellH
-    for (const node of box.nodes) {
-      graph.setNodeAttribute(node, "x", Number(graph.getNodeAttribute(node, "x") ?? 0) - box.centerX + targetX)
-      graph.setNodeAttribute(node, "y", Number(graph.getNodeAttribute(node, "y") ?? 0) - box.centerY + targetY)
-    }
-  })
-}
-
-// ─── Inner Components ─────────────────────────────────────────────
-
-function GraphLoader({
-  data, colorMode, nodeScale, spacing,
-}: {
-  data: GraphData
-  colorMode: ColorMode
-  nodeScale: number
-  spacing: number
-}) {
-  const loadGraph = useLoadGraph()
-  const sigma = useSigma()
-  const loadedRef = useRef("")
-
-  useEffect(() => {
-    const key = `${data.nodes.map(n => n.id).join(",")};${data.edges.map(e => `${e.source}->${e.target}`).join(",")};${colorMode}:${nodeScale}:${spacing}`
-    if (key === loadedRef.current) return
-    loadedRef.current = key
-
-    const graph = new Graph()
-    const maxSize = Math.max(...data.nodes.map((n) => n.size), 1)
-    const cx = 0
-    const cy = 0
-    const radius = Math.max(2.5, Math.sqrt(data.nodes.length) * 0.9 * spacing)
-
-    for (let i = 0; i < data.nodes.length; i++) {
-      const node = data.nodes[i]
-      const angle = (2 * Math.PI * i) / data.nodes.length
-      const size = 5 + (Math.sqrt(node.size) / Math.sqrt(maxSize)) * 7
-      const color = colorMode === "community" && node.community >= 0
-        ? COMMUNITY_COLORS[node.community % COMMUNITY_COLORS.length]
-        : nodeColor(node.node_type)
-
-      graph.addNode(node.id, {
-        x: cx + radius * Math.cos(angle),
-        y: cy + radius * Math.sin(angle),
-        size: size * nodeScale,
-        color,
-        label: readableLabel(node.label),
-        fullLabel: node.label,
-        nodeType: node.node_type,
-        community: node.community,
-      })
-    }
-
-    const edgeWeights = data.edges.map((e) => e.weight)
-    const minW = Math.min(...edgeWeights)
-    const maxW = Math.max(...edgeWeights)
-    const weightRange = maxW - minW || 1
-
-    for (const edge of data.edges) {
-      if (graph.hasNode(edge.source) && graph.hasNode(edge.target)) {
-        const key = `${edge.source}->${edge.target}`
-        if (!graph.hasEdge(key) && !graph.hasEdge(`${edge.target}->${edge.source}`)) {
-          const t = (edge.weight - minW) / weightRange
-          const opacity = 0.12 + t * 0.78
-          graph.addEdgeWithKey(key, edge.source, edge.target, {
-            size: 0.4 + t * 2.4,
-            color: `rgba(100,116,139,${Math.min(opacity, 0.48)})`,
-            weight: edge.weight,
-            edgeType: edge.edge_type,
-            label: edgeLabel(edge.edge_type),
-          })
-        }
-      }
-    }
-
-    // ForceAtlas2 layout
-    if (data.nodes.length > 1) {
-      const settings = forceAtlas2.inferSettings(graph)
-      forceAtlas2.assign(graph, {
-        iterations: layoutIterations(data.nodes.length),
-        settings: {
-          ...settings,
-          gravity: 0.9,
-          scalingRatio: spacing * 1.7,
-          slowDown: 3,
-          strongGravityMode: false,
-          barnesHutOptimize: data.nodes.length > 50,
-        },
-      })
-    }
-
-    normalizeGraphPositions(graph, Math.max(3.8, Math.sqrt(data.nodes.length) * 0.9 * spacing))
-    packGraphComponents(graph)
-    normalizeGraphPositions(graph, Math.max(3.6, Math.sqrt(data.nodes.length) * 0.75 * spacing))
-    loadGraph(graph)
-    sigma.getCamera().animatedReset({ duration: 0 })
-    sigma.refresh()
-  }, [data, colorMode, nodeScale, spacing, loadGraph, sigma])
-
-  return null
-}
-
-function GraphViewportSync({ fitKey }: { fitKey: string }) {
-  const sigma = useSigma()
-
-  useEffect(() => {
-    const container = sigma.getContainer()
-    const refresh = () => {
-      sigma.refresh()
-      window.setTimeout(() => {
-        sigma.refresh()
-      }, 80)
-    }
-    const observer = new ResizeObserver(refresh)
-    observer.observe(container)
-    refresh()
-    return () => observer.disconnect()
-  }, [fitKey, sigma])
-
-  return null
-}
-
-function GraphSettings({
-  hoverState, highlightedNodes, selectedNode, nodeCount,
-}: {
-  hoverState: HoverState
-  highlightedNodes: Set<string>
-  selectedNode: string | null
-  nodeCount: number
-}) {
-  const setSettings = useSetSettings()
-  const sigma = useSigma()
-
-  useEffect(() => {
-    setSettings({
-      hideEdgesOnMove: true,
-      hideLabelsOnMove: true,
-      labelDensity: nodeCount > 200 ? 0.08 : nodeCount > 80 ? 0.16 : 0.28,
-      labelRenderedSizeThreshold: nodeCount > 200 ? 16 : nodeCount > 80 ? 11 : 8,
-      nodeReducer: (_node, attrs) => {
-        const result = { ...attrs }
-        const hasHover = !!hoverState
-        const hasHighlight = highlightedNodes.size > 0
-        const isHoverNode = hoverState?.node === _node
-        const isHoverNeighbor = hoverState?.neighbors.has(_node) ?? false
-        const isHighlighted = highlightedNodes.has(_node)
-        const isSelected = selectedNode === _node
-
-        // Selected node: subtle highlight
-        if (isSelected) {
-          result.size = (attrs.size ?? 8) * 1.3
-          result.zIndex = 10
-          result.forceLabel = true
-        }
-        // Hover: full highlight on hovered node + neighbors
-        if (isHoverNode) {
-          result.size = (attrs.size ?? 8) * 1.4
-          result.zIndex = 10
-          result.forceLabel = true
-        } else if (isHoverNeighbor) {
-          result.zIndex = 5
-          result.forceLabel = true
-        }
-        // Hover: fade non-neighbor nodes
-        if (hasHover && !isHoverNode && !isHoverNeighbor) {
-          result.color = mixColor(attrs.color ?? "#94a3b8", "#e2e8f0", 0.65)
-          result.size = (attrs.size ?? 8) * 0.55
-        }
-        // Search/filter highlight: fade non-highlighted nodes (lighter fade)
-        if (!hasHover && hasHighlight && !isHighlighted) {
-          result.color = mixColor(attrs.color ?? "#94a3b8", "#e2e8f0", 0.45)
-          result.size = (attrs.size ?? 8) * 0.7
-        }
-        // Highlighted nodes in search mode
-        if (!hasHover && hasHighlight && isHighlighted) {
-          result.size = (attrs.size ?? 8) * 1.2
-          result.zIndex = 5
-          result.forceLabel = true
-        }
-        return result
-      },
-      edgeReducer: (_edge, attrs) => {
-        const result = { ...attrs }
-        const hasHover = !!hoverState
-        const hasHighlight = highlightedNodes.size > 0
-        const isEdgeHover = hasHover && hoverState?.hoveredEdge !== null
-        const isNodeHover = hasHover && !isEdgeHover
-        const hoverEdge = isNodeHover && _edge.includes(hoverState?.node ?? "")
-        const highlightedEdge = hasHighlight && highlightedNodes.has(attrs.source) && highlightedNodes.has(attrs.target)
-        const isHoveredEdge = isEdgeHover && hoverState?.hoveredEdge === _edge
-
-        result.label = (hoverEdge || highlightedEdge) ? (attrs.label ?? "") : ""
-
-        if (isEdgeHover) {
-          if (isHoveredEdge) {
-            result.color = "#1e293b"
-            result.size = Math.max(2.5, (attrs.size ?? 1) * 1.8)
-            result.zIndex = 10
-          } else {
-            result.color = "#f1f5f9"
-            result.size = 0.3
-            result.zIndex = 0
-          }
-        } else {
-          if (hasHover && !hoverEdge) {
-            result.color = "#f1f5f9"
-            result.size = 0.3
-            result.zIndex = 0
-          }
-          if (hoverEdge) {
-            result.color = "#334155"
-            result.size = Math.max(2, (attrs.size ?? 1) * 1.5)
-            result.zIndex = 5
-          }
-          // Highlight mode: only fade non-highlighted edges lightly
-          if (!hasHover && hasHighlight && !highlightedEdge) {
-            result.color = mixColor(attrs.color ?? "#cbd5e1", "#f1f5f9", 0.6)
-            result.size = (attrs.size ?? 1) * 0.5
-          }
-          if (!hasHover && hasHighlight && highlightedEdge) {
-            result.color = "#334155"
-            result.size = Math.max(2, (attrs.size ?? 1) * 1.5)
-            result.zIndex = 5
-          }
-        }
-        return result
-      },
-    })
-    sigma.refresh()
-  }, [setSettings, sigma, hoverState, highlightedNodes, selectedNode, nodeCount])
-
-  return null
-}
-
-function EventHandler({
-  onNodeClick, onHoverChange,
-}: {
-  onNodeClick: (nodeId: string) => void
-  onHoverChange: (state: HoverState) => void
-}) {
-  const registerEvents = useRegisterEvents()
-  const sigma = useSigma()
-  const dragRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    registerEvents({
-      clickNode: ({ node }) => onNodeClick(node),
-
-      // Node hover — highlight neighbors
-      enterNode: ({ node }) => {
-        sigma.getContainer().style.cursor = "pointer"
-        onHoverChange({ node, neighbors: new Set(sigma.getGraph().neighbors(node)), hoveredEdge: null })
-      },
-      leaveNode: () => {
-        sigma.getContainer().style.cursor = "default"
-        onHoverChange(null)
-      },
-
-      // Edge hover — show pointer cursor and activate label
-      enterEdge: (e) => {
-        sigma.getContainer().style.cursor = "pointer"
-        onHoverChange({ node: "", neighbors: new Set(), hoveredEdge: e.edge })
-      },
-      leaveEdge: () => {
-        sigma.getContainer().style.cursor = "default"
-        onHoverChange(null)
-      },
-
-      // Node dragging — prevent sigma default to stop camera panning
-      downNode: (e) => {
-        e.preventSigmaDefault()
-        dragRef.current = e.node
-        sigma.getContainer().style.cursor = "grabbing"
-      },
-      mousemove: (e) => {
-        if (!dragRef.current) return
-        e.preventSigmaDefault()
-        const pos = sigma.viewportToGraph({ x: e.x, y: e.y })
-        sigma.getGraph().setNodeAttribute(dragRef.current, "x", pos.x)
-        sigma.getGraph().setNodeAttribute(dragRef.current, "y", pos.y)
-        sigma.refresh()
-      },
-      mouseup: (e) => {
-        if (dragRef.current) {
-          e.preventSigmaDefault()
-          dragRef.current = null
-          sigma.getContainer().style.cursor = "default"
-        }
-      },
-    })
-  }, [registerEvents, sigma, onNodeClick, onHoverChange])
-
-  return null
-}
-
-function EdgeLabelOverlay({ hoverState }: { hoverState: HoverState }) {
-  const sigma = useSigma()
-  const [, forceTick] = useState(0)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Re-render on each frame while hovering, to track camera movement
-  useEffect(() => {
-    if (!hoverState) return
-    let raf: number
-    const tick = () => {
-      forceTick((n) => n + 1)
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [hoverState])
-
-  if (!hoverState) return null
-
-  const container = sigma.getContainer()
-  const rect = container.getBoundingClientRect()
-  const labels: { key: string; x: number; y: number; text: string }[] = []
-  const graph = sigma.getGraph()
-
-  if (hoverState.node) {
-    // Node hover: show labels for incident edges
-    graph.forEachEdge(hoverState.node, (edge) => {
-      const ext = graph.extremities(edge)
-      if (!ext) return
-      const sx = graph.getNodeAttribute(ext[0], "x") as number
-      const sy = graph.getNodeAttribute(ext[0], "y") as number
-      const tx = graph.getNodeAttribute(ext[1], "x") as number
-      const ty = graph.getNodeAttribute(ext[1], "y") as number
-      const edgeType = graph.getEdgeAttribute(edge, "edgeType") as string
-      const vp = sigma.framedGraphToViewport({ x: (sx + tx) / 2, y: (sy + ty) / 2 })
-      labels.push({
-        key: edge,
-        x: rect.left + vp.x,
-        y: rect.top + vp.y - 8,
-        text: edgeLabel(edgeType),
-      })
-    })
-  } else if (hoverState.hoveredEdge) {
-    const edge = hoverState.hoveredEdge
-    const ext = graph.extremities(edge)
-    if (ext) {
-      const sx = graph.getNodeAttribute(ext[0], "x") as number
-      const sy = graph.getNodeAttribute(ext[0], "y") as number
-      const tx = graph.getNodeAttribute(ext[1], "x") as number
-      const ty = graph.getNodeAttribute(ext[1], "y") as number
-      const edgeType = graph.getEdgeAttribute(edge, "edgeType") as string
-      const vp = sigma.framedGraphToViewport({ x: (sx + tx) / 2, y: (sy + ty) / 2 })
-      labels.push({
-        key: edge,
-        x: rect.left + vp.x,
-        y: rect.top + vp.y - 8,
-        text: edgeLabel(edgeType),
-      })
-    }
-  }
-
-  return createPortal(
-    <div ref={containerRef} className="fixed inset-0 pointer-events-none" style={{ zIndex: 99999 }}>
-      {labels.map((l) => (
-        <div
-          key={l.key}
-          className="absolute text-xs font-semibold"
-          style={{
-            left: l.x,
-            top: l.y,
-            transform: "translate(-50%, -50%)",
-            color: "#0f172a",
-            textShadow: "0 0 4px rgba(255,255,255,0.95), 0 0 8px rgba(255,255,255,0.8), 0 0 2px #fff",
-            whiteSpace: "nowrap",
-            pointerEvents: "none",
-          }}
-        >
-          {l.text}
-        </div>
-      ))}
-    </div>,
-    document.body,
-  )
-}
-
-function ZoomControls() {
-  const sigma = useSigma()
-
-  return (
-    <div className="absolute top-3 right-3 flex flex-col gap-1">
-      <button
-        className="h-7 w-7 flex items-center justify-center rounded border bg-[var(--background)]/80 backdrop-blur-sm hover:bg-[var(--accent)]"
-        onClick={() => sigma.getCamera().animatedZoom({ duration: 200 })}
-      >
-        <ZoomIn className="h-3.5 w-3.5" />
-      </button>
-      <button
-        className="h-7 w-7 flex items-center justify-center rounded border bg-[var(--background)]/80 backdrop-blur-sm hover:bg-[var(--accent)]"
-        onClick={() => sigma.getCamera().animatedUnzoom({ duration: 200 })}
-      >
-        <ZoomOut className="h-3.5 w-3.5" />
-      </button>
-      <button
-        className="h-7 w-7 flex items-center justify-center rounded border bg-[var(--background)]/80 backdrop-blur-sm hover:bg-[var(--accent)]"
-        onClick={() => sigma.getCamera().animatedReset({ duration: 300 })}
-      >
-        <Maximize className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  )
-}
-
-// ─── Main Component ───────────────────────────────────────────────
+import { GraphCanvas, type GraphHoverState, type GraphSelection } from "./graph-canvas"
+import { GraphFilterPanel } from "./graph-filter-panel"
+import { GraphMasteryBadge } from "./graph-mastery-badge"
+import { useGraphData, type MasteryMap } from "./use-graph-data"
+import { useGraphEvents } from "./use-graph-events"
+import { DEFAULT_HIDDEN_TYPES, COMMUNITY_COLORS, type ColorMode } from "./constants"
+import { groupNeighborsByNode, readableLabel } from "./utils"
 
 export function GraphView() {
-  const [data, setData] = useState<GraphData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [selectedNodeData, setSelectedNodeData] = useState<SelectedNodeData | null>(null)
-  const [colorMode, setColorMode] = useState<ColorMode>("type")
-  const [hoverState, setHoverState] = useState<HoverState>(null)
-  const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(new Set())
-  const [showFilters, setShowFilters] = useState(false)
-  const [showInsights, setShowInsights] = useState(false)
-  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_TYPES))
+  const projectId = useAppStore((s) => s.currentProject) || "default"
+
+  const { data, mastery, loading, error, reload } = useGraphData({ projectId })
+  const events = useGraphEvents(projectId)
+
+  const [selected, setSelected] = useState<GraphSelection>(null)
+  const [hover, setHover] = useState<GraphHoverState>(null)
+  const [search, setSearch] = useState("")
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set(DEFAULT_HIDDEN_TYPES))
   const [showWeakLinks, setShowWeakLinks] = useState(false)
+  const [colorMode, setColorMode] = useState<ColorMode>("type")
   const [nodeScale, setNodeScale] = useState(1)
   const [spacing, setSpacing] = useState(1)
-  const [graphSearch, setGraphSearch] = useState("")
-  const [searchOpen, setSearchOpen] = useState(false)
-  const searchInputRef = useRef<HTMLInputElement>(null)
-  const selectPage = useAppStore((s) => s.selectPage)
-  const wikiPages = useAppStore((s) => s.wikiPages)
+  const [path, setPath] = useState<LearningPathResponse | null>(null)
+  const [pathLoading, setPathLoading] = useState(false)
 
-  useEffect(() => {
-    api.getGraph()
-      .then(setData)
-      .catch((e) => setError(e?.message || "Failed to load graph"))
-      .finally(() => setLoading(false))
-  }, [wikiPages])
-
-  useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus()
-  }, [searchOpen])
-
-  // Load node details when selected
-  useEffect(() => {
-    if (!selectedNode || !data) {
-      setSelectedNodeData(null)
-      return
-    }
-    const node = data.nodes.find((n) => n.id === selectedNode)
-    if (!node) {
-      setSelectedNodeData(null)
-      return
-    }
-    const relationMap = new Map<string, { edgeType: string; weight: number }>()
-    for (const e of data.edges) {
-      if (e.source === selectedNode) relationMap.set(e.target, { edgeType: e.edge_type, weight: e.weight })
-      if (e.target === selectedNode) relationMap.set(e.source, { edgeType: e.edge_type, weight: e.weight })
-    }
-    const neighbors = data.nodes
-      .filter((n) => relationMap.has(n.id))
-      .map((n) => ({ node: n, ...(relationMap.get(n.id) || { edgeType: "related", weight: 0 }) }))
-      .sort((a, b) => b.weight - a.weight)
-    setSelectedNodeData({ node, neighbors, degree: neighbors.length })
-  }, [selectedNode, data])
-
-  // Filter by hidden types
-  const filteredNodes = useMemo(() => {
+  const visibleNodes = useMemo<GraphNode[]>(() => {
     if (!data) return []
-    if (hiddenTypes.size === 0) return data.nodes
-    return data.nodes.filter((n) => !hiddenTypes.has(n.node_type))
+    return data.nodes.filter((n) => !hiddenTypes.has(n.node_type || "unknown"))
   }, [data, hiddenTypes])
 
-  const filteredNodeIds = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes])
-
-  const filteredEdges = useMemo(() => {
-    if (!data) return []
-    return data.edges.filter((e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target) && (showWeakLinks || isStrongEdge(e)))
-  }, [data, filteredNodeIds, showWeakLinks])
-
-  // Graph search
-  const searchResults = useMemo(() => {
-    const q = graphSearch.trim().toLowerCase()
-    if (!q || !data) return { nodes: filteredNodes, edges: filteredEdges, matched: new Set<string>() }
-    const matched = new Set<string>()
-    for (const n of filteredNodes) {
-      if (n.label.toLowerCase().includes(q) || n.node_type.toLowerCase().includes(q)) {
-        matched.add(n.id)
-      }
-    }
-    // Also include neighbors of matched nodes
-    const neighborSet = new Set(matched)
-    for (const e of filteredEdges) {
-      if (matched.has(e.source)) neighborSet.add(e.target)
-      if (matched.has(e.target)) neighborSet.add(e.source)
-    }
-    return {
-      nodes: filteredNodes.filter((n) => neighborSet.has(n.id)),
-      edges: filteredEdges.filter((e) => neighborSet.has(e.source) && neighborSet.has(e.target)),
-      matched,
-    }
-  }, [filteredNodes, filteredEdges, graphSearch, data])
-
-  const visibleData: GraphData | null = useMemo(() => {
-    if (!data) return null
-    return {
-      ...data,
-      nodes: searchResults.nodes,
-      edges: searchResults.edges,
-    }
-  }, [data, searchResults])
-
-  const handleNodeClick = useCallback((nodeId: string) => {
-    setSelectedNode((prev) => (prev === nodeId ? null : nodeId))
-  }, [])
-
-  const typeCounts = useMemo(() => {
-    const counts: Record<string, number> = {}
-    if (!data) return counts
-    for (const n of data.nodes) {
-      counts[n.node_type] = (counts[n.node_type] ?? 0) + 1
-    }
-    return counts
+  const nodesById = useMemo<Record<string, GraphNode>>(() => {
+    const m: Record<string, GraphNode> = {}
+    for (const n of data?.nodes || []) m[n.id] = n
+    return m
   }, [data])
 
-  const totalHidden = data ? data.nodes.length - filteredNodes.length : 0
-  const weakHidden = data ? data.edges.filter((e) => !isStrongEdge(e)).length : 0
-  const hiddenTypesChanged = hiddenTypes.size !== DEFAULT_HIDDEN_TYPES.length || DEFAULT_HIDDEN_TYPES.some((type) => !hiddenTypes.has(type))
-  const filtersActive = hiddenTypesChanged || showWeakLinks || nodeScale !== 1 || spacing !== 1
-  const searchActive = graphSearch.trim().length > 0
-  const hasInsights = data && data.insights.length > 0
+  const selectedNodeData = useMemo(() => {
+    if (!selected || !data) return null
+    const neighbors = groupNeighborsByNode(selected.node, data.edges, nodesById)
+    return {
+      node: selected.node,
+      neighbors,
+      degree: neighbors.length,
+    }
+  }, [selected, data, nodesById])
 
-  if (loading) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--muted-foreground)]">
-        <RefreshCw className="h-8 w-8 animate-spin opacity-50" />
-        <p className="text-sm">正在整理知识图谱...</p>
-      </div>
-    )
-  }
+  // Auto-load a learning path when the user selects a node they haven't
+  // mastered yet. Skipped silently if mastery is still loading.
+  useEffect(() => {
+    if (!selected) return
+    const m = mastery[selected.node.id]
+    if (m && (m.level === "proficient" || m.level === "mastered")) {
+      setPath(null)
+      return
+    }
+    let cancelled = false
+    setPathLoading(true)
+    api
+      .getLearningPath(selected.node.id, 6)
+      .then((res) => {
+        if (!cancelled) setPath(res)
+      })
+      .catch(() => {
+        if (!cancelled) setPath(null)
+      })
+      .finally(() => {
+        if (!cancelled) setPathLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selected, mastery])
 
-  if (error) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--muted-foreground)]">
-        <Network className="h-10 w-10 opacity-30" />
-        <p className="text-sm text-red-500">{error}</p>
-      </div>
-    )
-  }
-
-  if (!data || data.nodes.length === 0) {
+  if (loading && !data) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
-        <div className="text-center">
-          <p className="text-lg mb-2">还没有图谱数据</p>
-          <p>导入文献并生成 wiki 后，这里会显示知识点之间的关系。</p>
-        </div>
+        正在加载知识图谱…
       </div>
     )
   }
+  if (error && !data) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-rose-500">
+        加载失败：{error}
+      </div>
+    )
+  }
+  if (!data) return null
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header toolbar */}
-      <div className="shrink-0 flex items-center justify-between border-b px-3 py-1.5">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <Network className="h-4 w-4 text-[var(--muted-foreground)]" />
-            <span className="text-sm font-medium">知识图谱</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-            <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">
-              {searchResults.nodes.length}/{data.nodes.length} 个知识点
-            </span>
-            <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">
-              {searchResults.edges.length}/{data.edges.length} 条关系
-            </span>
-            {totalHidden > 0 && (
-              <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-600">
-                已隐藏 {totalHidden}
-              </span>
-            )}
-            {!showWeakLinks && weakHidden > 0 && (
-              <span className="rounded bg-slate-500/10 px-1.5 py-0.5">
-                弱关系已收起
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1">
-          {/* Search */}
-          {searchOpen || searchActive ? (
-            <div className="relative mr-1 w-44">
-              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
-              <input
-                ref={searchInputRef}
-                value={graphSearch}
-                onChange={(e) => setGraphSearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Escape") { setGraphSearch(""); setSearchOpen(false) } }}
-                className="h-7 w-full rounded-md border bg-[var(--background)] pl-7 pr-7 text-xs outline-none focus:border-[var(--primary)]"
-                placeholder="搜索知识点..."
-              />
-              <button
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                onClick={() => { setGraphSearch(""); setSearchOpen(false) }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : (
-            <button onClick={() => setSearchOpen(true)} className="h-7 px-2 text-xs rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] flex items-center gap-1">
-              <Search className="h-3.5 w-3.5" />
-            </button>
-          )}
-
-          {/* Filter toggle */}
+    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+      <div className="relative min-h-0 flex-1">
+        <GraphCanvas
+          data={data}
+          selected={selected}
+          hover={hover}
+          searchQuery={search}
+          hiddenTypes={hiddenTypes}
+          colorMode={colorMode}
+          communityColors={COMMUNITY_COLORS}
+          nodeScale={nodeScale}
+          spacing={spacing}
+          showWeakLinks={showWeakLinks}
+          onSelect={(id) => {
+            const node = nodesById[id] || null
+            setSelected(node ? { node, degree: 0 } : null)
+          }}
+          onHover={setHover}
+        />
+        <div className="pointer-events-auto absolute left-2 top-2 flex items-center gap-2">
           <button
-            onClick={() => setShowFilters((v) => !v)}
-            title="筛选显示内容"
-            className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${showFilters ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
+            onClick={reload}
+            className="inline-flex items-center gap-1 rounded-md border bg-[var(--background)] px-2 py-1 text-xs"
+            title="重新加载图谱"
           >
-            <Filter className="h-3 w-3" />
+            <RefreshCw size={12} />刷新
           </button>
-
-          {/* Fillters reset */}
-          {filtersActive && (
-            <button
-              onClick={() => { setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES)); setShowWeakLinks(false); setNodeScale(1); setSpacing(1) }}
-              title="恢复默认视图"
-              className="h-7 px-2 text-xs rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] flex items-center gap-1"
-            >
-              <RotateCcw className="h-3 w-3" />
-            </button>
-          )}
-
-          {/* Color mode */}
-          <button
-            onClick={() => setColorMode("type")}
-            title="按知识类型着色"
-            className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${colorMode === "type" ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
-          >
-            <Tag className="h-3 w-3" />
-          </button>
-          <button
-            onClick={() => setColorMode("community")}
-            title="按知识簇着色"
-            className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${colorMode === "community" ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
-          >
-            <Layers className="h-3 w-3" />
-          </button>
-
-          {/* Insights */}
-          {hasInsights && (
-            <button
-              onClick={() => setShowInsights((v) => !v)}
-              title="查看图谱诊断"
-              className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${showInsights ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
-            >
-              {data.insights.length}
-            </button>
-          )}
+          <span className="rounded-md border bg-[var(--background)] px-2 py-1 text-[10px] text-[var(--muted-foreground)]">
+            节点 {visibleNodes.length}/{data.nodes.length} · 边 {data.edges.length}
+          </span>
         </div>
       </div>
 
-      {/* Canvas area */}
-      <div className="flex-1 min-h-0 flex">
-        <div className="relative flex-1 min-w-0 bg-slate-50 dark:bg-slate-950">
-          {!visibleData || visibleData.nodes.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-[var(--muted-foreground)]">
-              <Search className="h-8 w-8 opacity-40" />
-              <p className="text-sm">{searchActive ? "没有匹配的知识点" : "当前筛选下没有可见节点"}</p>
-            </div>
-          ) : (
-            <SigmaContainer
-              style={{ width: "100%", height: "100%", background: "transparent" }}
-              settings={{
-                renderEdgeLabels: true,
-                enableEdgeEvents: true,
-                hideEdgesOnMove: true,
-                zIndex: true,
-                defaultEdgeColor: "#cbd5e1",
-                defaultNodeColor: "#94a3b8",
-                labelSize: 11,
-                labelColor: { color: "#334155" },
-                edgeLabelSize: 14,
-                edgeLabelColor: { color: "#0f172a" },
-                labelDensity: 0.1,
-                labelRenderedSizeThreshold: 2,
-                hideLabelsOnMove: false,
-                stagePadding: 90,
-              }}
-            >
-              <GraphLoader data={visibleData} colorMode={colorMode} nodeScale={nodeScale} spacing={spacing} />
-              <GraphViewportSync fitKey={`${selectedNode || ""}:${showInsights ? "insights" : "graph"}`} />
-              <EventHandler onNodeClick={handleNodeClick} onHoverChange={setHoverState} />
-              <GraphSettings
-                hoverState={hoverState}
-                highlightedNodes={
-                  searchActive
-                    ? searchResults.matched
-                    : highlightedNodes
-                }
-                selectedNode={selectedNode}
-                nodeCount={visibleData.nodes.length}
-              />
-              <EdgeLabelOverlay hoverState={hoverState} />
-              <ZoomControls />
-            </SigmaContainer>
-          )}
+      <aside className="flex h-full w-80 shrink-0 flex-col overflow-y-auto border-l bg-[var(--background)] p-3 text-sm">
+        <GraphFilterPanel
+          data={data}
+          hiddenTypes={hiddenTypes}
+          setHiddenTypes={setHiddenTypes}
+          showWeakLinks={showWeakLinks}
+          setShowWeakLinks={setShowWeakLinks}
+          colorMode={colorMode}
+          setColorMode={setColorMode}
+          query={search}
+          setQuery={setSearch}
+          onReset={() => {
+            setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES))
+            setShowWeakLinks(false)
+            setColorMode("type")
+            setSearch("")
+            setNodeScale(1)
+            setSpacing(1)
+          }}
+        />
 
-          {/* Filter panel */}
-          {showFilters && (
-            <div className="absolute top-3 left-3 w-56 rounded-lg border bg-[var(--background)]/95 p-2 text-xs shadow-lg backdrop-blur-sm space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1 font-semibold">
-                  <Filter className="h-3 w-3" />
-                  图谱筛选
-                </div>
-              </div>
-
-              <label className="flex items-center gap-2 rounded-md border px-2 py-1.5">
-                <input
-                  type="checkbox"
-                  checked={showWeakLinks}
-                  onChange={(e) => setShowWeakLinks(e.target.checked)}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block font-medium">显示弱关系</span>
-                  <span className="block text-[10px] text-[var(--muted-foreground)]">默认收起来源相同、相关度较低的边</span>
-                </span>
-              </label>
-
-              {/* Node scale slider */}
-              <label className="block space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-[var(--muted-foreground)]">节点大小</span>
-                  <span>{Math.round(nodeScale * 100)}%</span>
-                </div>
-                <input
-                  type="range" min={0.5} max={1.5} step={0.05}
-                  value={nodeScale}
-                  onChange={(e) => setNodeScale(Number(e.target.value))}
-                  className="w-full h-1"
-                />
-              </label>
-
-              {/* Spacing slider */}
-              <label className="block space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-[var(--muted-foreground)]">间距</span>
-                  <span>{Math.round(spacing * 100)}%</span>
-                </div>
-                <input
-                  type="range" min={0.6} max={2} step={0.05}
-                  value={spacing}
-                  onChange={(e) => setSpacing(Number(e.target.value))}
-                  className="w-full h-1"
-                />
-              </label>
-
-              {/* Type toggles */}
-              <div className="space-y-1">
-                <div className="font-medium text-[var(--muted-foreground)]">知识类型</div>
-                {Object.entries(typeCounts).map(([type, count]) => (
-                  <label key={type} className="flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={!hiddenTypes.has(type)}
-                      onChange={(e) => {
-                        setHiddenTypes((prev) => {
-                          const next = new Set(prev)
-                          e.target.checked ? next.delete(type) : next.add(type)
-                          return next
-                        })
-                      }}
-                    />
-                    <span className="w-2 h-2 rounded-full" style={{ background: nodeColor(type) }} />
-                    <span className="truncate">{typeLabel(type)}</span>
-                    <span className="text-[var(--muted-foreground)] ml-auto">{count}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Legend */}
-          <div className="absolute bottom-3 left-3 rounded-lg border bg-[var(--background)]/90 backdrop-blur-sm px-2.5 py-1.5 text-xs shadow-sm max-w-[220px]">
-            <div className="flex items-center gap-1 mb-1">
-              <span className="font-semibold text-xs">
-                {colorMode === "type" ? "知识类型" : "知识簇"}
-              </span>
-            </div>
-            {colorMode === "type"
-              ? Object.entries(typeCounts).slice(0, 8).map(([type, count]) => {
-                  const hidden = hiddenTypes.has(type)
-                  return (
-                    <div
-                      key={type}
-                      className={`flex items-center gap-1.5 py-0.5 rounded px-0.5 hover:bg-[var(--accent)]/50 cursor-pointer ${hidden ? "opacity-30" : ""}`}
-                      onClick={() => setHiddenTypes((prev) => {
-                        const next = new Set(prev)
-                        hidden ? next.delete(type) : next.add(type)
-                        return next
-                      })}
-                    >
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: nodeColor(type) }} />
-                      <span className="text-[var(--muted-foreground)] truncate">{typeLabel(type)}</span>
-                      <span className="text-[var(--muted-foreground)]/60 ml-auto">{count}</span>
-                    </div>
-                  )
-                })
-              : communitiesSlice(data).map((c, i) => (
-                  <div key={c.label} className="flex items-center gap-1.5 py-0.5 rounded px-0.5">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: COMMUNITY_COLORS[i % COMMUNITY_COLORS.length] }} />
-                    <span className="text-[var(--muted-foreground)] truncate">{c.label}</span>
-                    <span className="text-[var(--muted-foreground)]/60 ml-auto">{c.member_count}</span>
-                  </div>
-                ))
-            }
-          </div>
-        </div>
-
-        {/* Insights panel */}
-        {showInsights && hasInsights && (
-          <div className="w-72 shrink-0 border-l bg-[var(--background)] overflow-y-auto">
-            <div className="flex items-center justify-between px-3 py-2 border-b">
-              <span className="text-sm font-medium">图谱诊断</span>
-              <button onClick={() => setShowInsights(false)} className="p-0.5 rounded hover:bg-[var(--muted)]">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="p-3 space-y-2">
-              {data.insights.map((insight, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg border p-3 text-xs cursor-pointer hover:bg-[var(--muted)]/50 transition-colors"
-                  onClick={() => {
-                    const ids = new Set(insight.node_ids)
-                    const isActive = highlightedNodes.size === ids.size && [...ids].every((id) => highlightedNodes.has(id))
-                    setHighlightedNodes(isActive ? new Set() : ids)
-                  }}
-                >
-                  <span className={`font-medium ${
-                    insight.insight_type === "knowledge_gap" ? "text-orange-500" :
-                    insight.insight_type === "bridge" ? "text-blue-500" :
-                    "text-purple-500"
-                  }`}>
-                    {insight.title}
-                  </span>
-                  <p className="text-[var(--muted-foreground)] mt-1">{insight.description}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Node detail sidebar */}
-        {selectedNodeData && !showInsights && (
-          <div className="w-72 shrink-0 border-l bg-[var(--background)] overflow-y-auto">
-            <div className="flex items-center justify-between px-3 py-2 border-b">
-              <span className="text-sm font-medium truncate">{selectedNodeData.node.label}</span>
-              <button onClick={() => setSelectedNode(null)} className="p-0.5 rounded hover:bg-[var(--muted)]">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="p-3 space-y-3">
-              {/* Type badge */}
-              <div className="flex items-center gap-2">
-                <span
-                  className="w-2.5 h-2.5 rounded-full"
-                  style={{ background: nodeColor(selectedNodeData.node.node_type) }}
-                />
-                <span className="text-xs font-medium">{typeLabel(selectedNodeData.node.node_type)}</span>
-                {selectedNodeData.node.community >= 0 && (
-                  <span className="text-xs text-[var(--muted-foreground)] ml-auto">
-                    知识簇 {selectedNodeData.node.community + 1}
-                  </span>
-                )}
-              </div>
-
-              {/* Stats */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-md bg-[var(--muted)] p-2 text-center">
-                  <div className="text-lg font-semibold">{selectedNodeData.degree}</div>
-                  <div className="text-xs text-[var(--muted-foreground)]">关联</div>
-                </div>
-                <div className="rounded-md bg-[var(--muted)] p-2 text-center">
-                  <div className="text-lg font-semibold">{selectedNodeData.node.size}</div>
-                  <div className="text-xs text-[var(--muted-foreground)]">引用</div>
-                </div>
-              </div>
-
-              {/* Open in wiki */}
-              <button
-                onClick={() => {
-                  const path = selectedNodeData.node.id
-                  selectPage(path)
-                }}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md border hover:bg-[var(--accent)] transition-colors"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                打开页面
-              </button>
-
-              {/* Neighbors */}
-              {selectedNodeData.neighbors.length > 0 && (
-                <div>
-                  <div className="text-xs font-medium text-[var(--muted-foreground)] mb-2">
-                    相关知识点 ({selectedNodeData.neighbors.length})
-                  </div>
-                  <div className="space-y-1 max-h-60 overflow-y-auto">
-                    {selectedNodeData.neighbors.map(({ node: n, edgeType }) => (
-                      <button
-                        key={n.id}
-                        onClick={() => setSelectedNode(n.id)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-[var(--muted)] transition-colors text-left"
-                      >
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ background: nodeColor(n.node_type) }}
-                        />
-                        <span className="truncate">{n.label}</span>
-                        <span className="ml-auto shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]">
-                          {edgeLabel(edgeType)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+        {selectedNodeData && (
+          <section className="mt-4 space-y-2 border-t pt-3">
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-sm font-semibold">{selectedNodeData.node.label}</h3>
+              {mastery[selectedNodeData.node.id] && (
+                <GraphMasteryBadge level={mastery[selectedNodeData.node.id].level} />
               )}
             </div>
-          </div>
+            <p className="text-[10px] text-[var(--muted-foreground)]">
+              {selectedNodeData.node.node_type} · 邻居 {selectedNodeData.degree}
+            </p>
+            {selectedNodeData.neighbors.length > 0 && (
+              <ul className="space-y-0.5 text-[11px]">
+                {selectedNodeData.neighbors.slice(0, 6).map((n) => (
+                  <li
+                    key={n.node.id}
+                    className="flex items-center justify-between gap-1 truncate hover:underline"
+                  >
+                    <button
+                      onClick={() => setSelected({ node: n.node, degree: 0 })}
+                      className="truncate text-left"
+                    >
+                      {n.node.label}
+                    </button>
+                    <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
+                      {n.edgeType} · {n.weight.toFixed(1)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         )}
-      </div>
+
+        {selected && (
+          <section className="mt-4 space-y-2 border-t pt-3">
+            <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
+              <GitFork size={10} /> 学习路径
+            </div>
+            {pathLoading ? (
+              <p className="text-[11px] text-[var(--muted-foreground)]">计算中…</p>
+            ) : path && path.steps.length > 0 ? (
+              <ol className="space-y-1 text-[11px]">
+                {path.steps.map((step, i) => (
+                  <li
+                    key={step.node_id}
+                    className="flex items-center gap-2 rounded border bg-[var(--muted)] px-1.5 py-1"
+                  >
+                    <span className="text-[10px] text-[var(--muted-foreground)]">{i + 1}.</span>
+                    <span className="flex-1 truncate">{readableLabel(step.title || step.node_id)}</span>
+                    {step.mastery && <GraphMasteryBadge level={step.mastery} />}
+                  </li>
+                ))}
+                <p className="pt-1 text-[10px] text-[var(--muted-foreground)]">
+                  预计 {path.estimated_total_minutes.toFixed(0)} 分钟
+                </p>
+              </ol>
+            ) : (
+              <p className="text-[11px] text-[var(--muted-foreground)]">无前置路径</p>
+            )}
+          </section>
+        )}
+
+        {events.length > 0 && (
+          <section className="mt-4 space-y-1 border-t pt-3">
+            <div className="text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
+              实时事件
+            </div>
+            <ul className="space-y-0.5 text-[10px] text-[var(--muted-foreground)]">
+              {events.slice(0, 5).map((e) => (
+                <li key={e.id}>{e.event_type} · {new Date(e.created_at * 1000).toLocaleTimeString()}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </aside>
     </div>
   )
 }
 
-function communitiesSlice(data: GraphData): { label: string; member_count: number }[] {
-  return data.communities.slice(0, 8).map((c, i) => ({
-    label: c.top_node?.slice(0, 15) || `Cluster ${c.id}`,
-    member_count: c.member_count,
-  }))
+function computeDegree(nodeId: string, edges: GraphEdge[]): number {
+  let deg = 0
+  for (const e of edges) {
+    if (e.source === nodeId || e.target === nodeId) deg++
+  }
+  return deg
 }

@@ -1,0 +1,157 @@
+"""Page-level parsers for the learning graph.
+
+These functions read the wiki store and return a normalised ``ParsedPage``
+view: identifiers, title, type, content, wikilinks, sources, prerequisites,
+and the LLM-emitted ``relationships`` / ``parent_concept`` that the v1 engine
+ignored.
+
+Everything downstream of this module is content-agnostic — it operates on
+``ParsedPage`` instances only, which makes the pipeline testable without
+filesystem I/O.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+from storage.wiki_store import list_wiki_pages, parse_frontmatter, wiki_path
+
+
+WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
+
+VALID_NODE_TYPES = {
+    "concept", "formula", "principle", "exercise",
+    "source", "synthesis", "query", "definition", "example",
+}
+
+
+@dataclass(slots=True)
+class Relationship:
+    """One LLM-emitted edge in the original analysis document."""
+    src: str
+    dst: str
+    rel_type: str  # prerequisite | derives | applies_to | related
+    description: str = ""
+
+
+@dataclass(slots=True)
+class ParsedPage:
+    """One wiki page after frontmatter + body have been parsed."""
+    node_id: str
+    path: str
+    title: str
+    page_type: str
+    content: str
+    sources: list[str] = field(default_factory=list)
+    prerequisites: list[str] = field(default_factory=list)
+    parent_concept: str = ""
+    relationships: list[Relationship] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    bloom_level: str | None = None
+    difficulty: int | None = None
+    estimated_minutes: float | None = None
+    content_hash: str = ""
+
+
+def _normalise_relationships(raw: object) -> list[Relationship]:
+    if not isinstance(raw, list):
+        return []
+    out: list[Relationship] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        src = str(item.get("from") or "").strip()
+        dst = str(item.get("to") or "").strip()
+        rel = str(item.get("type") or "related").strip()
+        desc = str(item.get("description") or "").strip()
+        if not src or not dst:
+            continue
+        if rel not in {"prerequisite", "derives", "applies_to", "related"}:
+            rel = "related"
+        out.append(Relationship(src=src, dst=dst, rel_type=rel, description=desc))
+    return out
+
+
+def _parse_relationships_field(content: str) -> list[Relationship]:
+    """Find a `## Relationships` section the LLM sometimes leaves in pages."""
+    match = re.search(
+        r"##\s*relationships\s*\n([\s\S]*?)(?=\n##\s+|\Z)",
+        content,
+        re.IGNORECASE,
+    )
+    if not match:
+        return []
+    block = match.group(1)
+    out: list[Relationship] = []
+    for line in block.splitlines():
+        line = line.strip("-* \t")
+        if not line:
+            continue
+        # "Concept A --[prerequisite]--> Concept B: explanation"
+        m = re.match(
+            r"([^\-\[>]+?)\s*--\[\s*(\w+)\s*\]\s*-->\s*([^\:]+?)(?::\s*(.*))?$",
+            line,
+        )
+        if m:
+            out.append(Relationship(
+                src=m.group(1).strip(),
+                dst=m.group(3).strip(),
+                rel_type=m.group(2).strip().lower(),
+                description=(m.group(4) or "").strip(),
+            ))
+    return out
+
+
+def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, str]]:
+    """Read all wiki pages for ``project_id`` and return them in normalised form.
+
+    Returns a mapping of ``node_id`` to ``ParsedPage`` and a mapping of
+    page *title* to ``node_id`` (the LLM names relationships by title, but the
+    graph keys by node id, so we need a resolver).
+    """
+    pages = list_wiki_pages(project_id=project_id)
+    wp = wiki_path(project_id)
+    out: dict[str, ParsedPage] = {}
+    title_to_id: dict[str, str] = {}
+    for summary in pages:
+        node_id = summary["path"].replace(".md", "")
+        full = wp / summary["path"]
+        if not full.exists():
+            continue
+        content = full.read_text(encoding="utf-8")
+        front, body = parse_frontmatter(content)
+        page_type = str(front.get("type") or summary.get("type") or "concept")
+        if page_type not in VALID_NODE_TYPES:
+            page_type = "concept"
+        parsed = ParsedPage(
+            node_id=node_id,
+            path=summary["path"],
+            title=str(front.get("title") or summary.get("title") or node_id),
+            page_type=page_type,
+            content=body,
+            sources=list(front.get("sources", []) or []),
+            prerequisites=[
+                p.replace(".md", "").strip()
+                for p in (front.get("prerequisites", []) or [])
+                if p
+            ],
+            parent_concept=str(front.get("parent_concept") or "").strip(),
+            relationships=(
+                _normalise_relationships(front.get("relationships"))
+                + _parse_relationships_field(body)
+            ),
+            tags=list(front.get("tags", []) or []),
+            bloom_level=front.get("bloom_level"),
+            difficulty=front.get("difficulty"),
+            estimated_minutes=front.get("estimated_minutes"),
+        )
+        parsed.content_hash = _hash_content(content)
+        out[node_id] = parsed
+        title_to_id[parsed.title] = node_id
+    return out, title_to_id
+
+
+def _hash_content(content: str) -> str:
+    import hashlib
+    return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()

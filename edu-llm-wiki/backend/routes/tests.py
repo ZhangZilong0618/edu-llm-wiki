@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from config import settings
 from models.tests import TestAnswerRequest, TestAttempt, TestCreateRequest, TestQuestion, TestSession, TestSummary
+from services import mastery
 from services.language import language_instruction
 from services.llm_client import chat_complete
 from storage.wiki_store import list_wiki_pages, read_wiki_page, validate_project_id
@@ -532,6 +533,21 @@ async def submit_test(session_id: str, req: TestAnswerRequest, project_id: str =
     session.status = "submitted"
     session.submitted_at = _now()
     _write_session(session, project_id)
+
+    # Feed each graded question into the mastery state machine so the
+    # learning graph can promote / demote related concepts and publish
+    # ``mastery_changed`` events.
+    for question, attempt in zip(session.questions, attempts):
+        related = question.related_page or question.concepts[0] if question.concepts else None
+        if not related:
+            continue
+        mastery.record_attempt(
+            node_id=related,
+            project_id=project_id,
+            score=attempt.score,
+            max_score=attempt.max_score or 1.0,
+        )
+
     return session
 
 

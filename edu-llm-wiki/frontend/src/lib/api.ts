@@ -303,6 +303,28 @@ export const api = {
     }),
   deleteTest: (id: string) =>
     request<{ status: string; id: string }>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`, { method: "DELETE" }),
+
+  // v2 learning graph: mastery + learning path + event stream
+  listMastery: () =>
+    request<MasterySnapshot[]>(`${BASE}/graph/mastery?${p()}`),
+  recordMasteryAttempt: (input: { node_id: string; score: number; max_score?: number }) =>
+    request<MasterySnapshot>(`${BASE}/graph/mastery/attempt?${p()}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  recordMasteryExposure: (input: { node_id: string }) =>
+    request<MasterySnapshot>(`${BASE}/graph/mastery/exposure?${p()}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  getLearningPath: (target: string, max_steps = 8) =>
+    request<LearningPathResponse>(
+      `${BASE}/graph/learning-path?${p()}&target=${encodeURIComponent(target)}&max_steps=${max_steps}`,
+    ),
+  listGraphEvents: (sinceId = 0) =>
+    request<GraphEventEnvelope[]>(
+      `${BASE}/graph/events?${p()}&since_id=${sinceId}`,
+    ),
 }
 
 export interface LlmSettings {
@@ -401,4 +423,44 @@ export interface TestSummary {
   max_score: number | null
   created_at: string
   submitted_at: string | null
+}
+
+// ---- v2 learning graph -----------------------------------------------------
+
+export type MasteryLevel = "new" | "exposed" | "learning" | "proficient" | "mastered"
+
+export interface MasterySnapshot {
+  node_id: string
+  level: MasteryLevel
+  score: number
+  attempts: number
+  exposures: number
+  last_attempt_at: number | null
+  last_exposure_at: number | null
+  promoted_at: number | null
+}
+
+export interface LearningPathStep {
+  node_id: string
+  title: string
+  node_type: string
+  reason: string
+  mastery: MasteryLevel
+  score: number
+  estimated_minutes: number
+}
+
+export interface LearningPathResponse {
+  target: string
+  steps: LearningPathStep[]
+  remaining: string[]
+  estimated_total_minutes: number
+}
+
+export interface GraphEventEnvelope {
+  id: number
+  event_type: string
+  project_id: string
+  payload: Record<string, unknown>
+  created_at: number
 }
