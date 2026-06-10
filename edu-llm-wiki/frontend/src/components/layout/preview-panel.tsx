@@ -583,49 +583,36 @@ function ExerciseContent({ page }: { page: WikiPage }) {
           </button>
         </div>
         <div className="p-3">
-          {exerciseKind.kind === "choice" ? (
+          {exerciseKind.kind === "choice" && exerciseKind.options.length >= 2 ? (
             <div className="space-y-2">
-              {exerciseKind.options.length >= 2 ? (
-                exerciseKind.options.map((option) => {
-                  const selected = userAnswer.startsWith(`${option.key}.`)
-                  return (
-                    <button
-                      key={option.key}
-                      onClick={() => {
+              {exerciseKind.options.map((option) => {
+                const selected = userAnswer.startsWith(`${option.key}.`)
+                return (
+                  <button
+                    key={option.key}
+                    onClick={() => {
+                      if (selected) {
+                        setUserAnswer("")
+                      } else {
                         setUserAnswer(`${option.key}. ${option.text}`)
-                        setCheck(null)
-                      }}
-                      className={`flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                        selected
-                          ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
-                          : "hover:bg-[var(--accent)]"
-                      }`}
-                    >
-                      <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
-                        selected ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]" : "text-[var(--muted-foreground)]"
-                      }`}>
-                        {option.key}
-                      </span>
-                      <span className="min-w-0 whitespace-pre-wrap leading-relaxed">{option.text}</span>
-                    </button>
-                  )
-                })
-              ) : (
-                <div className="space-y-2">
-                  <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                    这题像选择题，但题面缺少选项。可以先输入选项字母作答，或点击“重新生成解析”补全 A/B/C/D 选项。
-                  </p>
-                  <input
-                    value={userAnswer}
-                    onChange={(e) => {
-                      setUserAnswer(e.target.value)
+                      }
                       setCheck(null)
                     }}
-                    className="h-9 w-full rounded-md border bg-[var(--background)] px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                    placeholder="例如：B"
-                  />
-                </div>
-              )}
+                    className={`flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                      selected
+                        ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                        : "hover:bg-[var(--accent)]"
+                    }`}
+                  >
+                    <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+                      selected ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]" : "text-[var(--muted-foreground)]"
+                    }`}>
+                      {option.key}
+                    </span>
+                    <span className="min-w-0 whitespace-pre-wrap leading-relaxed">{option.text}</span>
+                  </button>
+                )
+              })}
             </div>
           ) : exerciseKind.kind === "blank" ? (
             <div className="space-y-2">
@@ -741,7 +728,7 @@ function ExerciseContent({ page }: { page: WikiPage }) {
               title={needsSolution ? "用 AI 生成标准解答并写回当前习题页" : "用 AI 重新生成解析并替换当前解答区"}
             >
               {completingAction === (needsSolution ? "complete" : "regenerate") ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {completingAction === (needsSolution ? "complete" : "regenerate") ? (needsSolution ? "补全中..." : "重生成中...") : (needsSolution ? "补全答案" : "重新生成解析")}
+              {completingAction === (needsSolution ? "complete" : "regenerate") ? (needsSolution ? "补全中..." : "重生成中...") : (needsSolution ? "补全答案" : (exerciseKind.kind === "choice" && exerciseKind.options.length < 2 ? "修复题目并补全选项" : "重新生成解析"))}
             </button>
           </div>
           {needsSolution && (
