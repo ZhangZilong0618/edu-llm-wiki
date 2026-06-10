@@ -26,21 +26,75 @@ function convertLatexDelimiters(text: string): string {
   return text
 }
 
+const LATEX_COMMANDS = [
+  "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta",
+  "iota", "kappa", "lambda", "mu", "nu", "xi", "pi", "rho", "sigma", "tau", "upsilon",
+  "phi", "chi", "psi", "omega", "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma",
+  "Upsilon", "Phi", "Psi", "Omega", "partial", "infty", "sum", "prod", "int", "oint",
+  "sqrt", "frac", "mathrm", "mathbf", "mathit", "mathcal", "mathbb", "mathfrak",
+  "left", "right", "langle", "rangle", "lbrace", "rbrace", "lceil", "rceil", "lfloor", "rfloor",
+  "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "lim", "max", "min",
+  "det", "dim", "ker", "deg", "arg", "gcd", "Pr", "hom", "cdot", "times", "div",
+  "le", "ge", "ne", "approx", "propto", "rightarrow", "leftarrow", "to",
+]
+
+function protectInlineSegments(text: string): { text: string; restore: (value: string) => string } {
+  const segments: string[] = []
+  const protect = (match: string) => {
+    const token = `@@MD_SEG_${segments.length}@@`
+    segments.push(match)
+    return token
+  }
+
+  const protectedText = text
+    .replace(/```[\s\S]*?```/g, protect)
+    .replace(/`[^`\n]*`/g, protect)
+    .replace(/\$\$[\s\S]*?\$\$/g, protect)
+    .replace(/\$[^$\n]*?\$/g, protect)
+
+  return {
+    text: protectedText,
+    restore(value: string) {
+      return value.replace(/@@MD_SEG_(\d+)@@/g, (_m, index) => segments[Number(index)] || "")
+    },
+  }
+}
+
+function wrapBareLatexLine(line: string): string {
+  if (!/\\[A-Za-z]+/.test(line)) return line
+
+  const commandPattern = LATEX_COMMANDS.join("|")
+  const commandRegex = new RegExp(`\\\\(?:${commandPattern})(?!\\w)`, "g")
+  const hasEquationOperator = /[=≈≠≤≥<>]/.test(line)
+  const hasCjk = /[\u4e00-\u9fff]/.test(line)
+  const leading = line.match(/^\s*/)?.[0] || ""
+  const trailing = line.match(/\s*$/)?.[0] || ""
+  const trimmed = line.trim()
+
+  if (hasEquationOperator && !hasCjk && trimmed.length <= 300) {
+    return `${leading}$${trimmed}$${trailing}`
+  }
+
+  if (hasEquationOperator) {
+    const firstCommand = line.search(commandRegex)
+    if (firstCommand >= 0) {
+      const prefix = line.slice(0, firstCommand)
+      const expression = line.slice(firstCommand).replace(/[，。；;：:]\s*$/, "")
+      const suffix = line.slice(firstCommand + expression.length)
+      if (expression.trim()) return `${prefix}$${expression.trim()}$${suffix}`
+    }
+  }
+
+  return line.replace(commandRegex, (cmd) => `$${cmd}$`)
+}
+
 function wrapBareLatexCommands(text: string): string {
-  // Match common LaTeX commands that appear outside of $...$ delimiters
-  // Examples: \sigma, \varepsilon, \alpha, \beta, \gamma, \Delta, \pi, \mu, etc.
-  const latexCommands = [
-    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta",
-    "iota", "kappa", "lambda", "mu", "nu", "xi", "pi", "rho", "sigma", "tau", "upsilon",
-    "phi", "chi", "psi", "omega", "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma",
-    "Upsilon", "Phi", "Psi", "Omega", "partial", "infty", "sum", "prod", "int", "oint",
-    "sqrt", "frac", "mathrm", "mathbf", "mathit", "mathcal", "mathbb", "mathfrak",
-    "left", "right", "langle", "rangle", "lbrace", "rbrace", "lceil", "rceil", "lfloor", "rfloor",
-    "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "lim", "max", "min",
-    "det", "dim", "ker", "deg", "arg", "gcd", "Pr", "hom",
-  ]
-  const pattern = new RegExp(`(?<!\\$)(?<!\\\\)\\\\(${latexCommands.join("|")})(?!\\w)`, "g")
-  return text.replace(pattern, (_, cmd) => `$\\${cmd}$`)
+  const protectedSegments = protectInlineSegments(text)
+  const wrapped = protectedSegments.text
+    .split("\n")
+    .map(wrapBareLatexLine)
+    .join("\n")
+  return protectedSegments.restore(wrapped)
 }
 
 function processWikiLinks(text: string): string {
@@ -189,7 +243,7 @@ const components: any = {
 }
 
 export function Markdown({ children }: { children: string }) {
-  const processed = useMemo(() => convertLatexDelimiters(processWikiLinks(stripFrontmatter(wrapBareLatexCommands(children)))), [children])
+  const processed = useMemo(() => wrapBareLatexCommands(convertLatexDelimiters(processWikiLinks(stripFrontmatter(children)))), [children])
 
   return (
     <div className="markdown-body">
@@ -205,7 +259,7 @@ export function Markdown({ children }: { children: string }) {
 }
 
 export function InlineMarkdown({ children }: { children: string }) {
-  const processed = useMemo(() => convertLatexDelimiters(processWikiLinks(stripFrontmatter(wrapBareLatexCommands(children)))), [children])
+  const processed = useMemo(() => wrapBareLatexCommands(convertLatexDelimiters(processWikiLinks(stripFrontmatter(children)))), [children])
 
   return (
     <ReactMarkdown

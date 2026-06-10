@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from models.chat import ChatRequest, ChatResponse, ChatScope, CitedPage
 from services.context_budget import compute_budget
 from services.ingest_engine import _strip_images
+from services.language import language_instruction
 from services.llm_client import chat_complete, stream_chat
 from services.search_engine import graph_expand, keyword_search
 from storage.wiki_store import list_wiki_pages, read_wiki_page, wiki_path
@@ -42,6 +43,9 @@ SYSTEM_PROMPT = """You are a knowledgeable wiki assistant. Answer questions base
 ## Interaction Mode
 {mode_instruction}
 
+## Output Language
+{language_instruction}
+
 ## Rules
 - Answer based ONLY on the numbered wiki pages provided below.
 - If the provided pages don't contain enough information, say so honestly.
@@ -64,7 +68,10 @@ SYSTEM_PROMPT = """You are a knowledgeable wiki assistant. Answer questions base
 {pages_context}
 """
 
-GREETING_PROMPT = """You are a wiki assistant. The user sent a casual greeting — reply briefly and naturally, in one or two sentences. Do NOT invent wiki content or pretend to have retrieved pages."""
+GREETING_PROMPT = """You are a wiki assistant. The user sent a casual greeting — reply briefly and naturally, in one or two sentences. Do NOT invent wiki content or pretend to have retrieved pages.
+
+{language_instruction}
+"""
 
 
 def _mode_instruction(mode: str, answer_style: str) -> str:
@@ -353,7 +360,7 @@ async def chat(req: ChatRequest, project_id: str = Query("default")):
     # Greeting short-circuit
     if _is_greeting(last_user_msg):
         response = await chat_complete(
-            system_prompt=GREETING_PROMPT,
+            system_prompt=GREETING_PROMPT.format(language_instruction=language_instruction()),
             messages=messages,
         )
         return ChatResponse(content=response, cited_pages=[], conversation_id=req.conversation_id)
@@ -366,6 +373,7 @@ async def chat(req: ChatRequest, project_id: str = Query("default")):
 
     system = SYSTEM_PROMPT.format(
         mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
+        language_instruction=language_instruction(),
         purpose=purpose or "Not defined",
         index=index or "(No index)",
         page_list=page_list,
@@ -397,7 +405,10 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
     if _is_greeting(last_user_msg):
         async def greeting_gen():
             yield f"data: {json.dumps({'type': 'cited', 'pages': []})}\n\n"
-            async for chunk in stream_chat(system_prompt=GREETING_PROMPT, messages=messages):
+            async for chunk in stream_chat(
+                system_prompt=GREETING_PROMPT.format(language_instruction=language_instruction()),
+                messages=messages,
+            ):
                 yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(greeting_gen(), media_type="text/event-stream")
@@ -410,6 +421,7 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
 
     system = SYSTEM_PROMPT.format(
         mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
+        language_instruction=language_instruction(),
         purpose=purpose or "Not defined",
         index=index or "(No index)",
         page_list=page_list,

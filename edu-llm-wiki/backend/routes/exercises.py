@@ -6,6 +6,7 @@ import re
 from fastapi import APIRouter, HTTPException, Query
 
 from models.exercise import ExerciseCheckRequest, ExerciseCheckResponse, ExerciseCompleteSolutionRequest, ExerciseCompleteSolutionResponse
+from services.language import language_instruction
 from services.llm_client import chat_complete
 from storage.wiki_store import list_wiki_pages, read_wiki_page, write_wiki_page
 
@@ -72,6 +73,10 @@ JSON schema:
 """
 
 PLACEHOLDER_RE = re.compile(r"(请结合文档|待补充|暂无|todo|见原始文档|结合文档中的定义)", re.IGNORECASE)
+
+
+def _with_language(prompt: str) -> str:
+    return f"{prompt.rstrip()}\n\n{language_instruction()}"
 
 
 def _extract_json(text: str) -> dict:
@@ -222,7 +227,7 @@ async def check_exercise(
 """
 
     raw = await chat_complete(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=_with_language(SYSTEM_PROMPT),
         messages=[{"role": "user", "content": user_prompt}],
         max_tokens=900,
         temperature=0.1,
@@ -291,7 +296,7 @@ async def complete_solution(
     try:
         if should_rewrite_exercise:
             raw = await chat_complete(
-                system_prompt=REWRITE_EXERCISE_PROMPT,
+                system_prompt=_with_language(REWRITE_EXERCISE_PROMPT),
                 messages=[{"role": "user", "content": user_prompt}],
                 max_tokens=1800,
                 temperature=0.2,
@@ -313,7 +318,7 @@ async def complete_solution(
             updated_content = _replace_exercise_sections(content, rewritten_type, rewritten_question, solution, rewritten_choices)
         else:
             solution = await chat_complete(
-                system_prompt=COMPLETE_SOLUTION_PROMPT,
+                system_prompt=_with_language(COMPLETE_SOLUTION_PROMPT),
                 messages=[{"role": "user", "content": user_prompt}],
                 max_tokens=1500,
                 temperature=0.2,

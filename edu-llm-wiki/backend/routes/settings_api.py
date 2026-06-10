@@ -19,6 +19,7 @@ class LlmSettings(BaseModel):
     llm_base_url: str = ""
     llm_max_tokens: int = 8192
     llm_temperature: float = 0.3
+    generation_language: str = "zh"
 
 
 class EmbeddingSettings(BaseModel):
@@ -122,6 +123,7 @@ async def get_llm_settings():
         "llm_base_url": env.get("LLM_BASE_URL", ""),
         "llm_max_tokens": int(env.get("LLM_MAX_TOKENS", "8192")),
         "llm_temperature": float(env.get("LLM_TEMPERATURE", "0.3")),
+        "generation_language": env.get("GENERATION_LANGUAGE", "zh"),
     }
 
 
@@ -135,6 +137,7 @@ async def save_llm_settings(data: LlmSettings):
         "LLM_BASE_URL": data.llm_base_url,
         "LLM_MAX_TOKENS": str(data.llm_max_tokens),
         "LLM_TEMPERATURE": str(data.llm_temperature),
+        "GENERATION_LANGUAGE": data.generation_language,
     }
     _write_env(updates)
     return {"status": "saved"}
@@ -150,6 +153,7 @@ async def test_llm_connection(data: LlmSettings):
         "LLM_BASE_URL": data.llm_base_url,
         "LLM_MAX_TOKENS": str(data.llm_max_tokens),
         "LLM_TEMPERATURE": str(data.llm_temperature),
+        "GENERATION_LANGUAGE": data.generation_language,
     }
     _write_env(updates)
 

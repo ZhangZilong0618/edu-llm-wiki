@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from models.research import ResearchRequest, ResearchResponse, ResearchSaveRequest
+from services.language import language_instruction
 from services.llm_client import chat_complete
 from storage.wiki_store import list_wiki_pages, read_wiki_page, write_wiki_page
 
@@ -25,6 +26,7 @@ ACTION_LABELS = {
     "check_answer": "检查答案",
     "learning_path": "生成学习路线",
     "outline": "提炼大纲",
+    "custom": "自定义研究",
 }
 
 
@@ -52,6 +54,7 @@ ACTION_GUIDANCE = {
     "check_answer": "如果当前页是习题，给出判分标准、常见错误和标准解题路径。",
     "learning_path": "如果当前页是来源页，按章节和难度生成学习路线。",
     "outline": "如果当前页是来源页，提炼结构化大纲、关键概念、公式和练习入口。",
+    "custom": "严格围绕用户补充要求展开研究；如果用户要求不清晰，先按当前页面内容补全一个可教学、可保存的研究笔记。",
 }
 
 
@@ -109,7 +112,7 @@ async def run_research(req: ResearchRequest, project_id: str = Query("default"))
 页面类型要求：{type_guidance}
 
 输出要求：
-- 使用中文 Markdown。
+- {language_instruction()}
 - 所有数学公式必须使用 LaTeX：行内 $...$（如 $\\sigma$、$\\varepsilon$），块级 $$...$$。不要写裸 LaTeX 命令。
 - 内容要具体、可教学、能回流到 wiki。
 - 不要编造不存在的来源；如果是不确定推断，要明确说明。

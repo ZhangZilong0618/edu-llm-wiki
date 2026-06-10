@@ -12,10 +12,16 @@ function viewableExt(filename: string): boolean {
 
 const STAGE_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   parse: { label: "解析文件", icon: <FileText size={12} /> },
+  plan: { label: "规划主干", icon: <Brain size={12} /> },
+  generate_core: { label: "生成主干", icon: <PenLine size={12} /> },
+  derive: { label: "生成进阶", icon: <Zap size={12} /> },
+  generate_derived: { label: "组装页面", icon: <FileScan size={12} /> },
   analyze: { label: "LLM 分析", icon: <Brain size={12} /> },
   generate: { label: "LLM 生成", icon: <PenLine size={12} /> },
   write: { label: "写入页面", icon: <CheckCircle2 size={12} /> },
 }
+
+const INGEST_STAGES = ["parse", "plan", "generate_core", "derive", "generate_derived", "write"]
 
 const PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg"]
 
@@ -153,12 +159,7 @@ export function SourcesView() {
     setIngesting(filename)
     updateProgress(() => ({
       filename,
-      stages: [
-        { stage: "parse", message: "等待中...", status: "pending" as const },
-        { stage: "analyze", message: "等待中...", status: "pending" as const },
-        { stage: "generate", message: "等待中...", status: "pending" as const },
-        { stage: "write", message: "等待中...", status: "pending" as const },
-      ],
+      stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
     }))
     try {
       for await (const event of api.runIngestStream([filename])) {
@@ -172,6 +173,14 @@ export function SourcesView() {
               stages[idx] = { ...stages[idx], status: "active", message: event.message }
               if (event.total) {
                 stages[idx].pages = { current: 0, total: event.total, items: [] }
+              }
+            }
+          } else if (event.event === "llm_delta") {
+            const idx = stages.findIndex((s) => s.stage === event.stage)
+            if (idx >= 0) {
+              stages[idx] = {
+                ...stages[idx],
+                logs: `${stages[idx].logs || ""}${event.text || ""}`.slice(-12000),
               }
             }
           } else if (event.event === "stage_done") {
@@ -250,12 +259,7 @@ export function SourcesView() {
     setIngesting("all")
     updateProgress(() => ({
       filename: `[Batch] ${filenames.length} files`,
-      stages: [
-        { stage: "parse", message: "等待中...", status: "pending" as const },
-        { stage: "analyze", message: "等待中...", status: "pending" as const },
-        { stage: "generate", message: "等待中...", status: "pending" as const },
-        { stage: "write", message: "等待中...", status: "pending" as const },
-      ],
+      stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
     }))
 
     const fileStatus = new Map<string, string>()
@@ -279,6 +283,14 @@ export function SourcesView() {
                 ...stages[idx],
                 status: "active",
                 message: `${stageLabel} (${activeFiles.length} files)`,
+              }
+            }
+          } else if (event.event === "llm_delta") {
+            const idx = stages.findIndex((s) => s.stage === event.stage)
+            if (idx >= 0) {
+              stages[idx] = {
+                ...stages[idx],
+                logs: `${stages[idx].logs || ""}${event.text || ""}`.slice(-12000),
               }
             }
           } else if (event.event === "stage_done") {
@@ -649,16 +661,17 @@ function IngestProgressPanel({
           const isExpanded = expandedStages.has(s.stage)
           const hasDetails = s.details && (s.details.concepts?.length || s.details.formulas?.length)
           const hasPages = s.pages && s.pages.items.length > 0
+          const hasLogs = !!s.logs
 
           return (
             <div key={s.stage} className="rounded">
               <button
-                onClick={() => (hasDetails || hasPages) ? toggleExpand(s.stage) : null}
+                onClick={() => (hasDetails || hasPages || hasLogs) ? toggleExpand(s.stage) : null}
                 className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs transition-colors ${
                   s.status === "active" ? "bg-white/60 text-blue-700" :
                   s.status === "done" ? "text-green-700" :
                   "text-[var(--muted-foreground)]"
-                } ${(hasDetails || hasPages) ? "cursor-pointer hover:bg-white/40" : ""}`}
+                } ${(hasDetails || hasPages || hasLogs) ? "cursor-pointer hover:bg-white/40" : ""}`}
               >
                 <span className="shrink-0">
                   {s.status === "done" ? <CheckCircle2 size={12} className="text-green-500" /> :
@@ -674,12 +687,18 @@ function IngestProgressPanel({
                   </div>
                 )}
                 <span className="flex-1 truncate text-left">{s.message}</span>
-                {(hasDetails || hasPages) && (
+                {(hasDetails || hasPages || hasLogs) && (
                   <span className="shrink-0 text-[var(--muted-foreground)]">
                     {isExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                   </span>
                 )}
               </button>
+
+              {isExpanded && hasLogs && (
+                <pre className="ml-6 mb-1 max-h-40 overflow-auto rounded bg-slate-950 px-2 py-1.5 text-[10px] leading-relaxed text-slate-100 whitespace-pre-wrap">
+                  {s.logs}
+                </pre>
+              )}
 
               {isExpanded && hasDetails && s.details && (
                 <div className="ml-6 mb-1 px-2 py-1.5 rounded bg-white/60 text-[11px] space-y-1">

@@ -298,6 +298,7 @@ export interface LlmSettings {
   llm_base_url: string
   llm_max_tokens: number
   llm_temperature: number
+  generation_language: "zh" | "en"
 }
 
 export interface EmbeddingSettings {

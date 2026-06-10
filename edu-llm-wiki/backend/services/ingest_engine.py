@@ -1,7 +1,9 @@
-"""Two-step Chain-of-Thought Ingest Engine.
+"""Multi-stage educational wiki ingest engine.
 
-Step 1 (Analysis): LLM reads document -> structured analysis of concepts, formulas, relationships
-Step 2 (Generation): LLM takes analysis -> generates wiki pages with cross-references
+Stage 1: plan source summary and core concept/formula/principle pages.
+Stage 2: generate the core wiki pages.
+Stage 3: derive exercises, synthesis, Q&A, and study-guide structures from the core pages.
+Stage 4: assemble, validate, write, index, and sync generated wiki pages.
 
 Supports concurrent processing with configurable concurrency limit.
 """
@@ -12,7 +14,8 @@ import re
 from pathlib import Path
 
 from services.file_parser import parse_file
-from services.llm_client import chat_complete
+from services.language import language_instruction
+from services.llm_client import chat_complete, stream_chat
 from storage.wiki_store import (
     compute_source_hash,
     ensure_dirs,
@@ -94,6 +97,9 @@ ANALYSIS_PROMPT = """You are an expert educational content analyzer. Your task i
 
 ## Existing Wiki Context
 {context}
+
+## Output Language
+{language_instruction}
 
 ## Instructions
 Analyze the document and output a JSON object with the following structure:
@@ -187,7 +193,7 @@ IMPORTANT for prerequisites:
 IMPORTANT for type classification:
 - Put equations, coefficients, variables with equations, and named mathematical expressions in formulas, not concepts.
 - Formula names MUST be semantic names, not raw equations or LaTeX. Prefer the physical quantity, law, or relationship name itself, such as "电导率", "布拉格定律", "密度", "热容关系", "Kohn-Sham 方程". Do not add "公式" just to make a title. Never use titles like "J=\\sigma E", "\\rho=m/V", "a=b\\ne c", or "\\Delta V=\\alpha\\Delta T".
-- When describing formulas or equations in the output, write all math using proper LaTeX syntax: inline math must be wrapped in $...$ (e.g., $\\sigma$, $\\varepsilon$), and display equations must be wrapped in $$...$$ (e.g., $$E = \\sigma \\varepsilon$$). Do NOT leave bare LaTeX commands like \\sigma or \\varepsilon without delimiters.
+- When describing formulas or equations in the output, write math using lightweight inline LaTeX delimiters $...$ (e.g., $\\sigma$, $\\varepsilon$, $E = \\sigma \\varepsilon$). Do NOT force double-dollar display blocks, and do NOT leave bare LaTeX commands like \\sigma or \\varepsilon without delimiters.
 - Put laws, theorems, mechanisms, effects, and named rules in principles when they describe a general relationship or causal rule.
 - Put worked examples, review questions, homework questions, and calculation prompts in exercises, even if no full solution is present.
 - When creating exercises, keep question types diverse when the source material allows it:
@@ -221,6 +227,9 @@ GENERATION_PROMPT = """You are an expert educational content creator. Your task 
 ## Schema (Page Structure Rules)
 {schema}
 
+## Output Language
+{language_instruction}
+
 ## Instructions
 Based on the analysis, generate wiki pages. For each page, output a JSON object with:
 - path: relative path within wiki/ (e.g., "concepts/quantum_state.md")
@@ -243,7 +252,7 @@ Type coverage rules:
 - Create synthesis pages for every item in analysis.synthesis. Synthesis pages MUST be useful study pages, not summaries only. Use sections: "## 核心综合", "## 关联知识", "## 易混点/对比", "## 进一步问题". Link related pages with [[...]] where possible.
 - Create query pages for every item in analysis.q_and_a. Query pages MUST use sections: "## 问题", "## 回答", "## 为什么重要", "## 相关知识". They should be concise, searchable, and suitable for later chat retrieval.
 - Create system pages for every item in analysis.system_notes. System pages MUST use sections: "## 用途", "## 推荐学习顺序", "## 复习策略", "## 质量提醒". They should guide the learner or wiki maintainer, not duplicate lesson content.
-- CRITICAL: All mathematical content must be formatted with proper LaTeX delimiters: inline math as $...$ (e.g., $\\sigma$, $\\varepsilon$, $E = \\sigma \\varepsilon$) and display equations as $$...$$. Never write bare LaTeX commands like \\sigma or \\varepsilon without $...$ delimiters.
+- CRITICAL: Mathematical content should use lightweight inline LaTeX delimiters $...$ (e.g., $\\sigma$, $\\varepsilon$, $E = \\sigma \\varepsilon$). Do not force double-dollar display blocks. Never write bare LaTeX commands like \\sigma or \\varepsilon without $...$ delimiters.
 - Use source only for document summaries, never for ordinary concepts/formulas/principles/exercises.
 - If synthesis, q_and_a, or system_notes are empty but the document has meaningful educational content, create one concise page of each type from the available analysis.
 - Do not create empty or placeholder pages. Every generated page must contain concrete information from the document analysis.
@@ -265,6 +274,194 @@ Example:
   }}
 ]
 ```
+"""
+
+CORE_PLANNING_PROMPT = """You are an expert educational wiki planner. Your task is to read a source document and design the core knowledge pages for a subject wiki.
+
+## Document Content
+{content}
+
+## Existing Wiki Context
+{context}
+
+## Output Language
+{language_instruction}
+
+## Instructions
+Plan ONLY the source summary and core knowledge pages. Do not create exercises, Q&A, synthesis pages, or study guides in this stage.
+
+Output a JSON object with this shape:
+
+```json
+{{
+  "summary": "A 2-3 sentence source summary grounded in the document",
+  "source_summary": {{
+    "title": "Source document title",
+    "scope": "What this document covers",
+    "quality_warnings": ["OCR/table/formula/coverage issues to verify"]
+  }},
+  "concepts": [
+    {{
+      "name": "Concept name in source language",
+      "definition": "Concise definition grounded in the document",
+      "related_concepts": ["related concept names"],
+      "parent_concept": "broader concept if applicable",
+      "prerequisites": ["concept names that should be learned first"],
+      "priority": "core|supporting",
+      "source_evidence": "short phrase or section cue from the source"
+    }}
+  ],
+  "formulas": [
+    {{
+      "name": "Semantic formula name, not the raw equation",
+      "latex": "LaTeX expression",
+      "variables": "Explanation of each variable",
+      "applications": "When and how this formula is used",
+      "prerequisites": ["concept/formula names that should be learned first"],
+      "priority": "core|supporting",
+      "source_evidence": "short phrase or section cue from the source"
+    }}
+  ],
+  "principles": [
+    {{
+      "name": "Principle/theorem/law name",
+      "statement": "Formal statement",
+      "conditions": "Conditions under which it applies",
+      "derivation_summary": "Brief derivation outline if present",
+      "applications": "Practical applications",
+      "prerequisites": ["concept/principle names that should be learned first"],
+      "priority": "core|supporting",
+      "source_evidence": "short phrase or section cue from the source"
+    }}
+  ],
+  "relationships": [
+    {{
+      "from": "concept/formula/principle name",
+      "to": "concept/formula/principle name",
+      "type": "prerequisite|derives|applies_to|related",
+      "description": "nature of the relationship"
+    }}
+  ],
+  "knowledge_gaps": ["areas where the source is incomplete"],
+  "review_items": ["items that need human review"]
+}}
+```
+
+Rules:
+- Keep this stage structural: identify what pages should exist and why.
+- Use only page types concept, formula, and principle for core knowledge.
+- Put equations, variables with equations, and named mathematical expressions in formulas, not concepts.
+- Formula names MUST be semantic names, not raw equations or LaTeX.
+- Every concept/formula/principle MUST include prerequisites; use [] only for genuinely foundational items.
+- All math in explanations should use lightweight inline LaTeX delimiters $...$; do not force double-dollar display blocks.
+- Prefer fewer, clearer core pages over many thin pages.
+
+CRITICAL: Output ONLY the JSON object, no markdown fences or explanation.
+"""
+
+CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your task is to generate only the core wiki pages from an approved page plan.
+
+## Core Page Plan
+{plan}
+
+## Purpose (Educational Goals)
+{purpose}
+
+## Schema (Page Structure Rules)
+{schema}
+
+## Output Language
+{language_instruction}
+
+## Instructions
+Generate wiki pages only for concept, formula, and principle items in the plan. Do not create exercises, Q&A, synthesis pages, source pages, or system/study-guide pages in this stage.
+
+For each page, output a JSON object with:
+- path: relative path within wiki/ (e.g., "concepts/quantum_state.md")
+- title: page title
+- page_type: concept | formula | principle
+- content: full markdown content with useful [[wikilinks]]
+- sources: list of source file references
+- tags: list of relevant tags
+- prerequisites: list of page paths that must be understood before this page
+
+Page rules:
+- Concept pages should define, explain, and connect the concept to related core pages.
+- Formula pages must contain sections "## 公式", "## 变量说明", and "## 适用场景".
+- Principle pages must contain sections "## 陈述", "## 适用条件", "## 推导/说明", and "## 应用".
+- Formula titles must be semantic human-readable names, not raw equations.
+- Do not invent new knowledge not supported by the plan.
+- Use [[page/path]] links only for pages that are in the plan or existing wiki context.
+- All math should use lightweight inline LaTeX delimiters $...$; do not force double-dollar display blocks.
+
+Return a JSON array of page objects.
+CRITICAL: Output ONLY the JSON array, no markdown fences or explanation.
+"""
+
+DERIVED_LEARNING_PROMPT = """You are an expert educational designer. Your task is to create advanced learning materials from already planned/generated core wiki pages.
+
+## Core Page Plan
+{plan}
+
+## Generated Core Pages
+{core_pages}
+
+## Output Language
+{language_instruction}
+
+## Instructions
+Create derived learning structures from the core concept/formula/principle pages. Do not add new core knowledge pages.
+
+Output a JSON object with this shape:
+
+```json
+{{
+  "exercises": [
+    {{
+      "type": "short_answer|multiple_choice|fill_blank",
+      "question": "Exercise question text",
+      "choices": ["A. option text", "B. option text"],
+      "solution": "Solution grounded in the core pages",
+      "knowledge_points": ["titles of existing core pages this exercise tests"]
+    }}
+  ],
+  "synthesis": [
+    {{
+      "title": "Synthesis page title",
+      "focus": "What cross-page understanding this helps build",
+      "key_points": ["comparison, connection, or misconception"],
+      "connections": ["titles of existing core pages"],
+      "open_questions": ["follow-up questions or limitations"]
+    }}
+  ],
+  "q_and_a": [
+    {{
+      "question": "A high-value learner question",
+      "answer": "Clear answer grounded in existing core pages",
+      "why_it_matters": "Why this question is useful",
+      "related_items": ["titles of existing core pages"]
+    }}
+  ],
+  "system_notes": [
+    {{
+      "title": "Learning/navigation note title",
+      "purpose": "How this note improves learning or wiki maintenance",
+      "learning_order": ["ordered titles of existing core pages"],
+      "study_strategy": ["specific review action"],
+      "quality_warnings": ["things to verify against the source"]
+    }}
+  ]
+}}
+```
+
+Rules:
+- Every exercise must reference existing core page titles in knowledge_points.
+- Include a useful mix of multiple_choice, fill_blank, and short_answer when the source supports it.
+- Multiple-choice exercises must include 3-5 visible choices.
+- Do not introduce facts that are absent from the core plan/pages.
+- Synthesis, Q&A, and system notes should help learners use the core wiki, not duplicate whole pages.
+
+CRITICAL: Output ONLY the JSON object, no markdown fences or explanation.
 """
 
 
@@ -529,6 +726,15 @@ def _bullet_list(items: list, fallback: str = "待补充") -> str:
     return "\n".join(f"- {item}" for item in clean) if clean else fallback
 
 
+def _prefer_inline_math(content: str) -> str:
+    """Normalize display math blocks to lightweight inline math."""
+    def replace_block(match: re.Match) -> str:
+        inner = re.sub(r"\s+", " ", match.group(1)).strip()
+        return f"${inner}$"
+
+    return re.sub(r"\$\$\s*(.*?)\s*\$\$", replace_block, content, flags=re.DOTALL)
+
+
 def _names_from_items(items: list[dict], key: str = "name", limit: int = 8) -> list[str]:
     names: list[str] = []
     for item in items:
@@ -577,9 +783,7 @@ def _normalize_generated_pages(pages: list[dict], source_relative_path: str) -> 
         page.setdefault("path", _page_path_for(ptype, title))
         if ptype == "formula":
             content = str(page.get("content") or "")
-            content = re.sub(r"\$\$\s*(?:\\n|\n)\s*\$\$", "$$", content)
-            content = content.replace("$$\\n", "$$\n").replace("\\n$$", "\n$$")
-            page["content"] = content
+            page["content"] = _prefer_inline_math(content)
         page.setdefault("sources", [source_relative_path])
         normalized.append(page)
     return normalized
@@ -614,6 +818,24 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             "prerequisites": prerequisites or [],
         })
 
+    for item in analysis.get("concepts", []) or []:
+        if not isinstance(item, dict):
+            continue
+        title = _clean_item_title(str(item.get("name") or item.get("title") or ""))
+        if not title:
+            continue
+        definition = str(item.get("definition") or item.get("description") or "").strip()
+        related = item.get("related_concepts") if isinstance(item.get("related_concepts"), list) else []
+        parent = str(item.get("parent_concept") or "").strip()
+        prereqs = item.get("prerequisites") if isinstance(item.get("prerequisites"), list) else []
+        content = (
+            f"# {title}\n\n"
+            f"## 定义\n\n{definition or f'{title} 是来源文档中需要掌握的核心概念。'}\n\n"
+            f"## 上位概念\n\n{parent or '待补充'}\n\n"
+            f"## 相关概念\n\n{_bullet_list(related, '待补充')}\n"
+        )
+        add_page("concept", title, content, ["concept"], prereqs)
+
     for item in analysis.get("formulas", []) or []:
         if not isinstance(item, dict):
             continue
@@ -634,7 +856,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         prereqs = item.get("prerequisites") if isinstance(item.get("prerequisites"), list) else []
         content = (
             f"# {title}\n\n"
-            f"## 公式\n\n$$\n{latex}\n$$\n\n"
+            f"## 公式\n\n${latex}$\n\n"
             f"## 变量说明\n\n{variables or '待补充'}\n\n"
             f"## 适用场景\n\n{applications or '待补充'}\n"
         )
@@ -1049,95 +1271,148 @@ async def read_context(project_id: str = "default") -> str:
     return "\n\n".join(context_parts)
 
 
-async def run_ingest(source_relative_path: str, force: bool = False, *, project_id: str = "default") -> dict:
-    """Run the two-step ingest pipeline for a single source file.
+async def _emit_optional(emit, event: str, **kwargs):
+    if emit:
+        await emit(event, **kwargs)
 
-    Returns: {source, status, wiki_pages_created, wiki_pages_updated, concepts_extracted, error}
-    """
-    ensure_dirs(project_id=project_id)
-    sp = sources_path(project_id)
-    source_path = sp / source_relative_path
 
-    if not source_path.exists():
-        return {"source": source_relative_path, "status": "error", "error": "File not found"}
+async def _chat_complete_progress(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    max_tokens: int,
+    emit=None,
+    source: str = "",
+    stage: str = "",
+) -> str:
+    chunks: list[str] = []
+    async for chunk in stream_chat(
+        system_prompt=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+    ):
+        chunks.append(chunk)
+        await _emit_optional(emit, "llm_delta", source=source, stage=stage, text=chunk)
+    return "".join(chunks)
 
-    # Step 0: Check cache
-    content_hash = compute_source_hash(str(source_path))
-    if not force:
-        cached = get_ingest_cache(source_relative_path, project_id=project_id)
-        if cached == content_hash:
-            return {"source": source_relative_path, "status": "cached",
-                    "wiki_pages_created": [], "wiki_pages_updated": []}
 
-    # Parse file
-    try:
-        wp = wiki_path(project_id)
-        media_dir = str(wp / "media")
-        content, extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
-    except Exception as e:
-        return {"source": source_relative_path, "status": "error", "error": f"Parse error: {e}"}
+def _knowledge_counts(analysis: dict) -> dict[str, int]:
+    return {
+        "concepts": len(_as_list(analysis.get("concepts"))),
+        "formulas": len(_as_list(analysis.get("formulas"))),
+        "principles": len(_as_list(analysis.get("principles"))),
+        "exercises": len(_as_list(analysis.get("exercises"))),
+        "synthesis": len(_as_list(analysis.get("synthesis"))),
+        "q_and_a": len(_as_list(analysis.get("q_and_a"))),
+        "system_notes": len(_as_list(analysis.get("system_notes"))),
+    }
 
-    # Truncate if too long and strip embedded images
-    max_chars = 60000
-    content = _strip_images(content)
-    if len(content) > max_chars:
-        content = content[:max_chars] + "\n\n[Content truncated...]"
 
-    # Step 1: Analysis
-    try:
-        context = await read_context(project_id=project_id)
-        analysis_raw = await chat_complete(
-            system_prompt="You are an expert educational content analyzer. Output ONLY valid JSON.",
-            messages=[{"role": "user", "content": ANALYSIS_PROMPT.format(
-                content=content, context=context[:3000]
-            )}],
-            temperature=0.2,
-            max_tokens=8192,
-        )
-        # Strip markdown code fences if present
-        analysis_raw = analysis_raw.strip()
-        if analysis_raw.startswith("```"):
-            analysis_raw = analysis_raw.split("```")[1]
-            if analysis_raw.startswith("json"):
-                analysis_raw = analysis_raw[4:]
-        analysis = _augment_empty_analysis(await _load_llm_json(analysis_raw, expected="object"), content)
-    except Exception as e:
-        return {"source": source_relative_path, "status": "error",
-                "error": f"Analysis error: {e}"}
+def _analysis_details(analysis: dict) -> dict:
+    return {
+        "concepts": [c.get("name", "") for c in _as_list(analysis.get("concepts"))[:10] if isinstance(c, dict)],
+        "formulas": [f.get("name", "") for f in _as_list(analysis.get("formulas"))[:5] if isinstance(f, dict)],
+        "principles": [p.get("name", "") for p in _as_list(analysis.get("principles"))[:5] if isinstance(p, dict)],
+        "exercises": [e.get("question", "")[:40] for e in _as_list(analysis.get("exercises"))[:5] if isinstance(e, dict)],
+        "synthesis": [s.get("title", "") for s in _as_list(analysis.get("synthesis"))[:5] if isinstance(s, dict)],
+        "q_and_a": [q.get("question", "")[:40] for q in _as_list(analysis.get("q_and_a"))[:5] if isinstance(q, dict)],
+        "system_notes": [s.get("title", "") for s in _as_list(analysis.get("system_notes"))[:5] if isinstance(s, dict)],
+    }
 
-    # Step 2: Generation
-    try:
-        wp = wiki_path(project_id)
-        purpose_path = wp / "purpose.md"
-        schema_path = wp / "schema.md"
-        purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
-        schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
 
-        gen_raw = await chat_complete(
-            system_prompt="You are an expert educational content creator. Output ONLY valid JSON array.",
-            messages=[{"role": "user", "content": GENERATION_PROMPT.format(
-                analysis=json.dumps(analysis, ensure_ascii=False, indent=2),
-                purpose=purpose_text,
-                schema=schema_text,
-            )}],
-            temperature=0.3,
-            max_tokens=8192,
-        )
-        gen_raw = gen_raw.strip()
-        if gen_raw.startswith("```"):
-            gen_raw = gen_raw.split("```")[1]
-            if gen_raw.startswith("json"):
-                gen_raw = gen_raw[4:]
-        pages = _ensure_pages_from_analysis(
-            analysis,
-            await _load_llm_json(gen_raw, expected="array"),
-            source_relative_path,
-        )
-    except Exception as e:
-        return {"source": source_relative_path, "status": "error",
-                "error": f"Generation error: {e}"}
+def _merge_derived_analysis(core_plan: dict, derived: object) -> dict:
+    analysis = dict(core_plan)
+    if isinstance(derived, dict):
+        for key in ("exercises", "synthesis", "q_and_a", "system_notes"):
+            analysis[key] = _as_list(derived.get(key))
+    else:
+        for key in ("exercises", "synthesis", "q_and_a", "system_notes"):
+            analysis.setdefault(key, [])
+    return analysis
 
-    # Write pages
+
+async def _plan_core_knowledge(content: str, *, project_id: str, emit=None, source_relative_path: str = "") -> dict:
+    context = await read_context(project_id=project_id)
+    raw = await _chat_complete_progress(
+        system_prompt="You are an expert educational wiki planner. Output ONLY valid JSON.",
+        user_prompt=CORE_PLANNING_PROMPT.format(
+            content=content,
+            context=context[:3000],
+            language_instruction=language_instruction(),
+        ),
+        temperature=0.15,
+        max_tokens=8192,
+        emit=emit,
+        source=source_relative_path,
+        stage="plan",
+    )
+    return _augment_empty_analysis(await _load_llm_json(raw, expected="object"), content)
+
+
+async def _generate_core_pages(core_plan: dict, *, project_id: str, source_relative_path: str, emit=None) -> list[dict]:
+    wp = wiki_path(project_id)
+    purpose_path = wp / "purpose.md"
+    schema_path = wp / "schema.md"
+    purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
+    schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
+
+    raw = await _chat_complete_progress(
+        system_prompt="You are an expert educational wiki writer. Output ONLY valid JSON array.",
+        user_prompt=CORE_PAGE_GENERATION_PROMPT.format(
+            plan=json.dumps(core_plan, ensure_ascii=False, indent=2),
+            purpose=purpose_text,
+            schema=schema_text,
+            language_instruction=language_instruction(),
+        ),
+        temperature=0.25,
+        max_tokens=8192,
+        emit=emit,
+        source=source_relative_path,
+        stage="generate_core",
+    )
+    return _ensure_pages_from_analysis(
+        core_plan,
+        await _load_llm_json(raw, expected="array"),
+        source_relative_path,
+    )
+
+
+async def _generate_derived_analysis(core_plan: dict, core_pages: list[dict], *, emit=None, source_relative_path: str = "") -> dict:
+    core_page_summaries = [
+        {
+            "path": page.get("path"),
+            "title": page.get("title"),
+            "page_type": page.get("page_type"),
+            "content": str(page.get("content") or "")[:1200],
+        }
+        for page in core_pages
+        if page.get("page_type") in {"concept", "formula", "principle"}
+    ]
+    raw = await _chat_complete_progress(
+        system_prompt="You are an expert educational designer. Output ONLY valid JSON.",
+        user_prompt=DERIVED_LEARNING_PROMPT.format(
+            plan=json.dumps(core_plan, ensure_ascii=False, indent=2),
+            core_pages=json.dumps(core_page_summaries, ensure_ascii=False, indent=2),
+            language_instruction=language_instruction(),
+        ),
+        temperature=0.35,
+        max_tokens=8192,
+        emit=emit,
+        source=source_relative_path,
+        stage="derive",
+    )
+    return await _load_llm_json(raw, expected="object")
+
+
+def _write_ingest_outputs(
+    pages: list[dict],
+    analysis: dict,
+    source_relative_path: str,
+    *,
+    project_id: str,
+) -> dict:
     created = []
     updated = []
     concepts = []
@@ -1166,9 +1441,8 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
         except Exception:
             continue
 
-    # Always create source summary
     source_summary_path = f"sources/{source_relative_path.rsplit('.', 1)[0].replace('/', '_')}.md"
-    source_summary = write_wiki_page(
+    write_wiki_page(
         relative_path=source_summary_path,
         title=source_relative_path,
         page_type="source",
@@ -1176,226 +1450,197 @@ async def run_ingest(source_relative_path: str, force: bool = False, *, project_
         sources=[source_relative_path],
         project_id=project_id,
     )
-
-    if source_summary:
-        created.append(source_summary_path)
+    created.append(source_summary_path)
 
     generated_paths = [p["path"] for p in pages if p.get("path")]
     record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
 
-    # Update index
     all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
                for p in pages]
     all_new.append({"path": source_summary_path, "title": source_relative_path, "type": "source"})
     update_index(all_new, project_id=project_id)
 
-    # Save cache
+    _sync_vectors(pages, project_id=project_id)
+
+    return {
+        "created": created,
+        "updated": updated,
+        "concepts": concepts,
+        "source_summary_path": source_summary_path,
+    }
+
+
+async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *, project_id: str = "default", emit=None) -> dict:
+    ensure_dirs(project_id=project_id)
+    sp = sources_path(project_id)
+    source_path = sp / source_relative_path
+
+    if not source_path.exists():
+        await _emit_optional(emit, "error", source=source_relative_path, message="File not found")
+        return {"source": source_relative_path, "status": "error", "error": "File not found"}
+
+    content_hash = compute_source_hash(str(source_path))
+    if not force:
+        cached = get_ingest_cache(source_relative_path, project_id=project_id)
+        if cached == content_hash:
+            await _emit_optional(emit, "cached", source=source_relative_path, message="Already processed (cached)")
+            return {"source": source_relative_path, "status": "cached",
+                    "wiki_pages_created": [], "wiki_pages_updated": []}
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="parse", message=f"正在解析文件: {source_relative_path}")
+    try:
+        wp = wiki_path(project_id)
+        media_dir = str(wp / "media")
+        content, _extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
+    except Exception as e:
+        await _emit_optional(emit, "error", source=source_relative_path, message=f"解析失败: {e}")
+        return {"source": source_relative_path, "status": "error", "error": f"Parse error: {e}"}
+
+    max_chars = 60000
+    content = _strip_images(content)
+    truncated = len(content) > max_chars
+    if truncated:
+        content = content[:max_chars] + "\n\n[Content truncated...]"
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="parse",
+                         message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="plan", message="Step 1/4: LLM 正在规划核心知识页面...")
+    try:
+        core_plan = await _plan_core_knowledge(
+            content,
+            project_id=project_id,
+            emit=emit,
+            source_relative_path=source_relative_path,
+        )
+    except Exception as e:
+        await _emit_optional(emit, "error", source=source_relative_path, message=f"知识规划失败: {e}")
+        return {"source": source_relative_path, "status": "error", "error": f"Planning error: {e}"}
+
+    counts = _knowledge_counts(core_plan)
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="plan",
+                         message=f"规划完成: {counts['concepts']} 个概念, {counts['formulas']} 个公式, {counts['principles']} 个原理",
+                         details=_analysis_details(core_plan))
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="generate_core",
+                         message=f"Step 2/4: LLM 正在生成主干 Wiki 页面..."
+                                 f"({counts['concepts']} 概念 + {counts['formulas']} 公式 + {counts['principles']} 原理)")
+    try:
+        core_pages = await _generate_core_pages(
+            core_plan,
+            project_id=project_id,
+            source_relative_path=source_relative_path,
+            emit=emit,
+        )
+        core_pages = [p for p in core_pages if p.get("page_type") in {"concept", "formula", "principle"}]
+    except Exception as e:
+        await _emit_optional(emit, "error", source=source_relative_path, message=f"主干页面生成失败: {e}")
+        return {"source": source_relative_path, "status": "error", "error": f"Core generation error: {e}"}
+
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="generate_core", message=f"主干页面生成完成: {len(core_pages)} 个页面")
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="derive", message="Step 3/4: LLM 正在基于主干页面生成练习、综合、问答和学习指引...")
+    try:
+        derived = await _generate_derived_analysis(
+            core_plan,
+            core_pages,
+            emit=emit,
+            source_relative_path=source_relative_path,
+        )
+        analysis = _merge_derived_analysis(core_plan, derived)
+    except Exception as e:
+        await _emit_optional(emit, "error", source=source_relative_path, message=f"进阶内容生成失败: {e}")
+        return {"source": source_relative_path, "status": "error", "error": f"Derived generation error: {e}"}
+
+    counts = _knowledge_counts(analysis)
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="derive",
+                         message=f"进阶内容生成完成: {counts['exercises']} 个习题, {counts['synthesis']} 个综合, "
+                                 f"{counts['q_and_a']} 个问答, {counts['system_notes']} 个系统指引",
+                         details=_analysis_details(analysis))
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="generate_derived", message="Step 4/4: 正在组装派生 Wiki 页面并校验补全...")
+    try:
+        pages = _ensure_pages_from_analysis(analysis, core_pages, source_relative_path)
+    except Exception as e:
+        await _emit_optional(emit, "error", source=source_relative_path, message=f"页面组装失败: {e}")
+        return {"source": source_relative_path, "status": "error", "error": f"Page assembly error: {e}"}
+
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="generate_derived", message=f"页面组装完成: {len(pages)} 个页面")
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="write", message=f"正在写入 {len(pages)} 个页面...", total=len(pages))
+    created = []
+    updated = []
+    for i, page in enumerate(pages):
+        existing = read_wiki_page(page["path"], project_id=project_id) if page.get("path") else None
+        action = "更新" if existing else "新建"
+        await _emit_optional(emit, "write_page", source=source_relative_path,
+                             message=f"[{i + 1}/{len(pages)}] {action}: {page.get('title', page.get('path', '?'))} ({page.get('page_type', 'concept')})",
+                             current=i + 1, total=len(pages),
+                             title=page.get("title", page.get("path", "?")),
+                             page_type=page.get("page_type", "concept"),
+                             action=action)
+
+    outputs = _write_ingest_outputs(pages, analysis, source_relative_path, project_id=project_id)
+    created = outputs["created"]
+    updated = outputs["updated"]
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="write", message=f"写入完成: {len(created)} 新建, {len(updated)} 更新",
+                         created=len(created), updated=len(updated), total=len(pages))
+
     set_ingest_cache(source_relative_path, content_hash, project_id=project_id)
 
-    # Sync vectors
-    _sync_vectors(pages, project_id=project_id)
+    await _emit_optional(emit, "complete", source=source_relative_path,
+                         message=f"Done: {len(created)} pages created",
+                         created=created, updated=updated)
 
     return {
         "source": source_relative_path,
         "status": "generated",
         "wiki_pages_created": created,
         "wiki_pages_updated": updated,
-        "concepts_extracted": concepts,
+        "concepts_extracted": outputs["concepts"],
     }
+
+
+async def run_ingest(source_relative_path: str, force: bool = False, *, project_id: str = "default") -> dict:
+    """Run the multi-stage ingest pipeline for a single source file.
+
+    Returns: {source, status, wiki_pages_created, wiki_pages_updated, concepts_extracted, error}
+    """
+    return await _run_ingest_pipeline(source_relative_path, force=force, project_id=project_id)
 
 
 async def run_ingest_streaming(source_paths: list[str], force: bool = False, *, project_id: str = "default"):
     """Streaming version of run_ingest — yields progress events as SSE dicts."""
-
-    async def emit(event: str, **kwargs):
-        return {"event": event, **kwargs}
-
     for source_relative_path in source_paths:
-        ensure_dirs(project_id=project_id)
-        sp = sources_path(project_id)
-        source_path = sp / source_relative_path
+        queue: asyncio.Queue = asyncio.Queue()
 
-        if not source_path.exists():
-            yield await emit("error", source=source_relative_path, message="File not found")
-            continue
+        async def collect(event: str, **kwargs):
+            await queue.put({"event": event, **kwargs})
 
-        # Cache check
-        content_hash = compute_source_hash(str(source_path))
-        if not force:
-            cached = get_ingest_cache(source_relative_path, project_id=project_id)
-            if cached == content_hash:
-                yield await emit("cached", source=source_relative_path, message="Already processed (cached)")
-                continue
-
-        # Parse
-        yield await emit("stage", source=source_relative_path,
-                        stage="parse", message=f"正在解析文件: {source_relative_path}")
-        try:
-            wp = wiki_path(project_id)
-            media_dir = str(wp / "media")
-            content, extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
-        except Exception as e:
-            yield await emit("error", source=source_relative_path, message=f"解析失败: {e}")
-            continue
-
-        max_chars = 60000
-        content = _strip_images(content)
-        truncated = len(content) > max_chars
-        if truncated:
-            content = content[:max_chars] + "\n\n[Content truncated...]"
-        yield await emit("stage_done", source=source_relative_path,
-                        stage="parse",
-                        message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
-
-        # Step 1: Analysis
-        yield await emit("stage", source=source_relative_path,
-                        stage="analyze", message="Step 1/2: LLM 正在分析文档结构...")
-        try:
-            context = await read_context(project_id=project_id)
-            analysis_raw = await chat_complete(
-                system_prompt="You are an expert educational content analyzer. Output ONLY valid JSON.",
-                messages=[{"role": "user", "content": ANALYSIS_PROMPT.format(
-                    content=content, context=context[:3000]
-                )}],
-                temperature=0.2,
-                max_tokens=8192,
-            )
-            analysis = _augment_empty_analysis(await _load_llm_json(analysis_raw, expected="object"), content)
-        except Exception as e:
-            yield await emit("error", source=source_relative_path, message=f"分析失败: {e}")
-            continue
-
-        # Report analysis findings in detail
-        concepts_found = analysis.get("concepts", [])
-        formulas_found = analysis.get("formulas", [])
-        principles_found = analysis.get("principles", [])
-        exercises_found = analysis.get("exercises", [])
-        synthesis_found = analysis.get("synthesis", [])
-        qa_found = analysis.get("q_and_a", [])
-        system_found = analysis.get("system_notes", [])
-
-        yield await emit("stage_done", source=source_relative_path,
-                        stage="analyze",
-                        message=f"分析完成: {len(concepts_found)} 个概念, {len(formulas_found)} 个公式, "
-                                f"{len(principles_found)} 个原理, {len(exercises_found)} 个习题, "
-                                f"{len(synthesis_found)} 个综合, {len(qa_found)} 个问答, {len(system_found)} 个系统指引",
-                        details={
-                            "concepts": [c.get("name", "") for c in concepts_found[:10]],
-                            "formulas": [f.get("name", "") for f in formulas_found[:5]],
-                            "principles": [p.get("name", "") for p in principles_found[:5]],
-                            "exercises": [e.get("question", "")[:40] for e in exercises_found[:5]],
-                            "synthesis": [s.get("title", "") for s in synthesis_found[:5]],
-                            "q_and_a": [q.get("question", "")[:40] for q in qa_found[:5]],
-                            "system_notes": [s.get("title", "") for s in system_found[:5]],
-                        })
-
-        # Step 2: Generation
-        yield await emit("stage", source=source_relative_path,
-                        stage="generate",
-                        message=f"Step 2/2: LLM 正在生成 Wiki 页面..."
-                              f"({len(concepts_found)} 概念 + {len(formulas_found)} 公式 "
-                              f"+ {len(principles_found)} 原理 + {len(exercises_found)} 习题 "
-                              f"+ {len(synthesis_found)} 综合 + {len(qa_found)} 问答 + {len(system_found)} 系统)")
-        try:
-            wp = wiki_path(project_id)
-            purpose_path = wp / "purpose.md"
-            schema_path = wp / "schema.md"
-            purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
-            schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
-
-            gen_raw = await chat_complete(
-                system_prompt="You are an expert educational content creator. Output ONLY valid JSON array.",
-                messages=[{"role": "user", "content": GENERATION_PROMPT.format(
-                    analysis=json.dumps(analysis, ensure_ascii=False, indent=2),
-                    purpose=purpose_text,
-                    schema=schema_text,
-                )}],
-                temperature=0.3,
-                max_tokens=8192,
-            )
-            pages = _ensure_pages_from_analysis(
-                analysis,
-                await _load_llm_json(gen_raw, expected="array"),
-                source_relative_path,
-            )
-        except Exception as e:
-            yield await emit("error", source=source_relative_path, message=f"生成失败: {e}")
-            continue
-
-        yield await emit("stage_done", source=source_relative_path,
-                        stage="generate",
-                        message=f"LLM 生成了 {len(pages)} 个页面")
-
-        # Write pages one by one with per-page progress
-        yield await emit("stage", source=source_relative_path,
-                        stage="write",
-                        message=f"正在写入 {len(pages)} 个页面...",
-                        total=len(pages))
-
-        created = []
-        updated = []
-        for i, page in enumerate(pages):
+        async def run_one():
             try:
-                path = page["path"]
-                title = page.get("title", path)
-                ptype = page.get("page_type", "concept")
-                existing = read_wiki_page(path, project_id=project_id)
-                write_wiki_page(
-                    relative_path=path,
-                    title=title,
-                    page_type=ptype,
-                    content=page.get("content", ""),
-                    sources=page.get("sources", [source_relative_path]),
-                    tags=page.get("tags", []),
-                    prerequisites=page.get("prerequisites", []),
-                    project_id=project_id,
-                )
-                action = "更新" if existing else "新建"
-                (updated if existing else created).append(path)
-                yield await emit("write_page", source=source_relative_path,
-                                message=f"[{i + 1}/{len(pages)}] {action}: {title} ({ptype})",
-                                current=i + 1, total=len(pages),
-                                title=title, page_type=ptype, action=action)
-            except Exception:
-                yield await emit("write_page", source=source_relative_path,
-                                message=f"[{i + 1}/{len(pages)}] 跳过: {page.get('title', page.get('path', '?'))}",
-                                current=i + 1, total=len(pages),
-                                skipped=True)
-        yield await emit("stage_done", source=source_relative_path,
-                        stage="write",
-                        message=f"写入完成: {len(created)} 新建, {len(updated)} 更新",
-                        created=len(created), updated=len(updated), total=len(pages))
+                await _run_ingest_pipeline(source_relative_path, force=force, project_id=project_id, emit=collect)
+            finally:
+                await queue.put(None)
 
-        # Source summary
-        source_summary_path = f"sources/{source_relative_path.rsplit('.', 1)[0].replace('/', '_')}.md"
-        write_wiki_page(
-            relative_path=source_summary_path,
-            title=source_relative_path,
-            page_type="source",
-            content=analysis.get("summary", f"# {source_relative_path}\n\nContent analysis pending."),
-            sources=[source_relative_path],
-            project_id=project_id,
-        )
-        created.append(source_summary_path)
-
-        generated_paths = [p["path"] for p in pages if p.get("path")]
-        record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
-
-        # Update index
-        all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
-                   for p in pages]
-        all_new.append({"path": source_summary_path, "title": source_relative_path, "type": "source"})
-        update_index(all_new, project_id=project_id)
-
-        # Save cache
-        set_ingest_cache(source_relative_path, content_hash, project_id=project_id)
-
-        # Sync vectors
-        _sync_vectors(pages, project_id=project_id)
-
-        yield await emit("complete", source=source_relative_path,
-                        message=f"Done: {len(created)} pages created",
-                        created=created, updated=updated)
+        task = asyncio.create_task(run_one())
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield event
+        await task
 
 
 # ─── Concurrent Batch Ingest ───────────────────────────────────────
@@ -1413,190 +1658,7 @@ async def _run_single_with_events(
     async def emit(event: str, **kwargs):
         await emit_queue.put({"event": event, **kwargs})
 
-    ensure_dirs(project_id=project_id)
-    sp = sources_path(project_id)
-    source_path = sp / source_relative_path
-
-    if not source_path.exists():
-        await emit("error", source=source_relative_path, message="File not found")
-        return
-
-    # Cache check
-    content_hash = compute_source_hash(str(source_path))
-    if not force:
-        cached = get_ingest_cache(source_relative_path, project_id=project_id)
-        if cached == content_hash:
-            await emit("cached", source=source_relative_path, message="Already processed (cached)")
-            return
-
-    # Parse
-    await emit("stage", source=source_relative_path,
-               stage="parse", message=f"正在解析文件: {source_relative_path}")
-    try:
-        wp = wiki_path(project_id)
-        media_dir = str(wp / "media")
-        content, extracted_images, parse_method = await _parse_source_content(source_path, media_dir=media_dir)
-    except Exception as e:
-        await emit("error", source=source_relative_path, message=f"解析失败: {e}")
-        return
-
-    max_chars = 60000
-    content = _strip_images(content)
-    truncated = len(content) > max_chars
-    if truncated:
-        content = content[:max_chars] + "\n\n[Content truncated...]"
-    await emit("stage_done", source=source_relative_path,
-               stage="parse",
-               message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
-
-    # Step 1: Analysis
-    await emit("stage", source=source_relative_path,
-               stage="analyze", message="Step 1/2: LLM 正在分析文档结构...")
-    try:
-        context = await read_context(project_id=project_id)
-        analysis_raw = await chat_complete(
-            system_prompt="You are an expert educational content analyzer. Output ONLY valid JSON.",
-            messages=[{"role": "user", "content": ANALYSIS_PROMPT.format(
-                content=content, context=context[:3000]
-            )}],
-            temperature=0.2,
-            max_tokens=8192,
-        )
-        analysis = _augment_empty_analysis(await _load_llm_json(analysis_raw, expected="object"), content)
-    except Exception as e:
-        await emit("error", source=source_relative_path, message=f"分析失败: {e}")
-        return
-
-    concepts_found = analysis.get("concepts", [])
-    formulas_found = analysis.get("formulas", [])
-    principles_found = analysis.get("principles", [])
-    exercises_found = analysis.get("exercises", [])
-    synthesis_found = analysis.get("synthesis", [])
-    qa_found = analysis.get("q_and_a", [])
-    system_found = analysis.get("system_notes", [])
-
-    await emit("stage_done", source=source_relative_path,
-               stage="analyze",
-               message=f"分析完成: {len(concepts_found)} 个概念, {len(formulas_found)} 个公式, "
-                       f"{len(principles_found)} 个原理, {len(exercises_found)} 个习题, "
-                       f"{len(synthesis_found)} 个综合, {len(qa_found)} 个问答, {len(system_found)} 个系统指引",
-               details={
-                   "concepts": [c.get("name", "") for c in concepts_found[:10]],
-                   "formulas": [f.get("name", "") for f in formulas_found[:5]],
-                   "principles": [p.get("name", "") for p in principles_found[:5]],
-                   "exercises": [e.get("question", "")[:40] for e in exercises_found[:5]],
-                   "synthesis": [s.get("title", "") for s in synthesis_found[:5]],
-                   "q_and_a": [q.get("question", "")[:40] for q in qa_found[:5]],
-                   "system_notes": [s.get("title", "") for s in system_found[:5]],
-               })
-
-    # Step 2: Generation
-    await emit("stage", source=source_relative_path,
-               stage="generate",
-               message=f"Step 2/2: LLM 正在生成 Wiki 页面..."
-                       f"({len(concepts_found)} 概念 + {len(formulas_found)} 公式 "
-                       f"+ {len(principles_found)} 原理 + {len(exercises_found)} 习题 "
-                       f"+ {len(synthesis_found)} 综合 + {len(qa_found)} 问答 + {len(system_found)} 系统)")
-    try:
-        wp = wiki_path(project_id)
-        purpose_path = wp / "purpose.md"
-        schema_path = wp / "schema.md"
-        purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
-        schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
-
-        gen_raw = await chat_complete(
-            system_prompt="You are an expert educational content creator. Output ONLY valid JSON array.",
-            messages=[{"role": "user", "content": GENERATION_PROMPT.format(
-                analysis=json.dumps(analysis, ensure_ascii=False, indent=2),
-                purpose=purpose_text,
-                schema=schema_text,
-            )}],
-            temperature=0.3,
-            max_tokens=8192,
-        )
-        pages = _ensure_pages_from_analysis(
-            analysis,
-            await _load_llm_json(gen_raw, expected="array"),
-            source_relative_path,
-        )
-    except Exception as e:
-        await emit("error", source=source_relative_path, message=f"生成失败: {e}")
-        return
-
-    await emit("stage_done", source=source_relative_path,
-               stage="generate",
-               message=f"LLM 生成了 {len(pages)} 个页面")
-
-    # Write pages
-    await emit("stage", source=source_relative_path,
-               stage="write",
-               message=f"正在写入 {len(pages)} 个页面...",
-               total=len(pages))
-
-    created = []
-    updated = []
-    for i, page in enumerate(pages):
-        try:
-            path = page["path"]
-            title = page.get("title", path)
-            ptype = page.get("page_type", "concept")
-            existing = read_wiki_page(path, project_id=project_id)
-            write_wiki_page(
-                relative_path=path,
-                title=title,
-                page_type=ptype,
-                content=page.get("content", ""),
-                sources=page.get("sources", [source_relative_path]),
-                tags=page.get("tags", []),
-                prerequisites=page.get("prerequisites", []),
-                project_id=project_id,
-            )
-            action = "更新" if existing else "新建"
-            (updated if existing else created).append(path)
-            await emit("write_page", source=source_relative_path,
-                       message=f"[{i + 1}/{len(pages)}] {action}: {title} ({ptype})",
-                       current=i + 1, total=len(pages),
-                       title=title, page_type=ptype, action=action)
-        except Exception:
-            await emit("write_page", source=source_relative_path,
-                       message=f"[{i + 1}/{len(pages)}] 跳过: {page.get('title', page.get('path', '?'))}",
-                       current=i + 1, total=len(pages),
-                       skipped=True)
-    await emit("stage_done", source=source_relative_path,
-               stage="write",
-               message=f"写入完成: {len(created)} 新建, {len(updated)} 更新",
-               created=len(created), updated=len(updated), total=len(pages))
-
-    # Source summary
-    source_summary_path = f"sources/{source_relative_path.rsplit('.', 1)[0].replace('/', '_')}.md"
-    write_wiki_page(
-        relative_path=source_summary_path,
-        title=source_relative_path,
-        page_type="source",
-        content=analysis.get("summary", f"# {source_relative_path}\n\nContent analysis pending."),
-        sources=[source_relative_path],
-        project_id=project_id,
-    )
-    created.append(source_summary_path)
-
-    generated_paths = [p["path"] for p in pages if p.get("path")]
-    record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
-
-    # Update index
-    all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
-               for p in pages]
-    all_new.append({"path": source_summary_path, "title": source_relative_path, "type": "source"})
-    update_index(all_new, project_id=project_id)
-
-    # Save cache
-    set_ingest_cache(source_relative_path, content_hash, project_id=project_id)
-
-    # Sync vectors
-    _sync_vectors(pages, project_id=project_id)
-
-    await emit("complete", source=source_relative_path,
-               message=f"Done: {len(created)} pages created",
-               created=created, updated=updated)
+    await _run_ingest_pipeline(source_relative_path, force=force, project_id=project_id, emit=emit)
 
 
 async def run_ingest_batch_streaming(

@@ -26,6 +26,7 @@ export interface IngestProgress {
     message: string
     status: "pending" | "active" | "done"
     details?: { concepts?: string[]; formulas?: string[]; principles?: string[]; exercises?: string[] }
+    logs?: string
     pages?: { current: number; total: number; items: { title: string; page_type: string; action: string }[] }
     created?: number
     updated?: number

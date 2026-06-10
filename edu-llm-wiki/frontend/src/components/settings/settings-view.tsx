@@ -58,6 +58,7 @@ export function SettingsView() {
     llm_base_url: "",
     llm_max_tokens: 8192,
     llm_temperature: 0.3,
+    generation_language: "zh",
   })
   const [showKey, setShowKey] = useState(false)
   const [llmSaved, setLlmSaved] = useState(false)
@@ -282,6 +283,19 @@ export function SettingsView() {
                   className={inputClass}
                 />
               </Field>
+              <Field label="Generated Content Language">
+                <select
+                  value={llm.generation_language}
+                  onChange={(e) => updateLlm({ generation_language: e.target.value as "zh" | "en" })}
+                  className={inputClass}
+                >
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                </select>
+              </Field>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
               <Field label="Temperature">
                 <input
                   type="number"

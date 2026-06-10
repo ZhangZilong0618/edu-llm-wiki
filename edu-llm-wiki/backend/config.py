@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     llm_base_url: str = ""  # for ollama/custom: http://localhost:11434/v1
     llm_max_tokens: int = 8192
     llm_temperature: float = 0.3
+    generation_language: str = "zh"  # zh | en
 
     # Embedding (for vector search — uses local sentence-transformers)
     embedding_enabled: bool = True

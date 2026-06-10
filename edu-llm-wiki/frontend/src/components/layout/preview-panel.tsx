@@ -33,6 +33,7 @@ const COMMON_RESEARCH_ACTIONS: ResearchAction[] = [
   { id: "related", label: "关联知识", description: "梳理它和 wiki 里其他页面的关系。" },
   { id: "practice", label: "生成练习", description: "围绕当前页生成可训练的小题。" },
   { id: "completeness", label: "检查完整性", description: "指出当前页还缺哪些教学要素。" },
+  { id: "custom", label: "自定义", description: "按你自己写的提示词深入研究当前页面。" },
 ]
 
 const TYPE_RESEARCH_ACTIONS: Record<string, ResearchAction[]> = {
@@ -953,6 +954,8 @@ function ResearchPanel({
     ? state.selectedAction
     : actions[0]?.id || "explain"
   const activeAction = actions.find((action) => action.id === selectedAction)
+  const isCustomAction = selectedAction === "custom"
+  const canRunResearch = !loading && (!isCustomAction || state.note.trim().length > 0)
 
   useEffect(() => {
     if (selectedAction !== state.selectedAction) {
@@ -961,6 +964,10 @@ function ResearchPanel({
   }, [onStateChange, selectedAction, state.selectedAction])
 
   const runResearch = async () => {
+    if (isCustomAction && !state.note.trim()) {
+      toast({ type: "error", message: "先写一下自定义研究提示词" })
+      return
+    }
     setLoading(true)
     onStateChange({ editingResult: false })
     try {
@@ -1035,12 +1042,12 @@ function ResearchPanel({
           <textarea
             value={state.note}
             onChange={(e) => onStateChange({ note: e.target.value })}
-            placeholder="可选：补充你想深入的角度..."
+            placeholder={isCustomAction ? "写下你想让 AI 深入研究的提示词..." : "可选：补充你想深入的角度..."}
             className="min-h-14 w-full resize-y rounded-md border bg-[var(--background)] px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
           />
           <button
             onClick={runResearch}
-            disabled={loading}
+            disabled={!canRunResearch}
             className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
