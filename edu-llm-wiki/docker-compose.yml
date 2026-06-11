@@ -1,0 +1,63 @@
+# Docker Compose for local development.
+#
+# Usage:
+#   cp backend/.env.example backend/.env   # then fill in LLM keys
+#   docker compose up --build
+#
+# Frontend:  http://localhost:5173
+# Backend:   http://localhost:8000  (Swagger at /docs)
+#
+# Source code on the host is bind-mounted into the containers, so edits
+# to Python / TypeScript are picked up without rebuilding the image.
+# - backend:  ./backend is mounted at /app, but the image's installed
+#             packages take precedence. Restart the container to pick up
+#             new Python deps (or rebuild).
+# - frontend: only ./frontend/src is mounted so Vite HMR works while
+#             the image's node_modules stays intact (architecture-safe).
+
+services:
+  backend:
+    build: ./backend
+    image: edu-llm-wiki-backend:dev
+    container_name: edu-llm-wiki-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Source for live edits. The image's site-packages stay put.
+      - ./backend:/app
+      # Persist generated data (wiki pages, sources, lancedb indexes)
+      # outside the container so it survives rebuilds.
+      - backend-data:/app/data
+      # Mount .env read-only if it exists; created from .env.example
+      # the first time you run the project. Optional — backend has
+      # working defaults for everything except LLM_API_KEY.
+      - ./backend/.env:/app/.env:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: edu-llm-wiki-frontend:dev
+    container_name: edu-llm-wiki-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      # Only mount the source tree so Vite HMR sees live edits; let
+      # node_modules stay inside the image.
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
+    environment:
+      # Tells vite.config.ts to proxy /api through the docker network
+      # service name instead of 127.0.0.1 (which would be the container).
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend-data:
+    name: edu-llm-wiki-backend-data
