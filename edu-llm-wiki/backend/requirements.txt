@@ -23,3 +23,6 @@ sentence-transformers>=3.0.0
 # LLM (OpenAI-compatible + Anthropic)
 openai>=1.59.0
 anthropic>=0.42.0
+
+# PaddleOCR client (services/paddleocr.py)
+requests>=2.31.0

@@ -14,7 +14,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        // BACKEND_URL lets docker compose point at the backend service
+        // (http://backend:8000) while local `npm run dev` keeps using
+        // the loopback default.
+        target: process.env.BACKEND_URL || "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },
