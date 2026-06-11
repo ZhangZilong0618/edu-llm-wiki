@@ -40,7 +40,7 @@ from storage.wiki_store import list_wiki_pages, read_wiki_page, validate_project
 # Schema & version
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -147,6 +147,103 @@ CREATE TABLE IF NOT EXISTS graph_snapshots (
     snapshot_json TEXT,
     created_at  REAL,
     PRIMARY KEY (project_id, snapshot_id)
+);
+
+
+-- v3 pedagogy tables (Corbett & Anderson 1995 BKT, Wozniak SM-2,
+-- Brown & Burton 1978 misconception, Karpicke confidence)
+
+CREATE TABLE IF NOT EXISTS bkt_params (
+    project_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    kc_id      TEXT NOT NULL,    -- matches graph_nodes.node_id (KC == node for now)
+    p_known    REAL DEFAULT 0.1, -- P(L)
+    p_t        REAL DEFAULT 0.2, -- P(T) — learning transition
+    p_g        REAL DEFAULT 0.2, -- P(G) — guess on un-mastered
+    p_s        REAL DEFAULT 0.1, -- P(S) — slip on mastered
+    last_obs   REAL,
+    obs_n      INTEGER DEFAULT 0,
+    PRIMARY KEY (project_id, user_id, kc_id)
+);
+
+CREATE TABLE IF NOT EXISTS sr_schedule (
+    project_id   TEXT NOT NULL,
+    user_id      TEXT NOT NULL,
+    kc_id        TEXT NOT NULL,
+    ef           REAL DEFAULT 2.5,   -- easiness factor (Wozniak)
+    interval_days INTEGER DEFAULT 0, -- days until next due
+    reps         INTEGER DEFAULT 0,
+    quality_avg  REAL DEFAULT 0.0,
+    due_at       REAL NOT NULL,
+    last_review  REAL,
+    PRIMARY KEY (project_id, user_id, kc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sr_due ON sr_schedule(project_id, user_id, due_at);
+
+CREATE TABLE IF NOT EXISTS misconception_taxonomy (
+    project_id      TEXT NOT NULL,
+    misconception_id TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    description     TEXT,
+    canonical       TEXT,         -- the misconception text / pattern
+    created_at      REAL,
+    PRIMARY KEY (project_id, misconception_id)
+);
+
+CREATE TABLE IF NOT EXISTS misconception_traces (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    kc_id           TEXT NOT NULL,
+    misconception_tag TEXT,
+    response_text   TEXT,
+    matched_pattern TEXT,
+    question_id     TEXT,
+    created_at      REAL
+);
+CREATE INDEX IF NOT EXISTS idx_mis_user ON misconception_traces(project_id, user_id);
+
+CREATE TABLE IF NOT EXISTS attempts_raw (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    kc_id      TEXT NOT NULL,
+    question_id TEXT,
+    correct    INTEGER,
+    score      REAL,
+    max_score  REAL,
+    confidence INTEGER,
+    latency_ms INTEGER,
+    hint_ladder INTEGER,
+    ts         REAL
+);
+CREATE INDEX IF NOT EXISTS idx_attempts_user_kc ON attempts_raw(project_id, user_id, kc_id, ts DESC);
+
+CREATE TABLE IF NOT EXISTS confidence_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    kc_id      TEXT NOT NULL,
+    confidence INTEGER,    -- 1..5
+    correct    INTEGER,    -- 0/1
+    residual   REAL,       -- confidence/5 − correct, the overconfidence gap
+    ts         REAL
+);
+CREATE INDEX IF NOT EXISTS idx_conf_user ON confidence_log(project_id, user_id, ts DESC);
+
+CREATE TABLE IF NOT EXISTS learning_state (
+    project_id           TEXT NOT NULL,
+    user_id              TEXT NOT NULL,
+    p_known_avg          REAL,
+    weak_kcs_json        TEXT,
+    misconception_ids_json TEXT,
+    transfer_json        TEXT,
+    overconfidence_gap   REAL,
+    readiness            REAL,
+    sr_due_today         INTEGER,
+    decay_risk           REAL,
+    last_computed_at     REAL,
+    PRIMARY KEY (project_id, user_id)
 );
 """
 
@@ -742,27 +839,27 @@ def list_snapshots(project_id: str) -> list[dict]:
         ).fetchall()
     return [dict(r) for r in rows]
 
-# --- aliases used by the v2 builder / routes ---
-def apply_diff(project_id: str) -> dict:
-    """Rebuild node/edge rows from the current wiki state and persist them.
 
-    Thin wrapper around :func:`diff_and_apply` kept for compatibility with
-    the builder.
-    """
+# ---------------------------------------------------------------------------
+# Public aliases used by the v2/v3 callers
+# ---------------------------------------------------------------------------
+
+def apply_diff(project_id: str) -> dict:
     return diff_and_apply(project_id)
 
 
 def ensure_initialised(project_id: str) -> None:
-    """Create tables for a project if they don't exist yet."""
-    from services.graph_store import connect  # local import to avoid cycle
     with connect(project_id) as conn:
         _ensure_tables(conn)
 
 
 def _ensure_tables(conn: sqlite3.Connection) -> None:
-    cur = conn.cursor()
-    cur.executescript(_SCHEMA_SQL)
-    conn.commit()
+    """Idempotent schema bootstrap (v1 + v2/v3 additions)."""
+    conn.executescript(_SCHEMA_SQL)
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
 
 
 def get_nodes(project_id: str) -> list[dict]:
@@ -773,60 +870,67 @@ def get_edges(project_id: str) -> list[dict]:
     return get_all_edges(project_id)
 
 
+def get_communities(project_id: str) -> list[dict]:
+    return load_communities(project_id)
+
+
+def get_insights(project_id: str) -> list[dict]:
+    return load_insights(project_id)
+
+
 def execute(project_id: str, sql: str, params: tuple = ()) -> list[dict]:
-    """Tiny convenience wrapper used by mastery / events modules."""
     with connect(project_id) as conn:
         cur = conn.execute(sql, params)
         return [dict(row) for row in cur.fetchall()]
 
 
-def execute(project_id, sql, params=()):
-    with connect(project_id) as c:
-        cur = c.execute(sql, params)
-        return [dict(r) for r in cur.fetchall()]
+def ensure_schema(project_id: str) -> None:
+    with connect(project_id) as conn:
+        conn.executescript(_SCHEMA_SQL)
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
+            (str(SCHEMA_VERSION),),
+        )
 
 
-def ensure_schema(project_id):
-    with connect(project_id) as c:
-        _ensure_tables(c)
+def record_event_alias(project_id: str, event_type: str, payload: dict) -> int:
+    return record_event(project_id, event_type, payload)
 
 
-def get_communities(project_id):
-    return load_communities(project_id)
-
-
-def get_insights(project_id):
-    return load_insights(project_id)
-
-
-def record_exposure(project_id, user_id, node_id):
+def record_exposure(project_id: str, user_id: str, node_id: str) -> dict:
     fields = {
-        "level": _bump_for_exposure(node_id),
         "exposures": 1,
         "last_exposure_at": _now(),
     }
     return upsert_mastery(project_id, user_id, node_id, fields)
 
 
-def record_attempt(project_id, user_id, node_id, *, score, max_score):
+def record_attempt(
+    project_id: str,
+    user_id: str,
+    node_id: str,
+    score: float = 0.0,
+    max_score: float = 1.0,
+    *,
+    correct: bool | None = None,
+) -> dict:
+    """v2/v3 compatible attempt recorder.
+
+    ``score`` is normalised to [0, 1]; if ``correct`` is not supplied it is
+    derived from the threshold the FSM uses (>= 0.5). All other state
+    updates (BKT, SR, misconception) happen in the v3 observer layer.
+    """
+    pct = 0.0
+    if max_score:
+        pct = max(0.0, min(1.0, float(score) / float(max_score)))
+    if correct is None:
+        correct = pct >= 0.5
+    level = "proficient" if correct else "learning"
     fields = {
-        "score": max(0.0, min(1.0, float(score) / float(max_score or 1.0))),
-        "attempts": 1,
-        "last_attempt_at": _now(),
-    }
-    return upsert_mastery(project_id, user_id, node_id, fields)
-
-
-def _bump_for_exposure(node_id):
-    return "exposed"
-
-
-def record_attempt(project_id, user_id, node_id, score, max_score=1.0):
-    pct = max(0.0, min(1.0, score / max_score if max_score else 0.0))
-    fields = {
-        "level": "proficient" if pct >= 0.7 else "learning",
+        "level": level,
         "score": pct,
         "attempts": 1,
+        "successes": 1 if correct else 0,
         "last_attempt_at": _now(),
     }
     return upsert_mastery(project_id, user_id, node_id, fields)

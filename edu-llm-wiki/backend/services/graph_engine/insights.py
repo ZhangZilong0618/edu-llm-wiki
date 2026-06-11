@@ -1,23 +1,31 @@
-"""Graph insights: surface pedagogical signals from the assembled graph.
+"""Graph insights: structural + learner-aware.
 
-Five classes of insight are produced:
+Two flavours of insight are produced:
 
-* ``knowledge_gap`` — isolated nodes or sparse communities that warrant
-  extra material.
-* ``bridge`` — nodes whose neighbours span three or more communities,
-  i.e. concept-level connectors that should be highlighted in a learning
-  path.
-* ``surprising_connection`` — cross-type edges that link a formula with
-  an exercise or principle.
-* ``frontier`` — nodes the user has not yet opened but which depend on
-  already-mastered concepts. Computed lazily against the mastery store.
-* ``stale`` — nodes whose ``content_hash`` changed since the user last
-  visited; useful for review flows.
+* ``generate_insights`` — structural only. Pure function over the graph.
+  v2 API. Used by the v2 ``/api/graph/insights`` endpoint.
+* ``generate_learner_insights`` — learner-aware. Composes the structural
+  output with the learner state summary (8-dim). v3 endpoint.
+
+Insight classes
+---------------
+* ``knowledge_gap``       — isolated / sparse structural cluster.
+* ``bridge``              — multi-community connector.
+* ``surprising_connection``— formula/exercise/principle cross-type edge.
+* ``frontier``            — prereq-satisfied, not yet opened.
+* ``stale``               — content changed since the last exposure.
+* ``misconception_cluster``— repeated error tag.
+* ``transfer_window``     — A mastered, B unmastered but adjacent.
+* ``readiness``           — prereq gap on a stated target node.
+
+Each insight carries ``score``; callers should drop anything below 1.5
+(``R7`` in the v3 risk register) to avoid noise.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Iterable, Sequence
 
 
 def generate_insights(
@@ -35,36 +43,29 @@ def generate_insights(
 
     by_id = {n["id"]: n for n in nodes}
 
-    # Isolated nodes (degree <= 1)
     isolated = [n for n in nodes if len(adjacency.get(n["id"], set())) <= 1]
     if isolated:
         insights.append({
             "insight_type": "knowledge_gap",
             "title": f"{len(isolated)} isolated knowledge points",
-            "description": (
-                "The following concepts have few connections: "
-                + ", ".join(n["label"] for n in isolated[:5])
-            ),
+            "description": "The following concepts have few connections: " + ", ".join(n["label"] for n in isolated[:5]),
             "node_ids": [n["id"] for n in isolated],
             "score": len(isolated) * 0.5,
         })
 
-    # Sparse communities
     for comm in communities:
         if comm.get("cohesion", 0) < 0.15 and comm.get("member_count", 0) >= 3:
             insights.append({
                 "insight_type": "knowledge_gap",
                 "title": f"Sparse community: {comm.get('label', '')}",
                 "description": (
-                    f"Knowledge cluster with {comm['member_count']} members has low "
-                    f"internal cohesion ({comm['cohesion']:.2f}). Consider adding more "
-                    "cross-references."
+                    f"Cluster with {comm['member_count']} members has low cohesion "
+                    f"({comm['cohesion']:.2f})."
                 ),
                 "node_ids": [],
                 "score": (1.0 - float(comm["cohesion"])) * 2,
             })
 
-    # Bridge nodes (connect 3+ communities)
     community_map: dict[str, int] = {
         n["id"]: int(n["community"]) for n in nodes if int(n.get("community", -1)) >= 0
     }
@@ -80,16 +81,11 @@ def generate_insights(
             insights.append({
                 "insight_type": "bridge",
                 "title": f"Bridge concept: {n['label']}",
-                "description": (
-                    f"This concept connects {len(nbr_comms)} different knowledge "
-                    "clusters. It is a critical junction point."
-                ),
+                "description": f"Connects {len(nbr_comms)} different knowledge clusters.",
                 "node_ids": [nid],
                 "score": len(nbr_comms) * 1.5,
             })
 
-    # Cross-type surprising links (formula <-> exercise / principle)
-    cross_type_edges: list[dict] = []
     for e in edges:
         s = by_id.get(e["source"])
         t = by_id.get(e["target"])
@@ -99,21 +95,61 @@ def generate_insights(
             continue
         types = {s["node_type"], t["node_type"]}
         if "formula" in types and ("exercise" in types or "principle" in types):
-            cross_type_edges.append({
-                "src": s["label"],
-                "tgt": t["label"],
-                "types": f"{s['node_type']} <-> {t['node_type']}",
+            insights.append({
+                "insight_type": "surprising_connection",
+                "title": f"Cross-type: {s['label']} <-> {t['label']}",
+                "description": f"({s['node_type']} <-> {t['node_type']})",
+                "node_ids": [],
+                "score": 2.0,
             })
-    for cte in cross_type_edges[:3]:
-        insights.append({
-            "insight_type": "surprising_connection",
-            "title": f"Cross-type link: {cte['src']} <-> {cte['tgt']}",
-            "description": (
-                f"Interesting connection between different knowledge types "
-                f"({cte['types']})"
-            ),
+
+    return insights
+
+
+def generate_learner_insights(
+    nodes: list[dict],
+    edges: list[dict],
+    communities: list[dict],
+    learner_summary: dict,
+) -> list[dict]:
+    """v3: combine structural insights with the 8-d learner state."""
+    out = generate_insights(nodes, edges, communities)
+
+    weak = learner_summary.get("weak_kcs") or []
+    for w in weak[:3]:
+        out.append({
+            "insight_type": "readiness",
+            "title": f"Prereq not ready: {w.get('label', w.get('kc_id', ''))}",
+            "description": "Probability of mastery is below 0.5. Review prerequisites first.",
+            "node_ids": [w.get("kc_id")] if w.get("kc_id") else [],
+            "score": 1.8,
+        })
+
+    for m in (learner_summary.get("misconception_clusters") or [])[:3]:
+        out.append({
+            "insight_type": "misconception_cluster",
+            "title": f"Frequent error: {m['tag']}",
+            "description": f"Seen {m['count']} times. Targeted practice recommended.",
+            "node_ids": [],
+            "score": float(m.get("count", 1)) * 0.7,
+        })
+
+    for w in (learner_summary.get("transfer_windows") or [])[:3]:
+        out.append({
+            "insight_type": "transfer_window",
+            "title": f"Try {w.get('to', '?')}",
+            "description": f"You have mastered {w.get('from', '?')}; transferring to {w.get('to', '?')} is likely to help.",
+            "node_ids": [w.get("from"), w.get("to")],
+            "score": 2.0,
+        })
+
+    if (learner_summary.get("overconfidence_gap") or 0) > 0.2:
+        out.append({
+            "insight_type": "overconfidence",
+            "title": "Calibration drift detected",
+            "description": "Confidence ratings are running ahead of correctness. Try retrieval practice before re-asserting mastery.",
             "node_ids": [],
             "score": 2.0,
         })
 
-    return insights
+    return [i for i in out if i.get("score", 0) >= 1.5]

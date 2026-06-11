@@ -548,6 +548,54 @@ async def submit_test(session_id: str, req: TestAnswerRequest, project_id: str =
             max_score=attempt.max_score or 1.0,
         )
 
+    # v3: also write the confidence log so the overconfidence_gap is
+    # computable for the next learner-state summary.
+    if getattr(attempt, "confidence", None) is not None:
+        mastery.record_confidence(
+            node_id=related,
+            project_id=project_id,
+            user_id="default",
+            confidence=attempt.confidence,
+            correct=(attempt.score >= 0.5),
+        )
+
+    # v3: BKT/SR observers + optional confidence + misconception tagging.
+    # Each attempt is one observation against the related KC (the page the
+    # question belongs to). The store layers keep raw history in
+    # ``attempts_raw``; ``bkt_params`` and ``sr_schedule`` are updated
+    # transactionally.
+    from services.mastery import record_attempt as v3_record_attempt
+    from services.mastery import record_confidence as v3_record_confidence
+    from services import graph_store as gs
+    v3_record_attempt(
+        project_id=project_id,
+        user_id="default",
+        kc_id=related,
+        score=attempt.score,
+        max_score=attempt.max_score or 1.0,
+    )
+    if attempt.confidence is not None:
+        correct = (attempt.score or 0.0) >= 0.5
+        v3_record_confidence(
+            project_id=project_id,
+            user_id="default",
+            kc_id=related,
+            confidence=int(attempt.confidence),
+            correct=bool(correct),
+        )
+    for tag in (attempt.misconception_ids or []):
+        gs.execute(
+            project_id,
+            "INSERT INTO misconception_traces(project_id,user_id,kc_id,tag,response,expected,ts) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (
+                project_id, "default", related, tag,
+                str(attempt.user_answer)[:200],
+                str(attempt.correct_answer)[:200],
+                mastery.__dict__.get("_now", lambda: 0)() or 0,
+            ),
+        )
+
     return session
 
 

@@ -325,6 +325,30 @@ export const api = {
     request<GraphEventEnvelope[]>(
       `${BASE}/graph/events?${p()}&since_id=${sinceId}`,
     ),
+
+  // v3 learning endpoints
+  getLearningState: (user_id: string) =>
+    request<LearnerStateSummary>(
+      `${BASE}/graph/learning/state?${p()}&user_id=${user_id}`,
+    ),
+  getLearningSchedule: (user_id: string, limit = 8) =>
+    request<ScheduleItem[]>(
+      `${BASE}/graph/learning/schedule?${p()}&user_id=${user_id}&limit=${limit}`,
+    ),
+  postLearningReview: (
+    kc_id: string,
+    correct: boolean,
+    confidence: number,
+    quality: number,
+  ) =>
+    request<ReviewResult>(`${BASE}/graph/learning/review?${p()}`, {
+      method: "POST",
+      body: JSON.stringify({ kc_id, correct, confidence, quality }),
+    }),
+  getLearningInsights: (user_id: string) =>
+    request<LearnerInsight[]>(
+      `${BASE}/graph/learning/insights?${p()}&user_id=${user_id}`,
+    ),
 }
 
 export interface LlmSettings {
@@ -464,3 +488,67 @@ export interface GraphEventEnvelope {
   payload: Record<string, unknown>
   created_at: number
 }
+
+
+// ---- v3 learning endpoints ----
+interface LearnerStateSummary {
+  user_id: string
+  p_known_avg: number
+  weak_kcs: { kc_id: string; p_known: number }[]
+  misconception_clusters: { tag: string; count: number }[]
+  transfer_windows: { from: string; to: string; delta: number; p_value: number }[]
+  overconfidence_gap: number
+  readiness: Record<string, number>
+  sr_due_today: { kc_id: string; title: string; due_at: number }[]
+  decay_risk: { kc_id: string; retention: number; next_due: number }[]
+}
+
+export interface ScheduleItem {
+  kc_id: string
+  title?: string
+  due_at: number
+  ef: number
+  interval_days: number
+}
+
+export interface ReviewResult {
+  kc_id: string
+  new_p_known: number
+  new_due_at: number
+  level: string
+}
+
+export interface LearnerInsight {
+  insight_type: string
+  title: string
+  description: string
+  score: number
+}
+
+export interface LearningApi {
+  getLearningState(user_id: string): Promise<LearnerStateSummary>
+  getLearningSchedule(user_id: string, limit: number): Promise<ScheduleItem[]>
+  postLearningReview(
+    kc_id: string,
+    correct: boolean,
+    confidence: number,
+    quality: number,
+  ): Promise<ReviewResult>
+  getLearningInsights(user_id: string): Promise<LearnerInsight[]>
+}
+
+const learningApi: LearningApi = {
+  getLearningState: (user_id) =>
+    request(`${BASE}/graph/learning/state?${p()}&user_id=${user_id}`),
+  getLearningSchedule: (user_id, limit) =>
+    request(`${BASE}/graph/learning/schedule?${p()}&user_id=${user_id}&limit=${limit}`),
+  postLearningReview: (item, correct, confidence, quality) =>
+    request(`${BASE}/graph/learning/review?${p()}`, {
+      method: "POST",
+      body: JSON.stringify({ item, correct, confidence, quality }),
+    }),
+  getLearningInsights: (user_id) =>
+    request(`${BASE}/graph/learning/insights?${p()}&user_id=${user_id}`),
+}
+
+export { learningApi }

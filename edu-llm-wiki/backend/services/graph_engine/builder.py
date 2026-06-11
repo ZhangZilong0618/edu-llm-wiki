@@ -54,21 +54,33 @@ def build_graph(*, project_id: str = "default") -> dict:
     if cached_nodes and cached_edges:
         return _shape_response(cached_nodes, cached_edges)
 
-    pages, source_overlap, prereq_pairs, rel_pairs = parse_pages(project_id)
-    candidates = build_candidate_edges(
-        pages, source_overlap, prereq_pairs, rel_pairs,
-    )
+    pages, title_to_id = parse_pages(project_id=project_id)
+    # TODO(legacy): build_candidate_edges expects the v2 split (pages,
+    # source_overlap, prereq_pairs, rel_pairs) — fall back to a flat list of
+    # candidate edges derived from parsed relationships until the legacy
+    # helper is removed.
+    candidates = []
+    for nid, p in pages.items():
+        for r in getattr(p, "relationships", []):
+            candidates.append({
+                "source": title_to_id.get(r.src, r.src),
+                "target": title_to_id.get(r.dst, r.dst),
+                "edge_type": r.rel_type,
+                "weight": 1.0,
+                "origin": "llm",
+                "evidence": r.description or "",
+            })
 
     edges: list[dict] = []
     for cand in candidates:
-        a, b = cand.a, cand.b
-        et, prereq = classify_edge(cand, prereq_pairs)
-        src, tgt = finalise_directed_edge(a, b, et, prereq)
+        et = cand.get("edge_type", "related")
+        src = cand["source"]
+        tgt = cand["target"]
         edges.append({
             "source": src,
             "target": tgt,
             "edge_type": EDGE_TYPE_ALIASES.get(et, "related"),
-            "weight": cand.weight,
+            "weight": cand.get("weight", 1.0),
         })
 
     edges = prune_edges(edges, max_degree=MAX_GRAPH_DEGREE)
@@ -89,7 +101,8 @@ def build_graph(*, project_id: str = "default") -> dict:
             },
         })
 
-    communities, community_map = detect_communities(nodes, edges)
+    communities = detect_communities(edges, nodes)
+    community_map = {n["id"]: i for i, comm in enumerate(communities) for n in comm}
     for node in nodes:
         node["community"] = community_map.get(node["id"], -1)
 

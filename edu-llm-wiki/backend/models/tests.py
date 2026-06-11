@@ -41,6 +41,11 @@ class TestAttempt(BaseModel):
     level: str = "empty"
     feedback: str = ""
     correct_answer: str | list[str] = ""
+    # v3: per-attempt self-reported confidence 1..5; optional to stay
+    # backwards-compatible with clients that don't yet render the slider.
+    confidence: int | None = None
+    # v3: LLM- or user-tagged misconception IDs, used by error_model.
+    misconception_ids: list[str] | None = None
 
 
 class TestSession(BaseModel):

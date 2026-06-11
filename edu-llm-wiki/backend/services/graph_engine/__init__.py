@@ -7,5 +7,6 @@ pure functions of the parsed pages.
 """
 
 from .builder import build_graph, get_node_neighborhood  # noqa: F401
+from .insights import generate_learner_insights  # noqa: F401
 
-__all__ = ["build_graph", "get_node_neighborhood"]
+__all__ = ["build_graph", "get_node_neighborhood", "generate_learner_insights"]
