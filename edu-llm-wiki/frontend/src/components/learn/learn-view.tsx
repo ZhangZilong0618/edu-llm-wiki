@@ -76,7 +76,7 @@ const STAGE_META: Record<StageId, { title: string; description: string }> = {
   },
   applications: {
     title: "Applications",
-    description: "Use exercises and examples to check whether the ideas transfer.",
+    description: "Practice with worked examples and the Tests view to check whether the ideas transfer.",
   },
   review: {
     title: "Review & Gaps",

@@ -57,13 +57,13 @@ const LANE_ORDER: Record<string, number> = {
 };
 
 const CARD_WIDTH = 172;
-const CARD_HEIGHT = 46;
-const LANE_GAP = 236;
-const ROW_GAP = 72;
-const GROUP_GAP = 92;
+const CARD_HEIGHT = 60;
+const LANE_GAP = 216;
+const ROW_GAP = 84;
+const GROUP_GAP = 96;
 const PADDING_X = 56;
 const PADDING_Y = 96;
-const LANE_TOP = 44;
+const LANE_TOP = 56;
 
 export function GraphCanvas(props: GraphCanvasProps) {
   const layout = useMemo(() => buildLearningMapLayout(props), [props]);
@@ -126,17 +126,35 @@ export function GraphCanvas(props: GraphCanvasProps) {
         {layout.groups.map((group) => (
           <g key={group.id}>
             <line
-              x1={28}
+              x1={56}
               x2={layout.width - 28}
-              y1={group.y - 28}
-              y2={group.y - 28}
+              y1={group.y - 36}
+              y2={group.y - 36}
               stroke="var(--border)"
               strokeDasharray="5 7"
             />
-            <circle cx={28} cy={group.y - 28} r={5} fill={group.color} />
-            <text x={42} y={group.y - 24} fontSize={12} fontWeight={700} fill="var(--foreground)">
-              {group.label}
-            </text>
+            <circle cx={56} cy={group.y - 36} r={5} fill={group.color} />
+            <foreignObject
+              x={70}
+              y={group.y - 50}
+              width={layout.width - 100}
+              height={24}
+            >
+              <div
+                xmlns="http://www.w3.org/1999/xhtml"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "var(--foreground)",
+                  lineHeight: 1.25,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {group.label}
+              </div>
+            </foreignObject>
           </g>
         ))}
 
@@ -263,12 +281,52 @@ function GraphNodeCard({
         filter={selected || hovered ? "url(#node-shadow)" : undefined}
       />
       <rect x={node.x} y={node.y} width={5} height={node.height} rx={3} fill={color} />
-      <text x={node.x + 14} y={node.y + 19} fontSize={12} fontWeight={700} fill="var(--foreground)">
-        {readableLabel(node.label, 18)}
-      </text>
-      <text x={node.x + 14} y={node.y + 36} fontSize={10} fill="var(--muted-foreground)">
-        {typeLabel(node.node_type)} · {node.degree} 连接
-      </text>
+      <foreignObject
+        x={node.x + 12}
+        y={node.y + 6}
+        width={node.width - 18}
+        height={node.height - 10}
+      >
+        <div
+          xmlns="http://www.w3.org/1999/xhtml"
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: "var(--foreground)",
+            lineHeight: 1.25,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            height: "100%",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              wordBreak: "break-word",
+              overflowWrap: "anywhere",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {node.label}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 400,
+              color: "var(--muted-foreground)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {typeLabel(node.node_type)} · {node.degree} 连接
+          </div>
+        </div>
+      </foreignObject>
       {selected && <circle cx={node.x + node.width - 14} cy={node.y + 14} r={4} fill="#2563eb" />}
       <title>{node.label}</title>
     </g>
@@ -443,7 +501,7 @@ function normalizedCommunity(node: GraphNode): number {
 function groupLabel(groupId: number, nodes: GraphNode[]): string {
   if (groupId < 0) return "未分组知识";
   const top = nodes[0];
-  return `知识簇 ${groupId + 1}${top ? ` · ${readableLabel(top.label, 12)}` : ""}`;
+  return `知识簇 ${groupId + 1}${top ? ` · ${top.label}` : ""}`;
 }
 
 function nodeDisplayColor(

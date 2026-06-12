@@ -2,7 +2,7 @@
 
 Stage 1: plan source summary and core concept/formula/principle pages.
 Stage 2: generate the core wiki pages.
-Stage 3: derive exercises, synthesis, Q&A, and study-guide structures from the core pages.
+Stage 3: derive synthesis, Q&A, and study-guide structures from the core pages.
 Stage 4: assemble, validate, write, index, and sync generated wiki pages.
 
 Supports concurrent processing with configurable concurrency limit.
@@ -90,274 +90,6 @@ def _sync_vectors(pages: list[dict], *, project_id: str = "default"):
         print(f"[ingest] Vector sync skipped: {e}")
 
 
-ANALYSIS_PROMPT = """You are an expert educational content analyzer. Your task is to analyze the provided document and extract structured knowledge for a subject knowledge base.
-
-## Document Content
-{content}
-
-## Existing Wiki Context
-{context}
-
-## Output Language
-{language_instruction}
-
-## Instructions
-Analyze the document and output a JSON object with the following structure:
-
-```json
-{{
-  "summary": "A 2-3 sentence summary of what this document teaches",
-  "concepts": [
-    {{
-      "name": "Concept name (concise, in source language)",
-      "definition": "Clear definition or explanation",
-      "related_concepts": ["related concept names"],
-      "parent_concept": "broader concept if applicable",
-      "prerequisites": ["concept names that must be understood BEFORE this one"]
-    }}
-  ],
-  "formulas": [
-    {{
-      "name": "Semantic formula name, not the equation itself",
-      "latex": "LaTeX expression",
-      "variables": "Explanation of each variable",
-      "applications": "When and how this formula is used",
-      "prerequisites": ["concept/formula names that must be understood BEFORE this one"]
-    }}
-  ],
-  "principles": [
-    {{
-      "name": "Principle/theorem name",
-      "statement": "Formal statement",
-      "conditions": "Conditions under which it applies",
-      "derivation_summary": "Brief derivation outline",
-      "applications": "Practical applications",
-      "prerequisites": ["concept/principle names that must be understood BEFORE this one"]
-    }}
-  ],
-  "exercises": [
-    {{
-      "type": "short_answer|multiple_choice|fill_blank",
-      "question": "Exercise question text",
-      "choices": ["A. option text", "B. option text"],
-      "solution": "Solution or answer",
-      "knowledge_points": ["knowledge point names this exercise tests"]
-    }}
-  ],
-  "synthesis": [
-    {{
-      "title": "Synthesis page title",
-      "focus": "What this synthesis helps the learner understand",
-      "key_points": ["integrated insight, comparison, or connection"],
-      "connections": ["concept/formula/principle names connected here"],
-      "open_questions": ["useful follow-up questions or limitations"]
-    }}
-  ],
-  "q_and_a": [
-    {{
-      "question": "A high-value learner question",
-      "answer": "Clear answer grounded in the document",
-      "why_it_matters": "Why this question is useful",
-      "related_items": ["concept/formula/principle names"]
-    }}
-  ],
-  "system_notes": [
-    {{
-      "title": "Learning/navigation note title",
-      "purpose": "How this note improves the wiki or learning workflow",
-      "learning_order": ["ordered concept/formula/principle names"],
-      "study_strategy": ["specific learning or review action"],
-      "quality_warnings": ["ambiguities, OCR issues, missing context, or things to verify"]
-    }}
-  ],
-  "relationships": [
-    {{
-      "from": "concept/formula/principle name",
-      "to": "concept/formula/principle name",
-      "type": "prerequisite|derives|applies_to|related",
-      "description": "nature of the relationship"
-    }}
-  ],
-  "knowledge_gaps": ["areas where this document raises questions but doesn't fully answer"],
-  "review_items": ["items that may need human review or verification"]
-}}
-```
-
-IMPORTANT for prerequisites:
-- Every concept/formula/principle MUST have a prerequisites array listing the names of concepts that must be understood BEFORE this one.
-- If a concept is truly foundational (no prerequisites), use an empty array []
-- Prerequisites should reference other items from the concepts/formulas/principles lists BY EXACT NAME
-- Think carefully about the learning order: what must a student know before understanding this item?
-- NEVER leave prerequisites out — even basic concepts can reference other foundational items
-
-IMPORTANT for type classification:
-- Put equations, coefficients, variables with equations, and named mathematical expressions in formulas, not concepts.
-- Formula names MUST be semantic names, not raw equations or LaTeX. Prefer the physical quantity, law, or relationship name itself, such as "电导率", "布拉格定律", "密度", "热容关系", "Kohn-Sham 方程". Do not add "公式" just to make a title. Never use titles like "J=\\sigma E", "\\rho=m/V", "a=b\\ne c", or "\\Delta V=\\alpha\\Delta T".
-- When describing formulas or equations in the output, write math using lightweight inline LaTeX delimiters $...$ (e.g., $\\sigma$, $\\varepsilon$, $E = \\sigma \\varepsilon$). Do NOT force double-dollar display blocks, and do NOT leave bare LaTeX commands like \\sigma or \\varepsilon without delimiters.
-- Put laws, theorems, mechanisms, effects, and named rules in principles when they describe a general relationship or causal rule.
-- Put worked examples, review questions, homework questions, and calculation prompts in exercises, even if no full solution is present.
-- When creating exercises, keep question types diverse when the source material allows it:
-  - multiple_choice: include 3-5 choices formatted as "A. ...", "B. ..."; solution should identify the correct option and explain why.
-  - fill_blank: use clear blanks such as "____" or "（ ）"; solution should list each blank answer.
-  - short_answer: use for derivations, explanations, and calculations.
-  Add a "type" field for every exercise. Prefer a mix instead of making every exercise short_answer.
-- Never create a multiple_choice exercise without visible options in the question. If the answer begins with "A.", "B.", "C.", or "D.", the question MUST include the matching A./B./C./D. option lines. If you cannot provide options, use fill_blank or short_answer instead.
-- Create exercises that are useful for practice, not generic recall only:
-  - Include at least one conceptual understanding question when concepts exist.
-  - Include at least one formula/application/calculation question when formulas exist.
-  - Include at least one comparison/diagnosis question when the document contrasts mechanisms or categories.
-  - Avoid questions whose answer is just the page title.
-- Create synthesis items for cross-topic understanding, comparisons, contradictions, learning summaries, and "how the pieces fit together".
-- Create q_and_a items for questions a student is likely to ask after reading this document. Answers must be grounded in the document and should clarify misconceptions.
-- Create system_notes for learning order, review strategy, source quality warnings, and wiki organization. These are not content lessons; they guide how to study and maintain this imported document.
-- Concepts should be reserved for definitions and entities, not every named technical term.
-- If a document contains tables or paragraphs defining quantities such as thermal conductivity, absorption coefficient, Seebeck coefficient, heat capacity, or ZT, extract any accompanying equation as a formula page and the physical rule as a principle page when applicable.
-
-CRITICAL: Output ONLY the JSON object, no other text. Ensure valid JSON.
-"""
-
-GENERATION_PROMPT = """You are an expert educational content creator. Your task is to generate structured wiki pages from an analysis of educational content.
-
-## Document Analysis
-{analysis}
-
-## Purpose (Educational Goals)
-{purpose}
-
-## Schema (Page Structure Rules)
-{schema}
-
-## Output Language
-{language_instruction}
-
-## Instructions
-Based on the analysis, generate wiki pages. For each page, output a JSON object with:
-- path: relative path within wiki/ (e.g., "concepts/quantum_state.md")
-- title: page title
-- page_type: concept | formula | principle | exercise | source | synthesis | query | system
-- content: full markdown content with [[wikilinks]] for cross-references
-- sources: list of source file references
-- tags: list of relevant tags
-- prerequisites: list of page paths that must be understood BEFORE this page (e.g., ["concepts/lattice_wave.md"]). EVERY page must have this field — use [] only for genuinely foundational topics with no prerequisites.
-
-Type coverage rules:
-- Create concept pages for items in analysis.concepts.
-- Create formula pages for every meaningful item in analysis.formulas; do NOT merge formulas into concept pages.
-- Formula page titles MUST be human-readable semantic titles, not equations. Prefer the quantity/law/relationship name and avoid adding "公式" unless it is part of a recognized name. If the analysis name is an equation, infer a title from variables, applications, surrounding topic, or the known law. Keep the equation only inside the "## 公式" section.
-- Create principle pages for every meaningful item in analysis.principles; do NOT merge principles into concept pages.
-- Create exercise pages for every item in analysis.exercises. Exercise content MUST include a clear "## 题型" section, a clear "## 题目" section, and a separate "## 解答" or "## Answer" section. For multiple_choice, also include a separate "## 选项" section with A./B./C./D. lines. For fill_blank, keep blanks in the 题目 section.
-- Multiple-choice pages are invalid without options. If a solution starts with an option letter such as "B.", the page must contain a "## 选项" section with A./B./C./D. options. Do not place options only in 解答.
-- If analysis.principles is empty but formulas or mechanism concepts exist, create 1-2 principle pages that explain applicable relationships, assumptions, and boundaries.
-- If analysis.exercises is empty but concepts/formulas/principles exist, create 2-4 useful exercise pages. Mix multiple_choice, fill_blank, and short_answer when possible. Do not leave Exercises empty for educational documents.
-- Create synthesis pages for every item in analysis.synthesis. Synthesis pages MUST be useful study pages, not summaries only. Use sections: "## 核心综合", "## 关联知识", "## 易混点/对比", "## 进一步问题". Link related pages with [[...]] where possible.
-- Create query pages for every item in analysis.q_and_a. Query pages MUST use sections: "## 问题", "## 回答", "## 为什么重要", "## 相关知识". They should be concise, searchable, and suitable for later chat retrieval.
-- Create system pages for every item in analysis.system_notes. System pages MUST use sections: "## 用途", "## 推荐学习顺序", "## 复习策略", "## 质量提醒". They should guide the learner or wiki maintainer, not duplicate lesson content.
-- CRITICAL: Mathematical content should use lightweight inline LaTeX delimiters $...$ (e.g., $\\sigma$, $\\varepsilon$, $E = \\sigma \\varepsilon$). Do not force double-dollar display blocks. Never write bare LaTeX commands like \\sigma or \\varepsilon without $...$ delimiters.
-- Use source only for document summaries, never for ordinary concepts/formulas/principles/exercises.
-- If synthesis, q_and_a, or system_notes are empty but the document has meaningful educational content, create one concise page of each type from the available analysis.
-- Do not create empty or placeholder pages. Every generated page must contain concrete information from the document analysis.
-
-Return a JSON array of page objects. The source summary MUST always be created.
-CRITICAL: Output ONLY the JSON array, no other text. Ensure valid JSON.
-
-Example:
-```json
-[
-  {{
-    "path": "concepts/quantum_state.md",
-    "title": "量子态",
-    "page_type": "concept",
-    "content": "# 量子态\\n\\n## 定义\\n量子态是量子力学中描述物理系统状态的基本概念...\\n\\n## 相关概念\\n- [[concepts/wave_function]] - 波函数\\n- [[principles/superposition]] - 叠加原理",
-    "sources": ["lecture_5_quantum.pdf"],
-    "tags": ["量子力学", "基础概念"],
-    "prerequisites": ["concepts/wave_function.md"]
-  }}
-]
-```
-"""
-
-CORE_PLANNING_PROMPT = """You are an expert educational wiki planner. Your task is to read a source document and design the core knowledge pages for a subject wiki.
-
-## Document Content
-{content}
-
-## Existing Wiki Context
-{context}
-
-## Output Language
-{language_instruction}
-
-## Instructions
-Plan ONLY the source summary and core knowledge pages. Do not create exercises, Q&A, synthesis pages, or study guides in this stage.
-
-Output a JSON object with this shape:
-
-```json
-{{
-  "summary": "A 2-3 sentence source summary grounded in the document",
-  "source_summary": {{
-    "title": "Source document title",
-    "scope": "What this document covers",
-    "quality_warnings": ["OCR/table/formula/coverage issues to verify"]
-  }},
-  "concepts": [
-    {{
-      "name": "Concept name in source language",
-      "definition": "Concise definition grounded in the document",
-      "related_concepts": ["related concept names"],
-      "parent_concept": "broader concept if applicable",
-      "prerequisites": ["concept names that should be learned first"],
-      "priority": "core|supporting",
-      "source_evidence": "short phrase or section cue from the source"
-    }}
-  ],
-  "formulas": [
-    {{
-      "name": "Semantic formula name, not the raw equation",
-      "latex": "LaTeX expression",
-      "variables": "Explanation of each variable",
-      "applications": "When and how this formula is used",
-      "prerequisites": ["concept/formula names that should be learned first"],
-      "priority": "core|supporting",
-      "source_evidence": "short phrase or section cue from the source"
-    }}
-  ],
-  "principles": [
-    {{
-      "name": "Principle/theorem/law name",
-      "statement": "Formal statement",
-      "conditions": "Conditions under which it applies",
-      "derivation_summary": "Brief derivation outline if present",
-      "applications": "Practical applications",
-      "prerequisites": ["concept/principle names that should be learned first"],
-      "priority": "core|supporting",
-      "source_evidence": "short phrase or section cue from the source"
-    }}
-  ],
-  "relationships": [
-    {{
-      "from": "concept/formula/principle name",
-      "to": "concept/formula/principle name",
-      "type": "prerequisite|derives|applies_to|related",
-      "description": "nature of the relationship"
-    }}
-  ],
-  "knowledge_gaps": ["areas where the source is incomplete"],
-  "review_items": ["items that need human review"]
-}}
-```
-
-Rules:
-- Keep this stage structural: identify what pages should exist and why.
-- Use only page types concept, formula, and principle for core knowledge.
-- Put equations, variables with equations, and named mathematical expressions in formulas, not concepts.
-- Formula names MUST be semantic names, not raw equations or LaTeX.
-- Every concept/formula/principle MUST include prerequisites; use [] only for genuinely foundational items.
-- All math in explanations should use lightweight inline LaTeX delimiters $...$; do not force double-dollar display blocks.
-- Prefer fewer, clearer core pages over many thin pages.
-
-CRITICAL: Output ONLY the JSON object, no markdown fences or explanation.
-"""
 
 CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your task is to generate only the core wiki pages from an approved page plan.
 
@@ -410,21 +142,12 @@ DERIVED_LEARNING_PROMPT = """You are an expert educational designer. Your task i
 {language_instruction}
 
 ## Instructions
-Create derived learning structures from the core concept/formula/principle pages. Do not add new core knowledge pages.
+Create derived learning structures from the core concept/formula/principle pages. Do not add new core knowledge pages, and do not generate exercises — exercises are produced on demand from the Tests view, not at import time.
 
 Output a JSON object with this shape:
 
 ```json
 {{
-  "exercises": [
-    {{
-      "type": "short_answer|multiple_choice|fill_blank",
-      "question": "Exercise question text",
-      "choices": ["A. option text", "B. option text"],
-      "solution": "Solution grounded in the core pages",
-      "knowledge_points": ["titles of existing core pages this exercise tests"]
-    }}
-  ],
   "synthesis": [
     {{
       "title": "Synthesis page title",
@@ -455,11 +178,9 @@ Output a JSON object with this shape:
 ```
 
 Rules:
-- Every exercise must reference existing core page titles in knowledge_points.
-- Include a useful mix of multiple_choice, fill_blank, and short_answer when the source supports it.
-- Multiple-choice exercises must include 3-5 visible choices.
 - Do not introduce facts that are absent from the core plan/pages.
 - Synthesis, Q&A, and system notes should help learners use the core wiki, not duplicate whole pages.
+- Spend the saved effort on richer synthesis, deeper Q&A, and more useful study strategies.
 
 CRITICAL: Output ONLY the JSON object, no markdown fences or explanation.
 """
@@ -880,67 +601,12 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         )
         add_page("principle", title, content, ["principle"], prereqs)
 
-    for idx, item in enumerate(analysis.get("exercises", []) or [], start=1):
-        if not isinstance(item, dict):
-            continue
-        exercise_type = str(item.get("type") or item.get("question_type") or "short_answer").strip()
-        question = str(item.get("question") or item.get("title") or "").strip()
-        title_source = question.splitlines()[0].strip() if question else ""
-        choices = item.get("choices") if isinstance(item.get("choices"), list) else []
-        has_choice_options = bool(re.search(r"^\s*(?:[-*]\s*)?[A-Da-d][\.\)、:：]\s+", question, re.MULTILINE))
-        clean_choices = [str(choice).strip() for choice in choices if str(choice).strip()]
-        if clean_choices and not has_choice_options:
-            has_choice_options = True
-        title = title_source[:40] or f"练习 {idx}"
-        solution = str(item.get("solution") or item.get("answer") or "").strip()
-        solution_starts_with_choice = bool(re.match(r"^\s*(?:答案[:：]?\s*)?[A-Ha-h][\.\)、:：\s]", solution))
-        normalized_exercise_type = exercise_type.lower().replace("-", "_").replace(" ", "_")
-        if solution_starts_with_choice and has_choice_options:
-            exercise_type = "multiple_choice"
-        elif "multiple_choice" in normalized_exercise_type and not has_choice_options:
-            exercise_type = "short_answer"
-            if solution_starts_with_choice:
-                solution = re.sub(r"^\s*(?:答案[:：]?\s*)?[A-Ha-h][\.\)、:：\s]*", "", solution).strip() or solution
-        elif "fill" in normalized_exercise_type and solution_starts_with_choice:
-            solution = re.sub(r"^\s*(?:答案[:：]?\s*)?[A-Ha-h][\.\)、:：\s]*", "", solution).strip() or solution
-        knowledge_points = item.get("knowledge_points") if isinstance(item.get("knowledge_points"), list) else []
-        options_section = ""
-        if exercise_type == "multiple_choice" and clean_choices:
-            options_section = "## 选项\n\n" + "\n".join(clean_choices) + "\n\n"
-        elif exercise_type == "multiple_choice" and has_choice_options:
-            option_lines = [
-                line.strip()
-                for line in question.splitlines()
-                if re.match(r"^\s*(?:[-*]\s*)?[A-Da-d][\.\)、:：]\s+", line)
-            ]
-            prompt_lines = [
-                line
-                for line in question.splitlines()
-                if not re.match(r"^\s*(?:[-*]\s*)?[A-Da-d][\.\)、:：]\s+", line)
-            ]
-            if option_lines:
-                question = "\n".join(prompt_lines).strip() or question
-                options_section = "## 选项\n\n" + "\n".join(option_lines) + "\n\n"
-        content = (
-            f"# {title}\n\n"
-            f"## 题型\n\n{exercise_type or 'short_answer'}\n\n"
-            f"## 题目\n\n{question or '待补充'}\n\n"
-            f"{options_section}"
-            f"## 解答\n\n{solution or '待补充'}\n\n"
-            f"## 考察知识点\n\n"
-            + "\n".join(f"- {kp}" for kp in knowledge_points)
-            + ("\n" if knowledge_points else "待补充\n")
-        )
-        add_page("exercise", title, content, ["exercise"], [])
-
     concepts = _as_list(analysis.get("concepts"))
     formulas = _as_list(analysis.get("formulas"))
     principles = _as_list(analysis.get("principles"))
-    exercises = _as_list(analysis.get("exercises"))
     concept_names = _names_from_items(concepts)
     formula_names = _formula_names_from_items(formulas)
     principle_names = _names_from_items(principles)
-    exercise_names = _names_from_items(exercises, key="question", limit=5)
     all_knowledge_names = concept_names + formula_names + principle_names
 
     if (concepts or formulas) and not _page_type_exists(normalized_pages, "principle"):
@@ -972,66 +638,6 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
                 f"## 应用\n\n用于复习、问答和后续练习中的概念辨析。\n"
             )
             add_page("principle", title, content, ["principle", "generated-fallback"], [])
-
-    if (concepts or formulas or principles) and not _page_type_exists(normalized_pages, "exercise"):
-        primary_concept = concept_names[0] if concept_names else (formula_names[0] if formula_names else "本节核心知识")
-        secondary_concept = concept_names[1] if len(concept_names) > 1 else (principle_names[0] if principle_names else primary_concept)
-
-        mc_title = f"判断{primary_concept}的关键影响因素"
-        mc_question = f"下列哪一项最有助于理解 {primary_concept}？"
-        mc_options = "\n".join([
-            "A. 只记住名称，不看适用条件",
-            "B. 明确它涉及的物理量、适用场景和限制",
-            "C. 只背诵来源文件页码",
-            "D. 忽略它与其他概念的关系",
-        ])
-        mc_solution = f"答案：B。理解 {primary_concept} 需要把定义、变量含义、适用条件和相关知识联系起来。"
-        add_page(
-            "exercise",
-            mc_title,
-            (
-                f"# {mc_title}\n\n"
-                f"## 题型\n\nmultiple_choice\n\n"
-                f"## 题目\n\n{mc_question}\n\n"
-                f"## 选项\n\n{mc_options}\n\n"
-                f"## 解答\n\n{mc_solution}\n\n"
-                f"## 考察知识点\n\n- {primary_concept}\n"
-            ),
-            ["exercise", "generated-fallback"],
-            [],
-        )
-
-        if formula_names:
-            fill_title = f"补全{formula_names[0]}的变量含义"
-            add_page(
-                "exercise",
-                fill_title,
-                (
-                    f"# {fill_title}\n\n"
-                    f"## 题型\n\nfill_blank\n\n"
-                    f"## 题目\n\n"
-                    f"学习 {formula_names[0]} 时，不能只看表达式，还要说明每个符号代表的 ____、单位和适用条件。\n\n"
-                    f"## 解答\n\n空格可填：物理量。完整理解公式需要同时掌握变量含义、单位、适用条件和使用目的。\n\n"
-                    f"## 考察知识点\n\n- {formula_names[0]}\n"
-                ),
-                ["exercise", "generated-fallback"],
-                [],
-            )
-
-        short_title = f"比较{primary_concept}与{secondary_concept}"
-        add_page(
-            "exercise",
-            short_title,
-            (
-                f"# {short_title}\n\n"
-                f"## 题型\n\nshort_answer\n\n"
-                f"## 题目\n\n请用自己的话比较 {primary_concept} 和 {secondary_concept}：它们分别回答什么问题？在哪些场景下容易混淆？\n\n"
-                f"## 解答\n\n应分别说明二者的定义或作用对象，再指出联系、区别和适用边界。答案需要结合来源文档中的例子或公式，而不是只罗列名称。\n\n"
-                f"## 考察知识点\n\n- {primary_concept}\n- {secondary_concept}\n"
-            ),
-            ["exercise", "generated-fallback"],
-            [],
-        )
 
     for idx, item in enumerate(_as_list(analysis.get("synthesis")), start=1):
         if not isinstance(item, dict):
@@ -1079,12 +685,12 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"# {title}\n\n"
             f"## 用途\n\n{purpose or f'整理 {source_relative_path} 的学习路径、复习方式和维护提醒。'}\n\n"
             f"## 推荐学习顺序\n\n{_bullet_list(learning_order or all_knowledge_names)}\n\n"
-            f"## 复习策略\n\n{_bullet_list(study_strategy or exercise_names or ['先看概念和原理，再用练习检查理解。'])}\n\n"
+            f"## 复习策略\n\n{_bullet_list(study_strategy or ['先看概念和原理；如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
             f"## 质量提醒\n\n{_bullet_list(quality_warnings or _as_list(analysis.get('review_items')) or ['如原文 OCR、公式或表格解析异常，请回到来源文档复核。'])}\n"
         )
         add_page("system", title, content, ["system", "imported"], [])
 
-    has_educational_content = bool(concepts or formulas or principles or exercises)
+    has_educational_content = bool(concepts or formulas or principles)
     if has_educational_content and not any((p.get("page_type") == "synthesis") for p in normalized_pages):
         title = f"{source_relative_path} 综合学习图谱"
         content = (
@@ -1114,8 +720,8 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"# {title}\n\n"
             f"## 用途\n\n为本次导入的文档建立学习顺序、复习方式和质量检查入口。\n\n"
             f"## 推荐学习顺序\n\n{_bullet_list(all_knowledge_names)}\n\n"
-            f"## 复习策略\n\n{_bullet_list(exercise_names or ['阅读每个概念页后，回到对应公式、原理和练习进行自测。'])}\n\n"
-            f"## 质量提醒\n\n{_bullet_list(_as_list(analysis.get('review_items')) or ['如果公式、表格或题目来自 OCR，请对照原始文档复核。'])}\n"
+            f"## 复习策略\n\n{_bullet_list(['阅读每个概念页后，回到对应公式和原理进行自测。', '如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
+            f"## 质量提醒\n\n{_bullet_list(_as_list(analysis.get('review_items')) or ['如果公式或表格来自 OCR，请对照原始文档复核。'])}\n"
         )
         add_page("system", title, content, ["system", "imported"], [])
 
@@ -1123,7 +729,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
 
 
 def _analysis_is_empty(analysis: dict) -> bool:
-    return not any(analysis.get(key) for key in ("concepts", "formulas", "principles", "exercises"))
+    return not any(analysis.get(key) for key in ("concepts", "formulas", "principles"))
 
 
 def _fallback_analysis_from_text(content: str) -> dict:
@@ -1135,8 +741,7 @@ def _fallback_analysis_from_text(content: str) -> dict:
     concepts: list[dict] = []
     formulas: list[dict] = []
     principles: list[dict] = []
-    exercises: list[dict] = []
-    seen: dict[str, set[str]] = {"concept": set(), "formula": set(), "principle": set(), "exercise": set()}
+    seen: dict[str, set[str]] = {"concept": set(), "formula": set(), "principle": set()}
 
     def add_concept(name: str, definition: str = ""):
         name = _clean_item_title(name)
@@ -1189,19 +794,6 @@ def _fallback_analysis_from_text(content: str) -> dict:
             "prerequisites": [],
         })
 
-    def add_exercise(question: str):
-        question = _clean_item_title(question)
-        if _is_page_heading(question):
-            return
-        if len(question) < 6 or question in seen["exercise"]:
-            return
-        seen["exercise"].add(question)
-        exercises.append({
-            "question": question,
-            "solution": "请结合文档中的定义、公式和图表进行分析。",
-            "knowledge_points": [],
-        })
-
     known_terms = [
         "导电", "电阻", "电阻率", "电导率", "导电机理", "霍耳效应", "霍尔效应",
         "霍耳系数", "霍尔系数", "经典自由电子理论", "量子自由电子理论", "能带理论",
@@ -1223,9 +815,6 @@ def _fallback_analysis_from_text(content: str) -> dict:
         if re.search(r"(定律|理论|效应|规则|原理)", clean_line):
             add_principle(line, next_line if len(next_line) < 120 else "")
 
-        if "?" in clean_line or "？" in clean_line or "为什么" in clean_line or "由什么决定" in clean_line:
-            add_exercise(line)
-
         inline_formulas = re.findall(r"\$\s*([^$]{1,240}=[^$]{1,240})\s*\$", line)
         if inline_formulas:
             for formula in inline_formulas:
@@ -1246,7 +835,6 @@ def _fallback_analysis_from_text(content: str) -> dict:
         "concepts": concepts[:30],
         "formulas": formulas[:20],
         "principles": principles[:15],
-        "exercises": exercises[:10],
         "relationships": [],
         "knowledge_gaps": [],
         "review_items": ["LLM 分析为空，已使用规则兜底抽取；建议人工复核。"],
@@ -1303,7 +891,6 @@ def _knowledge_counts(analysis: dict) -> dict[str, int]:
         "concepts": len(_as_list(analysis.get("concepts"))),
         "formulas": len(_as_list(analysis.get("formulas"))),
         "principles": len(_as_list(analysis.get("principles"))),
-        "exercises": len(_as_list(analysis.get("exercises"))),
         "synthesis": len(_as_list(analysis.get("synthesis"))),
         "q_and_a": len(_as_list(analysis.get("q_and_a"))),
         "system_notes": len(_as_list(analysis.get("system_notes"))),
@@ -1315,7 +902,6 @@ def _analysis_details(analysis: dict) -> dict:
         "concepts": [c.get("name", "") for c in _as_list(analysis.get("concepts"))[:10] if isinstance(c, dict)],
         "formulas": [f.get("name", "") for f in _as_list(analysis.get("formulas"))[:5] if isinstance(f, dict)],
         "principles": [p.get("name", "") for p in _as_list(analysis.get("principles"))[:5] if isinstance(p, dict)],
-        "exercises": [e.get("question", "")[:40] for e in _as_list(analysis.get("exercises"))[:5] if isinstance(e, dict)],
         "synthesis": [s.get("title", "") for s in _as_list(analysis.get("synthesis"))[:5] if isinstance(s, dict)],
         "q_and_a": [q.get("question", "")[:40] for q in _as_list(analysis.get("q_and_a"))[:5] if isinstance(q, dict)],
         "system_notes": [s.get("title", "") for s in _as_list(analysis.get("system_notes"))[:5] if isinstance(s, dict)],
@@ -1325,10 +911,10 @@ def _analysis_details(analysis: dict) -> dict:
 def _merge_derived_analysis(core_plan: dict, derived: object) -> dict:
     analysis = dict(core_plan)
     if isinstance(derived, dict):
-        for key in ("exercises", "synthesis", "q_and_a", "system_notes"):
+        for key in ("synthesis", "q_and_a", "system_notes"):
             analysis[key] = _as_list(derived.get(key))
     else:
-        for key in ("exercises", "synthesis", "q_and_a", "system_notes"):
+        for key in ("synthesis", "q_and_a", "system_notes"):
             analysis.setdefault(key, [])
     return analysis
 
@@ -1545,7 +1131,7 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
                          stage="generate_core", message=f"主干页面生成完成: {len(core_pages)} 个页面")
 
     await _emit_optional(emit, "stage", source=source_relative_path,
-                         stage="derive", message="Step 3/4: LLM 正在基于主干页面生成练习、综合、问答和学习指引...")
+                         stage="derive", message="Step 3/4: LLM 正在基于主干页面生成综合、问答和学习指引...")
     try:
         derived = await _generate_derived_analysis(
             core_plan,
@@ -1561,7 +1147,7 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
     counts = _knowledge_counts(analysis)
     await _emit_optional(emit, "stage_done", source=source_relative_path,
                          stage="derive",
-                         message=f"进阶内容生成完成: {counts['exercises']} 个习题, {counts['synthesis']} 个综合, "
+                         message=f"进阶内容生成完成: {counts['synthesis']} 个综合, "
                                  f"{counts['q_and_a']} 个问答, {counts['system_notes']} 个系统指引",
                          details=_analysis_details(analysis))
 

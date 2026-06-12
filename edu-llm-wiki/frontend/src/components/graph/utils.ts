@@ -31,7 +31,27 @@ export function readableLabel(label: string, max = 22): string {
     .replace(/\.(md|pdf|docx?|pptx?)$/i, "")
     .replace(/[_-]+/g, " ")
     .trim();
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+  if (_visualWidth(clean) <= max) return clean;
+  const ellipsis = "…";
+  let width = 1;
+  let out = "";
+  for (const ch of clean) {
+    const w = _isWideChar(ch) ? 2 : 1;
+    if (width + w > max - 1) break;
+    out += ch;
+    width += w;
+  }
+  return out + ellipsis;
+}
+
+function _isWideChar(ch: string): boolean {
+  return /[　-鿿＀-￯]/.test(ch);
+}
+
+function _visualWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) w += _isWideChar(ch) ? 2 : 1;
+  return w;
 }
 
 export function isStrongEdge(edge: { edge_type: string; weight: number }): boolean {
