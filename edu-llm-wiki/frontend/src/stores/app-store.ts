@@ -54,6 +54,11 @@ interface AppState {
   setSelectedPage: (page: WikiPage | null) => void
   selectPage: (path: string) => Promise<void>
 
+  // Pending cross-view requests: a page-scoped "generate a test for this page"
+  // hop from PreviewPanel's footer button. Consumed by TestsView on mount.
+  pendingTestPagePath: string | null
+  setPendingTestPagePath: (path: string | null) => void
+
   // Search
   searchQuery: string
   setSearchQuery: (q: string) => void
@@ -200,6 +205,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   wikiPages: [],
   setWikiPages: (pages) => set({ wikiPages: pages }),
+
+  pendingTestPagePath: null,
+  setPendingTestPagePath: (path) => set({ pendingTestPagePath: path }),
 
   conversations: [],
   setConversations: (list) => set({ conversations: list }),

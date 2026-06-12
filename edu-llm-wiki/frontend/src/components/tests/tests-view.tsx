@@ -126,7 +126,17 @@ export function TestsView() {
     question_types: ["multiple_choice", "fill_blank", "short_answer"],
     difficulty: "mixed",
     mode: "practice",
+    page_path: null,
   })
+
+  // Consume a page-scoped request from PreviewPanel's footer button.
+  const pendingTestPagePath = useAppStore((s) => s.pendingTestPagePath)
+  const setPendingTestPagePath = useAppStore((s) => s.setPendingTestPagePath)
+  useEffect(() => {
+    if (!pendingTestPagePath) return
+    setForm((f) => ({ ...f, page_path: pendingTestPagePath, scope: "wiki" }))
+    setPendingTestPagePath(null)
+  }, [pendingTestPagePath, setPendingTestPagePath])
 
   const currentQuestion = activeSession?.questions[currentIndex] || null
   const attemptsById = useMemo(() => {
@@ -286,6 +296,25 @@ export function TestsView() {
                   <option value="source">指定文档</option>
                 </select>
               </label>
+
+              {form.page_path && (
+                <div className="rounded-md border border-dashed border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1.5 text-[11px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[var(--muted-foreground)]">
+                      目标页: <span className="font-medium text-[var(--foreground)]">{form.page_path.split("/").pop()?.replace(/\.md$/, "")}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, page_path: null }))}
+                      className="shrink-0 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                    >
+                      清除
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* page_path indicator above; legacy scope-conditional source picker continues below */}
 
               {form.scope === "source" && (
                 <label className="block">

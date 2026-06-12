@@ -330,6 +330,8 @@ export function PreviewPanel() {
   const selectedSource = useAppStore((s) => s.selectedSource)
   const setSelectedSource = useAppStore((s) => s.setSelectedSource)
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
+  const setActiveView = useAppStore((s) => s.setActiveView)
+  const setPendingTestPagePath = useAppStore((s) => s.setPendingTestPagePath)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [researchOpen, setResearchOpen] = useState(false)
   const [editingPage, setEditingPage] = useState(false)
@@ -462,7 +464,14 @@ export function PreviewPanel() {
             {editingPage ? (
               <PageEditor page={selectedPage} onSaved={(updated) => { setSelectedPage(updated); setEditingPage(false) }} onCancel={() => setEditingPage(false)} />
             ) : (
-              <PageBodyDispatch page={selectedPage} onEdit={() => setEditingPage(true)} />
+              <PageBodyDispatch
+                page={selectedPage}
+                onEdit={() => setEditingPage(true)}
+                onPractice={() => {
+                  setPendingTestPagePath(selectedPage.path)
+                  setActiveView("tests")
+                }}
+              />
             )}
           </div>
         </Panel>
@@ -484,7 +493,7 @@ export function PreviewPanel() {
   )
 }
 
-function PageBodyDispatch({ page, onEdit }: { page: WikiPage; onEdit: () => void }) {
+function PageBodyDispatch({ page, onEdit, onPractice }: { page: WikiPage; onEdit: () => void; onPractice: () => void }) {
   let body: ReactNode
   switch (page.page_type) {
     case "concept":   body = <ConceptView page={page} />; break
@@ -498,6 +507,13 @@ function PageBodyDispatch({ page, onEdit }: { page: WikiPage; onEdit: () => void
     <>
       {body}
       <div className="mt-6 flex items-center gap-2 border-t pt-3">
+        <button
+          onClick={onPractice}
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1.5 text-xs text-[var(--primary)] hover:bg-[var(--primary)]/10"
+        >
+          <Sparkles size={12} />
+          为本页出几道题
+        </button>
         <button
           onClick={onEdit}
           className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"

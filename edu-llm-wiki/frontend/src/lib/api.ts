@@ -370,6 +370,9 @@ export interface TestCreateRequest {
   question_types: string[]
   difficulty: string
   mode: string
+  /** Optional page-scoped generation: when set, the backend should
+   *  restrict question generation to this page (and its prerequisites). */
+  page_path?: string | null
   /** Optional seed echoed into the LLM prompt to encourage diversity
    *  across consecutive generations. Frontend auto-fills this. */
   seed?: string
