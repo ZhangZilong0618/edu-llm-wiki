@@ -11,6 +11,13 @@ class WikiPage(BaseModel):
     tags: list[str] = []
     created: str = ""
     updated: str = ""
+    # --- v2 structured fields (all optional, backward compatible) ---
+    difficulty: int | None = None           # 1..5, cognitive load for a beginner
+    prerequisites: list[str] = []          # paths that must be understood first
+    related: list[str] = []                # same-level associations
+    common_misconceptions: list[str] = []  # concept page only
+    worked_example_ref: list[str] = []     # concept page → formula pages as examples
+    last_reviewed: str = ""                # ISO datetime, for spaced review
 
 
 class WikiPageCreate(BaseModel):
@@ -19,6 +26,12 @@ class WikiPageCreate(BaseModel):
     content: str
     sources: list[str] = []
     tags: list[str] = []
+    difficulty: int | None = None
+    prerequisites: list[str] = []
+    related: list[str] = []
+    common_misconceptions: list[str] = []
+    worked_example_ref: list[str] = []
+    last_reviewed: str = ""
 
 
 class WikiPageUpdate(BaseModel):
@@ -26,6 +39,12 @@ class WikiPageUpdate(BaseModel):
     content: str | None = None
     sources: list[str] | None = None
     tags: list[str] | None = None
+    difficulty: int | None = None
+    prerequisites: list[str] | None = None
+    related: list[str] | None = None
+    common_misconceptions: list[str] | None = None
+    worked_example_ref: list[str] | None = None
+    last_reviewed: str | None = None
 
 
 class WikiIndex(BaseModel):

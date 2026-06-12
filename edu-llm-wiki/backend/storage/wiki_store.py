@@ -25,7 +25,7 @@ def sources_path(project_id: str = "default") -> Path:
 def ensure_dirs(project_id: str = "default"):
     """Create wiki directory structure."""
     dirs = [
-        "concepts", "formulas", "principles", "exercises", "sources",
+        "concepts", "formulas", "principles", "sources",
         "synthesis", "queries", "systems", "media"
     ]
     wp = wiki_path(project_id)
@@ -65,7 +65,6 @@ type: system
 - **concept**: 概念定义，包含定义、解释、示例
 - **formula**: 数学公式，包含公式、变量说明、推导
 - **principle**: 原理/定理，包含陈述、条件、证明/推导
-- **exercise**: 习题/例题，包含题目、解答、知识点
 - **source**: 来源摘要，对原始文档的总结
 - **synthesis**: 综合分析，跨来源的对比和综合
 - **query**: 问答记录，保存的有价值问答
@@ -74,7 +73,6 @@ type: system
 ## 命名规范
 - 概念页: `concepts/{概念名}.md`
 - 公式页: `formulas/{公式名}.md`
-- 习题页: `exercises/{题目标题}.md`
 - 综合页: `synthesis/{主题}.md`
 - 问答页: `queries/{问题标题}.md`
 - 系统页: `systems/{指引标题}.md`
@@ -98,8 +96,6 @@ updated: ""
 ## 公式 (Formulas)
 
 ## 原理 (Principles)
-
-## 习题 (Exercises)
 
 ## 来源 (Sources)
 
@@ -131,6 +127,11 @@ def make_frontmatter(fm: dict) -> str:
 def write_wiki_page(relative_path: str, title: str, page_type: str, content: str,
                     sources: list[str] | None = None, tags: list[str] | None = None,
                     prerequisites: list[str] | None = None,
+                    difficulty: int | None = None,
+                    related: list[str] | None = None,
+                    common_misconceptions: list[str] | None = None,
+                    worked_example_ref: list[str] | None = None,
+                    last_reviewed: str | None = None,
                     *, project_id: str = "default") -> str:
     """Write a wiki page. Returns the absolute path."""
     wp = wiki_path(project_id)
@@ -149,12 +150,25 @@ def write_wiki_page(relative_path: str, title: str, page_type: str, content: str
     }
     if prerequisites:
         fm["prerequisites"] = prerequisites
+    if difficulty is not None:
+        fm["difficulty"] = difficulty
+    if related:
+        fm["related"] = related
+    if common_misconceptions:
+        fm["common_misconceptions"] = common_misconceptions
+    if worked_example_ref:
+        fm["worked_example_ref"] = worked_example_ref
+    if last_reviewed:
+        fm["last_reviewed"] = last_reviewed
 
     # Check if exists, preserve created date
     if full_path.exists():
         existing_fm, _ = parse_frontmatter(full_path.read_text(encoding="utf-8"))
         if "created" in existing_fm:
             fm["created"] = existing_fm["created"]
+        # Preserve last_reviewed if caller didn't supply a new value
+        if "last_reviewed" not in fm and "last_reviewed" in existing_fm:
+            fm["last_reviewed"] = existing_fm["last_reviewed"]
 
     text = make_frontmatter(fm) + "\n" + content
     full_path.write_text(text, encoding="utf-8")
@@ -162,7 +176,7 @@ def write_wiki_page(relative_path: str, title: str, page_type: str, content: str
 
 
 def read_wiki_page(relative_path: str, *, project_id: str = "default") -> dict | None:
-    """Read a wiki page. Returns {path, title, type, content, sources, tags, created, updated} or None."""
+    """Read a wiki page. Returns full WikiPage dict (incl. v2 structured fields) or None."""
     wp = wiki_path(project_id)
     full_path = wp / relative_path
     if not full_path.exists():
@@ -180,6 +194,12 @@ def read_wiki_page(relative_path: str, *, project_id: str = "default") -> dict |
         "tags": fm.get("tags", []),
         "created": fm.get("created", ""),
         "updated": fm.get("updated", ""),
+        "difficulty": fm.get("difficulty"),
+        "prerequisites": fm.get("prerequisites", []) or [],
+        "related": fm.get("related", []) or [],
+        "common_misconceptions": fm.get("common_misconceptions", []) or [],
+        "worked_example_ref": fm.get("worked_example_ref", []) or [],
+        "last_reviewed": fm.get("last_reviewed", "") or "",
     }
 
 
@@ -201,6 +221,8 @@ def list_wiki_pages(page_type: str | None = None, *, project_id: str = "default"
             "title": fm.get("title", md_file.stem),
             "type": ptype,
             "summary": body[:200] if body else "",
+            "difficulty": fm.get("difficulty"),
+            "prerequisites": fm.get("prerequisites", []) or [],
         })
 
     return pages
@@ -317,7 +339,6 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
         "concept": "## 概念 (Concepts)",
         "formula": "## 公式 (Formulas)",
         "principle": "## 原理 (Principles)",
-        "exercise": "## 习题 (Exercises)",
         "source": "## 来源 (Sources)",
         "synthesis": "## 综合分析 (Synthesis)",
         "query": "## 问答记录 (Queries)",
@@ -380,7 +401,6 @@ def rebuild_index(*, project_id: str = "default"):
         "concept": "## 概念 (Concepts)",
         "formula": "## 公式 (Formulas)",
         "principle": "## 原理 (Principles)",
-        "exercise": "## 习题 (Exercises)",
         "source": "## 来源 (Sources)",
         "synthesis": "## 综合分析 (Synthesis)",
         "query": "## 问答记录 (Queries)",

@@ -13,7 +13,6 @@ const TYPE_COLORS: Record<string, string> = {
   concept: "#3b82f6",
   formula: "#8b5cf6",
   principle: "#f59e0b",
-  exercise: "#10b981",
   source: "#6b7280",
   synthesis: "#ec4899",
 }
@@ -22,7 +21,6 @@ const TYPE_LABELS: Record<string, string> = {
   concept: "概念",
   formula: "公式",
   principle: "原理",
-  exercise: "练习",
   source: "来源",
   synthesis: "综合",
   unknown: "其他",

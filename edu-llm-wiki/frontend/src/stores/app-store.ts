@@ -25,7 +25,7 @@ export interface IngestProgress {
     stage: string
     message: string
     status: "pending" | "active" | "done"
-    details?: { concepts?: string[]; formulas?: string[]; principles?: string[]; exercises?: string[] }
+    details?: { concepts?: string[]; formulas?: string[]; principles?: string[] }
     logs?: string
     pages?: { current: number; total: number; items: { title: string; page_type: string; action: string }[] }
     created?: number
@@ -83,8 +83,30 @@ interface AppState {
   updateResearchState: (path: string, patch: Record<string, unknown>, initial?: Record<string, unknown>) => void
 
   // Knowledge tree pages
-  wikiPages: { path: string; title: string; type: string; summary: string }[]
-  setWikiPages: (pages: { path: string; title: string; type: string; summary: string }[]) => void
+  wikiPages: {
+    path: string
+    title: string
+    type: string
+    summary: string
+    difficulty?: number | null
+    prerequisites?: string[]
+    related?: string[]
+    common_misconceptions?: string[]
+    worked_example_ref?: string[]
+    last_reviewed?: string
+  }[]
+  setWikiPages: (pages: {
+    path: string
+    title: string
+    type: string
+    summary: string
+    difficulty?: number | null
+    prerequisites?: string[]
+    related?: string[]
+    common_misconceptions?: string[]
+    worked_example_ref?: string[]
+    last_reviewed?: string
+  }[]) => void
 
   // Conversations
   conversations: { id: string; title: string; message_count: number; created: string; updated: string }[]

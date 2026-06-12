@@ -428,7 +428,6 @@ def _page_path_for(page_type: str, title: str) -> str:
         "concept": "concepts",
         "formula": "formulas",
         "principle": "principles",
-        "exercise": "exercises",
         "source": "sources",
         "synthesis": "synthesis",
         "query": "queries",

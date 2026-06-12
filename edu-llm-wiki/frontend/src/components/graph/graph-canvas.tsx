@@ -53,7 +53,6 @@ const LANE_ORDER: Record<string, number> = {
   formula: 2,
   synthesis: 3,
   query: 3,
-  exercise: 3,
 };
 
 const CARD_WIDTH = 172;

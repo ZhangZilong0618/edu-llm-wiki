@@ -47,6 +47,12 @@ async def create_page(page: WikiPageCreate, project_id: str = Query("default")):
         content=page.content,
         sources=page.sources,
         tags=page.tags,
+        prerequisites=page.prerequisites,
+        difficulty=page.difficulty,
+        related=page.related,
+        common_misconceptions=page.common_misconceptions,
+        worked_example_ref=page.worked_example_ref,
+        last_reviewed=page.last_reviewed,
         project_id=project_id,
     )
 
@@ -67,6 +73,12 @@ async def update_page(relative_path: str, update: WikiPageUpdate, project_id: st
         content=update.content if update.content is not None else existing["content"],
         sources=update.sources if update.sources is not None else existing["sources"],
         tags=update.tags if update.tags is not None else existing["tags"],
+        prerequisites=update.prerequisites if update.prerequisites is not None else existing.get("prerequisites", []),
+        difficulty=update.difficulty if update.difficulty is not None else existing.get("difficulty"),
+        related=update.related if update.related is not None else existing.get("related", []),
+        common_misconceptions=update.common_misconceptions if update.common_misconceptions is not None else existing.get("common_misconceptions", []),
+        worked_example_ref=update.worked_example_ref if update.worked_example_ref is not None else existing.get("worked_example_ref", []),
+        last_reviewed=update.last_reviewed if update.last_reviewed is not None else existing.get("last_reviewed", ""),
         project_id=project_id,
     )
 

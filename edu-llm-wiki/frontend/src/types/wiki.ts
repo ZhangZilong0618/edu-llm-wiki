@@ -7,6 +7,13 @@ export interface WikiPage {
   tags: string[]
   created: string
   updated: string
+  // --- v2 structured fields (all optional, backward compatible) ---
+  difficulty: number | null
+  prerequisites: string[]
+  related: string[]
+  common_misconceptions: string[]
+  worked_example_ref: string[]
+  last_reviewed: string
 }
 
 export interface GraphNode {

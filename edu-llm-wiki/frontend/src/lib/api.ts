@@ -226,30 +226,6 @@ export const api = {
   deleteConversation: (id: string) =>
     request<{ status: string }>(`${BASE}/conversations/${id}?${p()}`, { method: "DELETE" }),
 
-  // Exercises
-  checkExercise: (data: {
-    question: string
-    student_answer: string
-    reference_answer?: string | null
-    page_title?: string
-    page_path?: string
-    context?: string
-  }) =>
-    request<{
-      level: "empty" | "weak" | "partial" | "good"
-      title: string
-      detail: string
-      matched: string[]
-      missing: string[]
-      evidence: string[]
-      suggested_answer?: string | null
-      source: string
-    }>(`${BASE}/exercises/check?${p()}`, { method: "POST", body: JSON.stringify(data) }),
-  completeExerciseSolution: (data: { page_path: string; note?: string }) =>
-    request<{ status: string; solution: string; page: WikiPage }>(
-      `${BASE}/exercises/complete-solution?${p()}`,
-      { method: "POST", body: JSON.stringify(data) }
-    ),
 
   // Health
   health: () => request<{ status: string; version: string }>(`${BASE}/health`),

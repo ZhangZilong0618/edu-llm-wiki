@@ -106,12 +106,6 @@ const TYPE_CONFIG: Record<
     bg: "bg-amber-50 dark:bg-amber-950/30",
     label: "Principle",
   },
-  exercise: {
-    icon: Dumbbell,
-    color: "text-emerald-600",
-    bg: "bg-emerald-50 dark:bg-emerald-950/30",
-    label: "Exercise",
-  },
   source: {
     icon: FileText,
     color: "text-gray-500",
@@ -196,10 +190,6 @@ function buildStages(data: GraphData, statuses: Record<string, ItemStatus>): Lea
           ? "Use this to understand where the material came from."
           : "Use this synthesis as a map before details.";
       actions = ["read", "ask"];
-    } else if (type === "exercise") {
-      stage = "applications";
-      reason = "Practice after reading the concepts and formulas it depends on.";
-      actions = ["practice", "ask", "review"];
     } else if (isGap) {
       stage = "review";
       reason = "This item has weak graph connections, so it is worth checking deliberately.";
@@ -238,7 +228,6 @@ function buildStages(data: GraphData, statuses: Record<string, ItemStatus>): Lea
       concept: 2,
       formula: 3,
       principle: 4,
-      exercise: 5,
     };
     return (
       (typeOrder[a.type as keyof typeof typeOrder] ?? 9) -

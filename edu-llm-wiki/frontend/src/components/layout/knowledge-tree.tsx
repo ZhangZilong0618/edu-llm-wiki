@@ -2,15 +2,15 @@ import { useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
 import { toast } from "@/components/ui/toast"
-import { ChevronDown, ChevronRight, FileText, Hash, Sigma, Scale3D, Pencil, BookOpen, FolderOpen, Loader2, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, FileText, Hash, Sigma, Scale3D, BookOpen, FolderOpen, Loader2, Search, X } from "lucide-react"
 import type { SearchResult } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
+import { PageBadges } from "@/lib/page-badges"
 
 const typeIcons: Record<string, React.ReactNode> = {
   concept: <Hash size={14} />,
   formula: <Sigma size={14} />,
   principle: <Scale3D size={14} />,
-  exercise: <Pencil size={14} />,
   source: <FileText size={14} />,
   synthesis: <BookOpen size={14} />,
 }
@@ -19,12 +19,11 @@ const typeColors: Record<string, string> = {
   concept: "#3b82f6",
   formula: "#8b5cf6",
   principle: "#f59e0b",
-  exercise: "#10b981",
   source: "#6b7280",
   synthesis: "#ec4899",
 }
 
-const TYPE_ORDER = ["concept", "formula", "principle", "exercise", "source", "synthesis", "query", "system"]
+const TYPE_ORDER = ["concept", "formula", "principle", "source", "synthesis", "query", "system"]
 
 export function KnowledgeTree() {
   const wikiPages = useAppStore((s) => s.wikiPages)
@@ -45,7 +44,6 @@ export function KnowledgeTree() {
     concept: "Concepts",
     formula: "Formulas",
     principle: "Principles",
-    exercise: "Exercises",
     source: "Imported",
     synthesis: "Synthesis",
     query: "Q&A",
@@ -59,7 +57,7 @@ export function KnowledgeTree() {
       setSelectedPage(page)
       setActiveView("wiki")
     } catch {
-      setSelectedPage({ path: p.path, title: p.title, page_type: p.type, content: "", sources: [], tags: [], created: "", updated: "" })
+      setSelectedPage({ path: p.path, title: p.title, page_type: p.type, content: "", sources: [], tags: [], created: "", updated: "", difficulty: null, prerequisites: [], related: [], common_misconceptions: [], worked_example_ref: [], last_reviewed: "" })
     }
   }
 
@@ -204,13 +202,19 @@ export function KnowledgeTree() {
                 <button
                   key={p.path}
                   onClick={() => handleSelect(p)}
-                  className="w-full text-left px-4 py-1 text-sm rounded hover:bg-[var(--accent)] transition-colors truncate"
+                  className="flex w-full items-center gap-1.5 px-4 py-1 text-sm rounded hover:bg-[var(--accent)] transition-colors"
                   style={{
                     color: selectedPage?.path === p.path ? "var(--primary)" : "var(--sidebar-foreground)",
                     fontWeight: selectedPage?.path === p.path ? 500 : 400,
                   }}
                 >
-                  {displayWikiTitle(p)}
+                  <span className="truncate flex-1 text-left">{displayWikiTitle(p)}</span>
+                  <PageBadges
+                    difficulty={p.difficulty}
+                    prerequisiteCount={p.prerequisites?.length}
+                    misconceptionCount={p.common_misconceptions?.length}
+                    lastReviewed={p.last_reviewed}
+                  />
                 </button>
               )) : (
                 <p className="px-4 py-1 text-xs text-[var(--muted-foreground)] opacity-60">No pages yet</p>
