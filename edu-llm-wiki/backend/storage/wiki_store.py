@@ -223,6 +223,8 @@ def list_wiki_pages(page_type: str | None = None, *, project_id: str = "default"
             "summary": body[:200] if body else "",
             "difficulty": fm.get("difficulty"),
             "prerequisites": fm.get("prerequisites", []) or [],
+            "common_misconceptions": fm.get("common_misconceptions", []) or [],
+            "last_reviewed": fm.get("last_reviewed", "") or "",
         })
 
     return pages

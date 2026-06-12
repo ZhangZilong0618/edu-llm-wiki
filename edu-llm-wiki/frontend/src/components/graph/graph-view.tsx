@@ -2,7 +2,7 @@
 // learning path panel and live event stream. State lives here so it can
 // persist across view changes; each child component is dumb.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { GitFork, RefreshCw } from "lucide-react";
 
 import { useAppStore } from "@/stores/app-store";
@@ -19,6 +19,8 @@ import { groupNeighborsByNode, readableLabel } from "./utils";
 
 export function GraphView() {
   const projectId = useAppStore((s) => s.currentProject) || "default";
+  const setSelectedPage = useAppStore((s) => s.setSelectedPage);
+  const setActiveView = useAppStore((s) => s.setActiveView);
   const compactLayout = useMediaQuery("(max-width: 980px)");
 
   const { data, mastery, loading, error, reload } = useGraphData({ projectId });
@@ -45,6 +47,18 @@ export function GraphView() {
     for (const n of data?.nodes || []) m[n.id] = n;
     return m;
   }, [data]);
+
+  const jumpToWiki = useCallback(async (node: GraphNode) => {
+    const path = typeof node.metadata?.path === "string" ? node.metadata.path : null
+    if (!path) return
+    setActiveView("wiki")
+    try {
+      const page = await api.getPage(path)
+      setSelectedPage(page)
+    } catch {
+      setSelectedPage({ path, title: node.label, page_type: node.node_type || "unknown", content: "", sources: [], tags: [], created: "", updated: "", difficulty: null, prerequisites: [], related: [], common_misconceptions: [], worked_example_ref: [], last_reviewed: "" })
+    }
+  }, [setActiveView, setSelectedPage])
 
   const selectedNodeData = useMemo(() => {
     if (!selected || !data) return null;
@@ -122,6 +136,7 @@ export function GraphView() {
           onSelect={(id) => {
             const node = nodesById[id] || null;
             setSelected(node ? { node, degree: 0 } : null);
+            if (node) void jumpToWiki(node);
           }}
           onHover={setHover}
         />
@@ -185,7 +200,10 @@ export function GraphView() {
                       className="flex items-center justify-between gap-1 truncate hover:underline"
                     >
                       <button
-                        onClick={() => setSelected({ node: n.node, degree: 0 })}
+                        onClick={() => {
+                          setSelected({ node: n.node, degree: 0 });
+                          void jumpToWiki(n.node);
+                        }}
                         className="truncate text-left"
                       >
                         {n.node.label}
