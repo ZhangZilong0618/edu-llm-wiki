@@ -37,3 +37,25 @@ def drain(sub: _Subscriber) -> list[dict]:
     out = list(sub.queue)
     sub.queue.clear()
     return out
+
+
+def replay(project_id: str, since_id: int = 0) -> list[dict]:
+    """Return buffered events from the store since ``since_id``."""
+    from services.graph_store import execute
+    rows = execute(
+        project_id,
+        "SELECT id, event_type, project_id, payload_json, created_at "
+        "FROM graph_events WHERE id > ? ORDER BY id ASC LIMIT 500",
+        (since_id,),
+    )
+    out = []
+    for r in rows:
+        import json
+        out.append({
+            "id": r["id"],
+            "event_type": r["event_type"],
+            "project_id": r["project_id"],
+            "payload": json.loads(r["payload_json"] or "{}"),
+            "created_at": r["created_at"],
+        })
+    return out

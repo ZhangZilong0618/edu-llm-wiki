@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { FileSearch } from "lucide-react"
 import { api, type TestCreateRequest, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
@@ -52,7 +53,60 @@ function questionTypeLabel(type: string): string {
   return "简答题"
 }
 
+function SourceLinks({ question }: { question: TestSession["questions"][number] }) {
+  const selectPage = useAppStore((s) => s.selectPage)
+  const wikiPages = useAppStore((s) => s.wikiPages)
+  const titleByPath = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const p of wikiPages) map.set(p.path, p.title)
+    return map
+  }, [wikiPages])
+
+  const handleConcept = async (concept: string) => {
+    const match = wikiPages.find((p) => p.title.toLowerCase().includes(concept.toLowerCase()))
+    if (match) {
+      await selectPage(match.path)
+      return
+    }
+    try {
+      const resp = await api.search(concept)
+      const hit = resp.results.find((r) => r.path.endsWith(".md"))
+      if (hit) await selectPage(hit.path)
+    } catch {
+      // silently ignore — concept is informational
+    }
+  }
+
+  if (!question.related_page && (!question.concepts || question.concepts.length === 0)) return null
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="text-[var(--muted-foreground)]">考察来源</span>
+      {question.related_page && (
+        <button
+          onClick={() => selectPage(question.related_page!)}
+          className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--background)] px-2 py-0.5 text-[var(--primary)] hover:bg-[var(--accent)]"
+          title={question.related_page}
+        >
+          <FileSearch size={11} />
+          {titleByPath.get(question.related_page) || question.related_page}
+        </button>
+      )}
+      {(question.concepts || []).map((concept) => (
+        <button
+          key={concept}
+          onClick={() => handleConcept(concept)}
+          className="rounded-full border border-[var(--border)] bg-[var(--background)] px-2 py-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+        >
+          {concept}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function TestsView() {
+  const currentProject = useAppStore((s) => s.currentProject)
   const [sessions, setSessions] = useState<TestSummary[]>([])
   const [sources, setSources] = useState<{ name: string; size: number; modified: number }[]>([])
   const [activeSession, setActiveSession] = useState<TestSession | null>(null)
@@ -457,8 +511,8 @@ function TestWorkspace({
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="rounded-full bg-[var(--muted)] px-2.5 py-1 text-[var(--muted-foreground)]">{questionTypeLabel(question.type)}</span>
             <span className="text-[var(--muted-foreground)]">第 {currentIndex + 1} / {session.questions.length} 题</span>
-            {question.related_page && <span className="rounded bg-[var(--muted)] px-2 py-0.5 text-xs text-[var(--muted-foreground)]">{question.related_page}</span>}
           </div>
+          <SourceLinks question={question} />
 
           <section className="rounded-lg border bg-[var(--background)] p-5">
             <Markdown>{question.prompt}</Markdown>
@@ -499,6 +553,9 @@ function TestWorkspace({
             <section className="rounded-lg border p-4">
               <h3 className="mb-2 text-sm font-semibold">解析</h3>
               <Markdown>{question.explanation}</Markdown>
+              <div className="mt-3 border-t pt-3">
+                <SourceLinks question={question} />
+              </div>
             </section>
           )}
         </div>

@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from services.graph_store import make_node_id
 from storage.wiki_store import list_wiki_pages, parse_frontmatter, wiki_path
 
 
@@ -115,7 +116,8 @@ def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, st
     out: dict[str, ParsedPage] = {}
     title_to_id: dict[str, str] = {}
     for summary in pages:
-        node_id = summary["path"].replace(".md", "")
+        page_path = summary["path"]
+        node_id = make_node_id(project_id, page_path)
         full = wp / summary["path"]
         if not full.exists():
             continue
@@ -135,7 +137,7 @@ def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, st
                 p.replace(".md", "").strip()
                 for p in (front.get("prerequisites", []) or [])
                 if p
-            ],
+            ] + _wikilink_prereqs(body),
             parent_concept=str(front.get("parent_concept") or "").strip(),
             relationships=(
                 _normalise_relationships(front.get("relationships"))
@@ -149,9 +151,41 @@ def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, st
         parsed.content_hash = _hash_content(content)
         out[node_id] = parsed
         title_to_id[parsed.title] = node_id
+        title_to_id[parsed.path] = node_id
+        title_to_id[parsed.path.replace(".md", "")] = node_id
+        title_to_id[parsed.path.removesuffix(".md").split("/")[-1]] = node_id
+        # Also key by the file's basename (e.g. `KNN欧氏距离公式`) and its
+        # case-insensitive variant.  This makes `[[KNN]]` resolve to the
+        # KNN page even when the page title has been enriched with a
+        # semantic suffix.  First-registration wins, so any later exact
+        # match (above) still takes precedence.
+        slug = parsed.path.removesuffix(".md").split("/")[-1]
+        title_to_id.setdefault(slug, node_id)
+        title_to_id.setdefault(slug.lower(), node_id)
+        title_to_id.setdefault(parsed.title.lower(), node_id)
     return out, title_to_id
 
 
 def _hash_content(content: str) -> str:
     import hashlib
     return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
+
+
+_WIKILINK_RE = __import__("re").compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+
+def _wikilink_prereqs(body: str) -> list[str]:
+    """Extract ``[[concepts/Title]]`` wiki-links as prereq hints.
+
+    These are the primary signal when LLM extraction is unavailable
+    (offline rebuild, cold start, low-quality source).
+    """
+    seen: list[str] = []
+    for m in _WIKILINK_RE.finditer(body or ""):
+        target = m.group(1).strip()
+        if not target:
+            continue
+        target = target.removeprefix("concepts/").removesuffix(".md")
+        if target and target not in seen:
+            seen.append(target)
+    return seen

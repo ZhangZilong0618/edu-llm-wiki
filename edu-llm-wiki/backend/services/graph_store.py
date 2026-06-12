@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -407,6 +408,34 @@ def diff_and_apply(project_id: str) -> dict:
     return {"added": added, "updated": updated, "removed": removed}
 
 
+def refresh_node_degrees(project_id: str) -> None:
+    """Recompute degree_in / degree_out from the live ``graph_edges`` table.
+
+    Must be called *after* edges have been persisted in the same
+    reconciliation pass — apply_diff zeroes both columns, so a second
+    pass once ``upsert_edges`` has run gives the correct connectivity
+    counts that drive the Sigma node size.
+    """
+    with connect(project_id) as conn:
+        conn.execute(
+            """
+            UPDATE graph_nodes
+            SET degree_in = COALESCE((
+                SELECT COUNT(*) FROM graph_edges
+                WHERE graph_edges.project_id = graph_nodes.project_id
+                  AND graph_edges.target = graph_nodes.node_id
+            ), 0),
+                degree_out = COALESCE((
+                    SELECT COUNT(*) FROM graph_edges
+                    WHERE graph_edges.project_id = graph_nodes.project_id
+                      AND graph_edges.source = graph_nodes.node_id
+                ), 0)
+            WHERE project_id = ?
+            """,
+            (project_id,),
+        )
+
+
 def _extract_frontmatter(page: dict) -> dict[str, Any]:
     """Best-effort frontmatter extraction.
 
@@ -563,6 +592,14 @@ def delete_orphan_edges(project_id: str, valid_nodes: set[str]) -> int:
         return cur.rowcount
 
 
+def clear_derived_graph(project_id: str) -> None:
+    """Clear cached graph artifacts that are recomputed from wiki pages."""
+    with connect(project_id) as conn:
+        conn.execute("DELETE FROM graph_edges WHERE project_id=?", (project_id,))
+        conn.execute("DELETE FROM graph_communities WHERE project_id=?", (project_id,))
+        conn.execute("DELETE FROM graph_insights WHERE project_id=?", (project_id,))
+
+
 # ---------------------------------------------------------------------------
 # Read helpers (cheap, used by /api/graph)
 # ---------------------------------------------------------------------------
@@ -572,7 +609,32 @@ def get_all_nodes(project_id: str) -> list[dict]:
         rows = conn.execute(
             "SELECT * FROM graph_nodes WHERE project_id=?", (project_id,)
         ).fetchall()
-    return [dict(r) for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        # Map persistence row keys to the GraphNode Pydantic contract.
+        degree = int(d.get("degree_in") or 0) + int(d.get("degree_out") or 0)
+        # Log-scale so a hub (degree ~30) renders ~2x larger than a leaf
+        # (degree 1) without dominating the canvas. Floor at 1 so every
+        # node is at least the default Sigma radius. Stored as int to match
+        # the Pydantic GraphNode contract.
+        size = max(1, int(round(1.0 + math.log1p(max(degree, 0)) * 1.2)))
+        out.append({
+            "id": d.get("node_id") or d.get("id") or "",
+            "label": d.get("title") or d.get("label") or d.get("node_id", ""),
+            "node_type": d.get("type") or d.get("node_type") or "concept",
+            "page_path": d.get("page_path", ""),
+            "size": size,
+            "community": d.get("community_id", -1) if d.get("community_id") is not None else -1,
+            "metadata": {"content_hash": d.get("content_hash", "")},
+            "bloom_level": d.get("bloom_level"),
+            "difficulty": d.get("difficulty"),
+            "estimated_minutes": d.get("estimated_minutes"),
+            "parent_concept": d.get("parent_concept"),
+            "tags": [],
+            "mtime": d.get("mtime"),
+        })
+    return out
 
 
 def get_all_edges(project_id: str) -> list[dict]:

@@ -77,20 +77,19 @@ class GraphEvent(BaseModel):
 
 class LearningPathStep(BaseModel):
     node_id: str
-    label: str
+    title: str
     node_type: str
-    depth: int
-    edge_type: str  # how this node was reached from the previous one
-    mastery: str | None = None
-    estimated_minutes: float | None = None
+    reason: str = ""
+    mastery: str = "new"
+    score: float = 0.0
+    estimated_minutes: int = 0
 
 
 class LearningPathResponse(BaseModel):
     target: str
-    start: str | None = None
     steps: list[LearningPathStep]
-    total_minutes: float = 0.0
     remaining: list[str] = Field(default_factory=list)
+    estimated_total_minutes: int = 0
 
 
 class MasteryAttemptRequest(BaseModel):

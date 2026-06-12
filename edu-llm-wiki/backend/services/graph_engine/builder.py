@@ -7,12 +7,13 @@ delegates to the small submodules in this package.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import Iterable
 
 from .communities import detect_communities
 from .insights import generate_insights
-from .parsers import parse_pages
+from .parsers import parse_pages, WIKILINK_RE
 from .scoring import (
     MAX_GRAPH_DEGREE,
     build_candidate_edges,
@@ -22,9 +23,13 @@ from .scoring import (
 )
 from services.graph_store import (
     apply_diff,
+    clear_derived_graph,
     ensure_initialised,
     get_edges,
     get_nodes,
+    store_communities,
+    store_insights,
+    upsert_edges,
 )
 
 # Maps the v1 edge-type vocabulary to the v2 taxonomy used by Pydantic + UI.
@@ -41,7 +46,7 @@ EDGE_TYPE_ALIASES = {
 }
 
 
-def build_graph(*, project_id: str = "default") -> dict:
+def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
     """Build the v2 learning graph for a project, using the SQLite cache.
 
     On cache miss the full graph is computed, persisted via :func:`apply_diff`
@@ -51,8 +56,10 @@ def build_graph(*, project_id: str = "default") -> dict:
     ensure_initialised(project_id)
     cached_nodes = get_nodes(project_id)
     cached_edges = get_edges(project_id)
-    if cached_nodes and cached_edges:
+    if cached_nodes and cached_edges and not force:
         return _shape_response(cached_nodes, cached_edges)
+    if force:
+        clear_derived_graph(project_id)
 
     pages, title_to_id = parse_pages(project_id=project_id)
     # TODO(legacy): build_candidate_edges expects the v2 split (pages,
@@ -61,6 +68,40 @@ def build_graph(*, project_id: str = "default") -> dict:
     # helper is removed.
     candidates = []
     for nid, p in pages.items():
+        # 1) Frontmatter `prerequisites` list — `Title` strings resolved via
+        #    the title_to_id map.  May be empty for LLM-generated pages
+        #    that never emit the field.
+        for pre in getattr(p, "prerequisites", []):
+            src = title_to_id.get(pre, pre)
+            candidates.append({
+                "source": src,
+                "target": nid,
+                "edge_type": "prerequisite",
+                "weight": 1.0,
+                "origin": "frontmatter",
+            })
+        # 2) Body wikilinks — for pages whose frontmatter is sparse
+        #    (the common case after the v3 ingest pipeline).  The link
+        #    direction is *ambiguous* in body text: `数据挖掘` mentioning
+        #    `[[机器学习]]` is "related", not necessarily "prerequisite".
+        #    Emit a `related` edge so the graph view can still render
+        #    the cross-reference, and the frontmatter `prerequisites`
+        #    field above remains the authoritative DAG source.
+        seen_wikilinks: set[str] = set()
+        for raw_link in WIKILINK_RE.findall(getattr(p, "content", "") or ""):
+            link = raw_link.split("|", 1)[0].strip()
+            if not link or link in seen_wikilinks:
+                continue
+            seen_wikilinks.add(link)
+            src = title_to_id.get(link, link)
+            candidates.append({
+                "source": src,
+                "target": nid,
+                "edge_type": "related",
+                "weight": 0.7,
+                "origin": "wiki_link",
+            })
+        # 3) Frontmatter `relationships` (LLM-emitted structural edges).
         for r in getattr(p, "relationships", []):
             candidates.append({
                 "source": title_to_id.get(r.src, r.src),
@@ -72,10 +113,13 @@ def build_graph(*, project_id: str = "default") -> dict:
             })
 
     edges: list[dict] = []
+    valid_node_ids = set(pages)
     for cand in candidates:
         et = cand.get("edge_type", "related")
         src = cand["source"]
         tgt = cand["target"]
+        if src not in valid_node_ids or tgt not in valid_node_ids:
+            continue
         edges.append({
             "source": src,
             "target": tgt,
@@ -86,12 +130,21 @@ def build_graph(*, project_id: str = "default") -> dict:
     edges = prune_edges(edges, max_degree=MAX_GRAPH_DEGREE)
 
     nodes = []
+    # Pre-compute degree so node radius reflects how central each concept
+    # is in the prerequisite graph. Done once here so Sigma can skip the
+    # per-frame computation.
+    deg: dict[str, int] = defaultdict(int)
+    for e in edges:
+        deg[e["source"]] += 1
+        deg[e["target"]] += 1
     for p in pages.values():
+        degree = deg.get(p.node_id, 0)
+        size = max(1, int(round(1.0 + math.log1p(max(degree, 0)) * 1.2)))
         nodes.append({
             "id": p.node_id,
             "label": p.title,
             "node_type": p.page_type,
-            "size": 1,
+            "size": size,
             "community": -1,
             "metadata": {
                 "path": p.path,
@@ -102,13 +155,25 @@ def build_graph(*, project_id: str = "default") -> dict:
         })
 
     communities = detect_communities(edges, nodes)
-    community_map = {n["id"]: i for i, comm in enumerate(communities) for n in comm}
-    for node in nodes:
-        node["community"] = community_map.get(node["id"], -1)
+    # ``detect_communities`` annotates ``community`` (int index) on each node
+    # in place; no additional mapping is needed for the response shape.
 
-    apply_diff(project_id, nodes=nodes, edges=edges)
+    apply_diff(project_id)
+    # apply_diff rebuilds nodes from the wiki store, but it does not write
+    # edges. Persist the edges we just derived (LLM + wiki-link fallback)
+    # so the cache-miss read-path sees them.
+    if edges:
+        upsert_edges(project_id, edges)
+
+    # apply_diff sets degree_in/out to 0 because it runs before the new
+    # edges are written (they live in a separate SQLite write). Recompute
+    # now that the live edge table reflects reality.
+    from services.graph_store import refresh_node_degrees
+    refresh_node_degrees(project_id)
 
     insights = generate_insights(nodes, edges, communities)
+    store_communities(project_id, communities)
+    store_insights(project_id, insights)
     return _shape_response(nodes, edges, communities=communities, insights=insights)
 
 

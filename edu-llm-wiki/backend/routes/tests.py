@@ -49,7 +49,7 @@ JSON schema:
       "explanation": "解析",
       "concepts": ["知识点"],
       "difficulty": "basic|understanding|application|mixed",
-      "related_page": "可选，wiki 页面路径"
+      "related_page": "必填，wiki 页面路径，必须与 Wiki 内容中出现的 path 完全一致"
     }
   ]
 }
@@ -242,8 +242,9 @@ def _question_from_exercise(page: dict, index: int, allowed_types: set[str], dif
 def _recent_question_prompts(project_id: str, limit: int = 20) -> list[str]:
     """Collect recent question prompts from stored test sessions, newest first.
 
-    Used as negative examples in the LLM prompt to encourage diversity between
-    consecutive test generations for the same wiki content.
+    Kept for backward compatibility but no longer fed into the LLM prompt —
+    coverage is now balanced by wiki page (`_wiki_coverage`) instead of by
+    prompt text.
     """
     prompts: list[tuple[str, str]] = []
     for path in _tests_dir(project_id).glob("*.json"):
@@ -258,6 +259,28 @@ def _recent_question_prompts(project_id: str, limit: int = 20) -> list[str]:
                 prompts.append((created, prompt_text))
     prompts.sort(key=lambda item: item[0], reverse=True)
     return [text for _, text in prompts[:limit]]
+
+
+def _wiki_coverage(project_id: str, limit: int = 30) -> list[dict]:
+    """Aggregate how many past questions covered each wiki page.
+
+    Returns a list of ``{path, count}`` dicts sorted by ``count`` ascending
+    (least-covered first), capped at ``limit`` entries. Used to bias the
+    generator toward under-tested pages so a long test history doesn't
+    concentrate questions on a handful of KCs.
+    """
+    counts: dict[str, int] = {}
+    for path in _tests_dir(project_id).glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for question in data.get("questions", []) or []:
+            related = str(question.get("related_page") or "").strip()
+            if related:
+                counts[related] = counts.get(related, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (item[1], item[0]))
+    return [{"path": p, "count": c} for p, c in ranked[:limit]]
 
 
 def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[TestQuestion], str]:
@@ -282,7 +305,7 @@ def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[Te
     return extracted[: req.question_count], "\n\n".join(context_parts)
 
 
-async def _generate_questions(req: TestCreateRequest, project_id: str, existing_count: int, context: str, recent_prompts: list[str] | None = None) -> list[TestQuestion]:
+async def _generate_questions(req: TestCreateRequest, project_id: str, existing_count: int, context: str, coverage: list[dict] | None = None) -> list[TestQuestion]:
     needed = max(0, req.question_count - existing_count)
     if needed <= 0:
         return []
@@ -290,7 +313,7 @@ async def _generate_questions(req: TestCreateRequest, project_id: str, existing_
         return []
 
     seed = (req.seed or "").strip() or f"auto-{uuid.uuid4().hex[:8]}"
-    recent_block = "\n".join(f"- {text[:200]}" for text in (recent_prompts or [])) or "无"
+    coverage_block = "\n".join(f"- {item['path']} (已出 {item['count']} 次)" for item in (coverage or [])) or "暂无历史"
 
     user = f"""请生成 {needed} 道测试题。
 
@@ -300,11 +323,11 @@ requested_types: {", ".join(req.question_types)}
 difficulty: {req.difficulty}
 seed: {seed}
 
-最近已出过的题面（请避免重复或高度相似）：
-{recent_block}
+Wiki 覆盖历史（按已考次数升序，越靠前越优先出题）：
+{coverage_block}
 
 Wiki 内容：
-{context[:22000]}
+{context[:14000]}
 """
     raw = await chat_complete(
         system_prompt=f"{GENERATE_TEST_PROMPT}\n\n{language_instruction()}",
@@ -487,8 +510,8 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
 @router.post("", response_model=TestSession)
 async def create_test(req: TestCreateRequest, project_id: str = Query("default")) -> TestSession:
     extracted, context = _candidate_context(req, project_id)
-    recent_prompts = _recent_question_prompts(project_id, limit=20)
-    generated = await _generate_questions(req, project_id, len(extracted), context, recent_prompts)
+    coverage = _wiki_coverage(project_id)
+    generated = await _generate_questions(req, project_id, len(extracted), context, coverage)
     questions = (extracted + generated)[: req.question_count]
     if not questions:
         raise HTTPException(status_code=400, detail="No wiki content available to create a test")

@@ -1,218 +1,481 @@
-// Sigma.js wrapper: builds a graphology Graph from GraphData, runs the
-// ForceAtlas2 layout once, and forwards interaction events to the parent
-// via callbacks. Settings reducers (nodeReducer / edgeReducer) implement
-// hover and selection highlighting.
+import { useMemo } from "react";
 
-import { useEffect, useMemo, useRef } from "react"
-import Graph from "graphology"
-import {
-  SigmaContainer,
-  useLoadGraph,
-  useRegisterEvents,
-  useSetSettings,
-  useSigma,
-} from "@react-sigma/core"
-import "@react-sigma/core/lib/style.css"
-import forceAtlas2 from "graphology-layout-forceatlas2"
-
-import { DEFAULT_HIDDEN_TYPES, type ColorMode } from "./constants"
-import { layoutIterations, mixColor, nodeColor, normalizePositions, packComponents, readableLabel } from "./utils"
-import type { GraphData, GraphNode } from "@/types/wiki"
+import { type ColorMode } from "./constants";
+import { communityColor, isStrongEdge, nodeColor, readableLabel, typeLabel } from "./utils";
+import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki";
 
 export type GraphSelection = {
-  node: GraphNode
-  degree: number
-} | null
+  node: GraphNode;
+  degree: number;
+} | null;
 
 export type GraphHoverState = {
-  node: string
-  neighbors: Set<string>
-} | null
+  node: string;
+  neighbors: Set<string>;
+} | null;
 
 export interface GraphCanvasProps {
-  data: GraphData
-  selected: GraphSelection
-  hover: GraphHoverState
-  searchQuery: string
-  hiddenTypes: Set<string>
-  colorMode: ColorMode
-  communityColors: string[]
-  nodeScale: number
-  spacing: number
-  showWeakLinks: boolean
-  onSelect: (nodeId: string) => void
-  onHover: (state: GraphHoverState) => void
+  data: GraphData;
+  selected: GraphSelection;
+  hover: GraphHoverState;
+  searchQuery: string;
+  hiddenTypes: Set<string>;
+  colorMode: ColorMode;
+  communityColors: string[];
+  nodeScale: number;
+  spacing: number;
+  showWeakLinks: boolean;
+  onSelect: (nodeId: string) => void;
+  onHover: (state: GraphHoverState) => void;
 }
+
+type PositionedNode = GraphNode & {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  degree: number;
+  lane: number;
+  groupId: number;
+};
+
+type PositionedEdge = GraphEdge & {
+  sourceNode: PositionedNode;
+  targetNode: PositionedNode;
+};
+
+const LANE_LABELS = ["资料", "概念", "原理/公式", "练习/应用"];
+const LANE_ORDER: Record<string, number> = {
+  source: 0,
+  concept: 1,
+  unknown: 1,
+  principle: 2,
+  formula: 2,
+  synthesis: 3,
+  query: 3,
+  exercise: 3,
+};
+
+const CARD_WIDTH = 172;
+const CARD_HEIGHT = 46;
+const LANE_GAP = 236;
+const ROW_GAP = 72;
+const GROUP_GAP = 92;
+const PADDING_X = 56;
+const PADDING_Y = 96;
+const LANE_TOP = 44;
 
 export function GraphCanvas(props: GraphCanvasProps) {
+  const layout = useMemo(() => buildLearningMapLayout(props), [props]);
+  const query = props.searchQuery.trim().toLowerCase();
+
+  if (layout.nodes.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center bg-[var(--background)] text-sm text-[var(--muted-foreground)]">
+        当前筛选下没有可显示的知识点
+      </div>
+    );
+  }
+
   return (
-    <SigmaContainer
-      style={{ width: "100%", height: "100%" }}
-      settings={{
-        renderEdgeLabels: false,
-        labelDensity: 0.7,
-        labelGridCellSize: 60,
-        labelRenderedSizeThreshold: 8,
-      }}
-    >
-      <GraphCanvasInner {...props} />
-    </SigmaContainer>
-  )
+    <div className="h-full w-full overflow-auto bg-[var(--background)]">
+      <svg
+        width={layout.width}
+        height={layout.height}
+        viewBox={`0 0 ${layout.width} ${layout.height}`}
+        className="block min-h-full min-w-full"
+        role="img"
+        aria-label="知识图谱学习地图"
+      >
+        <defs>
+          <marker
+            id="graph-arrow"
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+          </marker>
+          <filter id="node-shadow" x="-15%" y="-20%" width="130%" height="150%">
+            <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor="#0f172a" floodOpacity="0.12" />
+          </filter>
+        </defs>
+
+        <rect width={layout.width} height={layout.height} fill="var(--background)" />
+
+        {layout.lanes.map((lane) => (
+          <g key={lane.index}>
+            <rect
+              x={lane.x - 18}
+              y={LANE_TOP}
+              width={CARD_WIDTH + 36}
+              height={layout.height - LANE_TOP - 32}
+              rx={8}
+              fill={lane.index % 2 === 0 ? "var(--muted)" : "transparent"}
+              opacity={lane.index % 2 === 0 ? 0.42 : 1}
+            />
+            <text x={lane.x} y={LANE_TOP + 20} fontSize={12} fontWeight={700} fill="var(--muted-foreground)">
+              {lane.label}
+            </text>
+          </g>
+        ))}
+
+        {layout.groups.map((group) => (
+          <g key={group.id}>
+            <line
+              x1={28}
+              x2={layout.width - 28}
+              y1={group.y - 28}
+              y2={group.y - 28}
+              stroke="var(--border)"
+              strokeDasharray="5 7"
+            />
+            <circle cx={28} cy={group.y - 28} r={5} fill={group.color} />
+            <text x={42} y={group.y - 24} fontSize={12} fontWeight={700} fill="var(--foreground)">
+              {group.label}
+            </text>
+          </g>
+        ))}
+
+        <g fill="none">
+          {layout.edges.map((edge) => (
+            <GraphEdgePath
+              key={`${edge.source}->${edge.target}:${edge.edge_type}:${edge.weight}`}
+              edge={edge}
+              active={isEdgeActive(
+                edge,
+                props.hover,
+                props.selected?.node.id,
+                query,
+                layout.matchedNodeIds,
+              )}
+              muted={isEdgeMuted(edge, props.hover, query, layout.connectedNodeIds)}
+            />
+          ))}
+        </g>
+
+        <g>
+          {layout.nodes.map((node) => (
+            <GraphNodeCard
+              key={node.id}
+              node={node}
+              selected={props.selected?.node.id === node.id}
+              hovered={props.hover?.node === node.id}
+              related={props.hover?.neighbors.has(node.id) || layout.connectedNodeIds.has(node.id)}
+              matched={!query || layout.matchedNodeIds.has(node.id)}
+              color={nodeDisplayColor(node, props.colorMode, props.communityColors)}
+              onSelect={props.onSelect}
+              onHover={(nodeId) => {
+                const neighbors = new Set<string>();
+                for (const edge of layout.edges) {
+                  if (edge.source === nodeId) neighbors.add(edge.target);
+                  if (edge.target === nodeId) neighbors.add(edge.source);
+                }
+                props.onHover({ node: nodeId, neighbors });
+              }}
+              onLeave={() => props.onHover(null)}
+            />
+          ))}
+        </g>
+      </svg>
+    </div>
+  );
 }
 
-function GraphCanvasInner({
-  data,
+function GraphEdgePath({
+  edge,
+  active,
+  muted,
+}: {
+  edge: PositionedEdge;
+  active: boolean;
+  muted: boolean;
+}) {
+  const sx = edge.sourceNode.x + edge.sourceNode.width;
+  const sy = edge.sourceNode.y + edge.sourceNode.height / 2;
+  const tx = edge.targetNode.x;
+  const ty = edge.targetNode.y + edge.targetNode.height / 2;
+  const forward = tx >= sx;
+  const bend = Math.max(70, Math.abs(tx - sx) * 0.42);
+  const c1x = sx + (forward ? bend : -bend);
+  const c2x = tx - (forward ? bend : -bend);
+  const d = `M ${sx} ${sy} C ${c1x} ${sy}, ${c2x} ${ty}, ${tx} ${ty}`;
+  const strong = isStrongEdge(edge);
+
+  return (
+    <path
+      d={d}
+      stroke={active ? "#2563eb" : strong ? "#64748b" : "#cbd5e1"}
+      strokeWidth={active ? 2.2 : strong ? 1.5 : 1}
+      opacity={muted ? 0.12 : active ? 0.95 : strong ? 0.42 : 0.26}
+      markerEnd={strong ? "url(#graph-arrow)" : undefined}
+    />
+  );
+}
+
+function GraphNodeCard({
+  node,
   selected,
-  hover,
-  searchQuery,
-  hiddenTypes,
-  colorMode,
-  communityColors,
-  nodeScale,
-  spacing,
-  showWeakLinks,
+  hovered,
+  related,
+  matched,
+  color,
   onSelect,
   onHover,
-}: GraphCanvasProps) {
-  const loadGraph = useLoadGraph()
-  const registerEvents = useRegisterEvents()
-  const setSettings = useSetSettings()
-  const sigma = useSigma()
-  const loadedRef = useRef<string>("")
+  onLeave,
+}: {
+  node: PositionedNode;
+  selected: boolean;
+  hovered: boolean;
+  related: boolean;
+  matched: boolean;
+  color: string;
+  onSelect: (nodeId: string) => void;
+  onHover: (nodeId: string) => void;
+  onLeave: () => void;
+}) {
+  const muted = !matched && !related;
+  const scale = selected || hovered ? 1.04 : 1;
+  const cx = node.x + node.width / 2;
+  const cy = node.y + node.height / 2;
 
-  const signature = useMemo(() => {
-    const nIds = data.nodes.map((n) => n.id).join("|")
-    const eIds = data.edges
-      .map((e) => `${e.source}>${e.target}:${e.edge_type}:${e.weight}`)
-      .join("|")
-    return `${nIds}::${eIds}::${colorMode}::${nodeScale}::${spacing}::${Array.from(hiddenTypes).sort().join(",")}::${showWeakLinks}`
-  }, [data, colorMode, nodeScale, spacing, hiddenTypes, showWeakLinks])
+  return (
+    <g
+      transform={`translate(${cx} ${cy}) scale(${scale}) translate(${-cx} ${-cy})`}
+      opacity={muted ? 0.34 : 1}
+      onClick={() => onSelect(node.id)}
+      onMouseEnter={() => onHover(node.id)}
+      onMouseLeave={onLeave}
+      className="cursor-pointer"
+    >
+      <rect
+        x={node.x}
+        y={node.y}
+        width={node.width}
+        height={node.height}
+        rx={8}
+        fill="var(--background)"
+        stroke={selected ? "#2563eb" : hovered ? color : "var(--border)"}
+        strokeWidth={selected ? 2.4 : hovered ? 2 : 1}
+        filter={selected || hovered ? "url(#node-shadow)" : undefined}
+      />
+      <rect x={node.x} y={node.y} width={5} height={node.height} rx={3} fill={color} />
+      <text x={node.x + 14} y={node.y + 19} fontSize={12} fontWeight={700} fill="var(--foreground)">
+        {readableLabel(node.label, 18)}
+      </text>
+      <text x={node.x + 14} y={node.y + 36} fontSize={10} fill="var(--muted-foreground)">
+        {typeLabel(node.node_type)} · {node.degree} 连接
+      </text>
+      {selected && <circle cx={node.x + node.width - 14} cy={node.y + 14} r={4} fill="#2563eb" />}
+      <title>{node.label}</title>
+    </g>
+  );
+}
 
-  useEffect(() => {
-    if (loadedRef.current === signature) return
-    loadedRef.current = signature
+function buildLearningMapLayout(props: GraphCanvasProps) {
+  const graph = sanitizeGraphData(props.data);
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const visibleNodeIds = new Set(
+    graph.nodes
+      .filter((node) => !props.hiddenTypes.has(node.node_type || "unknown"))
+      .map((node) => node.id),
+  );
+  const visibleEdges = graph.edges.filter(
+    (edge) =>
+      nodeIds.has(edge.source) &&
+      nodeIds.has(edge.target) &&
+      visibleNodeIds.has(edge.source) &&
+      visibleNodeIds.has(edge.target) &&
+      (props.showWeakLinks || isStrongEdge(edge)),
+  );
+  const degree = new Map<string, number>();
+  for (const edge of visibleEdges) {
+    degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+  }
 
-    const g = new Graph({ multi: true, type: "directed" })
-
-    // Seed nodes on a circle; FA2 will spread them out.
-    const total = data.nodes.length || 1
-    const radius = Math.max(80, Math.sqrt(total) * 30)
-    data.nodes.forEach((n, i) => {
-      const angle = (i / total) * Math.PI * 2
-      g.addNode(n.id, {
-        x: Math.cos(angle) * radius + radius,
-        y: Math.sin(angle) * radius + radius,
-        size: n.size * nodeScale,
-        color: nodeColor(n.node_type),
-        label: readableLabel(n.label),
-        fullLabel: n.label,
-        nodeType: n.node_type,
-        community: n.community,
-      })
-    })
-
-    data.edges.forEach((e) => {
-      if (!g.hasNode(e.source) || !g.hasNode(e.target)) return
-      if (!g.hasEdge(e.source, e.target)) {
-        g.addDirectedEdgeWithKey(`${e.source}>${e.target}`, e.source, e.target, {
-          size: Math.min(5, 1 + e.weight / 4),
-          color: "rgba(100,116,139,0.55)",
-          weight: e.weight,
-          edgeType: e.edge_type,
-        })
-      }
-    })
-
-    if (data.nodes.length > 0) {
-      forceAtlas2.assign(g, {
-        iterations: layoutIterations(data.nodes.length),
-        settings: { gravity: 1, scalingRatio: 10, slowDown: 5 },
-      })
-      normalizePositions(g)
-      packComponents(g, spacing)
+  const query = props.searchQuery.trim().toLowerCase();
+  const matchedNodeIds = new Set<string>();
+  const connectedNodeIds = new Set<string>();
+  for (const node of graph.nodes) {
+    if (!visibleNodeIds.has(node.id)) continue;
+    if (
+      !query ||
+      node.label.toLowerCase().includes(query) ||
+      node.node_type.toLowerCase().includes(query)
+    ) {
+      matchedNodeIds.add(node.id);
+      connectedNodeIds.add(node.id);
     }
+  }
+  if (query) {
+    for (const edge of visibleEdges) {
+      if (matchedNodeIds.has(edge.source)) connectedNodeIds.add(edge.target);
+      if (matchedNodeIds.has(edge.target)) connectedNodeIds.add(edge.source);
+    }
+  }
 
-    loadGraph(g)
-    requestAnimationFrame(() => sigma.refresh())
-  }, [signature, data, nodeScale, spacing, loadGraph, sigma])
+  const visibleNodes = graph.nodes
+    .filter((node) => visibleNodeIds.has(node.id))
+    .sort((a, b) => {
+      const communityDelta = normalizedCommunity(a) - normalizedCommunity(b);
+      if (communityDelta !== 0) return communityDelta;
+      const laneDelta = nodeLane(a) - nodeLane(b);
+      if (laneDelta !== 0) return laneDelta;
+      return (degree.get(b.id) || 0) - (degree.get(a.id) || 0) || a.label.localeCompare(b.label);
+    });
 
-  // Filter by type / showWeakLinks
-  useEffect(() => {
-    const isStrongEdge = (e: { edge_type: string; weight: number }) =>
-      e.edge_type === "direct" || e.edge_type === "prerequisite" || e.weight >= 8
-    setSettings({
-      nodeReducer: (node, attrs) => {
-        const type = (attrs as any).nodeType as string
-        if (hiddenTypes.has(type)) return { ...attrs, hidden: true }
-        if (selected && selected.node.id === node) {
-          return { ...attrs, size: (attrs.size as number) * 1.3, zIndex: 10 }
-        }
-        if (hover && hover.node === node) {
-          return { ...attrs, size: (attrs.size as number) * 1.4, zIndex: 10 }
-        }
-        if (hover && hover.neighbors.has(String(node))) {
-          return { ...attrs, zIndex: 5 }
-        }
-        if (hover) {
-          return {
-            ...attrs,
-            color: mixColor(attrs.color as string, "#e2e8f0", 0.65),
-            size: (attrs.size as number) * 0.55,
-            zIndex: 1,
-          }
-        }
-        if (searchQuery.trim()) {
-          const q = searchQuery.trim().toLowerCase()
-          const matches =
-            (attrs.label as string).toLowerCase().includes(q) ||
-            ((attrs as any).nodeType as string).toLowerCase().includes(q)
-          const neighborSet: Set<string> | undefined = hover ? (hover as any).neighbors : undefined
-          if (!matches && !(neighborSet && neighborSet.has(String(node)))) {
-            return {
-              ...attrs,
-              color: mixColor(attrs.color as string, "#e2e8f0", 0.45),
-              size: (attrs.size as number) * 0.7,
-              zIndex: 0,
-            }
-          }
-          return { ...attrs, size: (attrs.size as number) * 1.2, zIndex: 5 }
-        }
-        if (colorMode === "community") {
-          const community = (attrs as any).community as number
-          if (community >= 0) {
-            return { ...attrs, color: communityColors[community % communityColors.length] }
-          }
-        }
-        return attrs
-      },
-      edgeReducer: (edge, attrs) => {
-        const e = data.edges.find(
-          (x) => x.source === edge && x.target === attrs.source,
-        )
-        void e
-        if (!showWeakLinks) {
-          const ev = (attrs as any).edgeType as string
-          const w = (attrs as any).weight as number
-          if (!isStrongEdge({ edge_type: ev, weight: w })) {
-            return { ...attrs, hidden: true }
-          }
-        }
-        return attrs
-      },
+  const groupMap = new Map<number, GraphNode[]>();
+  for (const node of visibleNodes) {
+    const groupId = normalizedCommunity(node);
+    if (!groupMap.has(groupId)) groupMap.set(groupId, []);
+    groupMap.get(groupId)!.push(node);
+  }
+
+  const nodes: PositionedNode[] = [];
+  const groups: { id: number; label: string; y: number; color: string }[] = [];
+  let cursorY = PADDING_Y;
+  const scaledWidth = CARD_WIDTH * Math.max(0.92, Math.min(1.18, props.nodeScale));
+  const scaledHeight = CARD_HEIGHT * Math.max(0.94, Math.min(1.16, props.nodeScale));
+  const rowGap = ROW_GAP * Math.max(0.82, Math.min(1.5, props.spacing));
+
+  for (const [groupId, groupNodes] of groupMap) {
+    const buckets = [[], [], [], []] as GraphNode[][];
+    for (const node of groupNodes) buckets[nodeLane(node)].push(node);
+    const groupRows = Math.max(...buckets.map((bucket) => bucket.length), 1);
+    const groupHeight = (groupRows - 1) * rowGap + scaledHeight;
+    groups.push({
+      id: groupId,
+      label: groupLabel(groupId, groupNodes),
+      y: cursorY,
+      color: groupId >= 0 ? communityColor(groupId) : "#94a3b8",
+    });
+
+    buckets.forEach((bucket, lane) => {
+      bucket.forEach((node, index) => {
+        const compactOffset = (groupRows - bucket.length) * rowGap * 0.5;
+        nodes.push({
+          ...node,
+          x: PADDING_X + lane * LANE_GAP,
+          y: cursorY + compactOffset + index * rowGap,
+          width: scaledWidth,
+          height: scaledHeight,
+          degree: degree.get(node.id) || 0,
+          lane,
+          groupId,
+        });
+      });
+    });
+    cursorY += groupHeight + GROUP_GAP;
+  }
+
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const edges = visibleEdges
+    .map((edge) => {
+      const sourceNode = byId.get(edge.source);
+      const targetNode = byId.get(edge.target);
+      if (!sourceNode || !targetNode) return null;
+      return { ...edge, sourceNode, targetNode };
     })
-  }, [setSettings, hiddenTypes, selected, hover, searchQuery, colorMode, communityColors, data.edges, showWeakLinks])
+    .filter((edge): edge is PositionedEdge => Boolean(edge));
 
-  useEffect(() => {
-    registerEvents({
-      clickNode: ({ node }) => onSelect(node),
-      enterNode: ({ node }) => {
-        const graph = sigma.getGraph() as unknown as { neighbors: (n: string) => Iterable<string> }
-        const neighbors = new Set<string>(Array.from(graph.neighbors(node)))
-        onHover({ node, neighbors })
-      },
-      leaveNode: () => onHover(null),
-    })
-  }, [registerEvents, sigma, onSelect, onHover])
+  return {
+    nodes,
+    edges,
+    groups,
+    matchedNodeIds,
+    connectedNodeIds,
+    lanes: LANE_LABELS.map((label, index) => ({ label, index, x: PADDING_X + index * LANE_GAP })),
+    width: PADDING_X * 2 + (LANE_LABELS.length - 1) * LANE_GAP + scaledWidth,
+    height: Math.max(520, cursorY + PADDING_Y - GROUP_GAP),
+  };
+}
 
-  return null
+function sanitizeGraphData(data: GraphData): GraphData {
+  const nodes: GraphNode[] = [];
+  const seen = new Set<string>();
+  for (const node of data.nodes) {
+    const id = String(node.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    nodes.push({
+      ...node,
+      id,
+      label: String(node.label || id),
+      node_type: node.node_type || "unknown",
+      size: Number.isFinite(node.size) ? Math.max(1, node.size) : 1,
+      community: Number.isFinite(node.community) ? node.community : -1,
+    });
+  }
+
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = data.edges
+    .map((edge) => ({
+      ...edge,
+      source: String(edge.source || "").trim(),
+      target: String(edge.target || "").trim(),
+      edge_type: edge.edge_type || "related",
+      weight: Number.isFinite(edge.weight) ? edge.weight : 1,
+    }))
+    .filter(
+      (edge) =>
+        edge.source &&
+        edge.target &&
+        edge.source !== edge.target &&
+        nodeIds.has(edge.source) &&
+        nodeIds.has(edge.target),
+    );
+
+  return { ...data, nodes, edges };
+}
+
+function nodeLane(node: GraphNode): number {
+  return LANE_ORDER[node.node_type || "unknown"] ?? 1;
+}
+
+function normalizedCommunity(node: GraphNode): number {
+  return Number.isFinite(node.community) && node.community >= 0 ? node.community : -1;
+}
+
+function groupLabel(groupId: number, nodes: GraphNode[]): string {
+  if (groupId < 0) return "未分组知识";
+  const top = nodes[0];
+  return `知识簇 ${groupId + 1}${top ? ` · ${readableLabel(top.label, 12)}` : ""}`;
+}
+
+function nodeDisplayColor(
+  node: PositionedNode,
+  colorMode: ColorMode,
+  communityColors: string[],
+): string {
+  if (colorMode === "community" && node.community >= 0) {
+    return communityColors[node.community % communityColors.length];
+  }
+  return nodeColor(node.node_type);
+}
+
+function isEdgeActive(
+  edge: PositionedEdge,
+  hover: GraphHoverState,
+  selectedId: string | undefined,
+  query: string,
+  matched: Set<string>,
+): boolean {
+  if (selectedId && (edge.source === selectedId || edge.target === selectedId)) return true;
+  if (hover && (edge.source === hover.node || edge.target === hover.node)) return true;
+  return Boolean(query && (matched.has(edge.source) || matched.has(edge.target)));
+}
+
+function isEdgeMuted(
+  edge: PositionedEdge,
+  hover: GraphHoverState,
+  query: string,
+  connected: Set<string>,
+): boolean {
+  if (hover) return edge.source !== hover.node && edge.target !== hover.node;
+  if (query) return !connected.has(edge.source) && !connected.has(edge.target);
+  return false;
 }

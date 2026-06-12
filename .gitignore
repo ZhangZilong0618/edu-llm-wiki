@@ -65,3 +65,6 @@ edu-llm-wiki/data/
 # Brainstorm assets (not tracked in source control)
 .superpowers/
 .claude/
+
+# Playwright CLI temp output
+.playwright-cli/

@@ -9,6 +9,7 @@ stream.
 The store layer owns persistence; this file owns HTTP wiring only.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
@@ -68,14 +69,23 @@ async def get_graph(
     many pages at once).
     """
     if rebuild:
-        graph = build_graph(project_id=project_id)
+        graph = build_graph(project_id=project_id, force=True)
     else:
-        graph = {
-            "nodes": store_get_nodes(project_id),
-            "edges": store_get_edges(project_id),
-            "communities": store_get_communities(project_id),
-            "insights": store_get_insights(project_id),
-        }
+        nodes = store_get_nodes(project_id)
+        edges = store_get_edges(project_id)
+        if not nodes or (len(nodes) > 1 and not edges):
+            # New/imported projects can have wiki pages before graph.sqlite has
+            # been populated (for example if ingest graph rebuild was skipped).
+            # Build once here so the UI does not show an empty graph/path for a
+            # project that already has usable wiki content.
+            graph = build_graph(project_id=project_id)
+        else:
+            graph = {
+                "nodes": nodes,
+                "edges": edges,
+                "communities": store_get_communities(project_id),
+                "insights": store_get_insights(project_id),
+            }
     return GraphData(**graph)
 
 
@@ -114,9 +124,9 @@ async def get_learning_path(
     reached the ``proficient`` level on.
     """
     return compute_learning_path(
-        node_id=node_id,
-        user_id=user_id,
-        project_id=project_id,
+        target=node_id,
+        edges=store_get_edges(project_id),
+        nodes_by_id={n["id"]: n for n in store_get_nodes(project_id)},
         max_steps=max_steps,
     )
 
@@ -216,23 +226,32 @@ async def stream_graph_events(
                 created_at=event["created_at"],
             )
             yield f"id: {model.id}\nevent: {model.event_type}\ndata: {model.model_dump_json()}\n\n".encode("utf-8")
-        # Long-poll loop. In production this would be replaced with a proper
-        # async queue; the synchronous in-memory bus is sufficient for a
-        # single-process dev server.
-        while True:
-            event = await graph_events.next(project_id=project_id)
-            if event is None:
-                # Heartbeat to keep proxies from buffering
-                yield b": ping\n\n"
-                continue
-            model = GraphEventModel(
-                id=event["id"],
-                project_id=event["project_id"],
-                event_type=event["event_type"],
-                payload=event.get("payload") or {},
-                created_at=event["created_at"],
-            )
-            yield f"id: {model.id}\nevent: {model.event_type}\ndata: {model.model_dump_json()}\n\n".encode("utf-8")
+        sub = graph_events.subscribe()
+        try:
+            # Long-poll loop. In production this would be replaced with a
+            # proper async queue; the synchronous in-memory bus is sufficient
+            # for a single-process dev server.
+            while True:
+                events = [
+                    event
+                    for event in graph_events.drain(sub)
+                    if event.get("project_id") == project_id
+                ]
+                if not events:
+                    yield b": ping\n\n"
+                    await asyncio.sleep(15)
+                    continue
+                for event in events:
+                    model = GraphEventModel(
+                        id=0,
+                        project_id=event["project_id"],
+                        event_type=event["event_type"],
+                        payload=event.get("payload") or {},
+                        created_at=event["created_at"],
+                    )
+                    yield f"event: {model.event_type}\ndata: {model.model_dump_json()}\n\n".encode("utf-8")
+        finally:
+            graph_events.unsubscribe(sub)
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
@@ -298,7 +317,12 @@ async def get_learning_insights(
     from services import mastery
     graph = _bg(project_id=project_id)
     state = mastery.learner_state_summary(project_id=project_id, user_id=user_id)
-    return generate_learner_insights(graph, state)
+    return generate_learner_insights(
+        graph["nodes"],
+        graph["edges"],
+        graph.get("communities") or [],
+        state,
+    )
 
 
 # ============================================================================

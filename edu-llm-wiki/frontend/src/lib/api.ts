@@ -319,7 +319,7 @@ export const api = {
     }),
   getLearningPath: (target: string, max_steps = 8) =>
     request<LearningPathResponse>(
-      `${BASE}/graph/learning-path?${p()}&target=${encodeURIComponent(target)}&max_steps=${max_steps}`,
+      `${BASE}/graph/learning-path/${encodeURIComponent(target)}?${p()}&max_steps=${max_steps}`,
     ),
   listGraphEvents: (sinceId = 0) =>
     request<GraphEventEnvelope[]>(

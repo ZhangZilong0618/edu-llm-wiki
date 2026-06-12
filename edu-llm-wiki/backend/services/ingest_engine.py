@@ -1599,6 +1599,19 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
 
     set_ingest_cache(source_relative_path, content_hash, project_id=project_id)
 
+    # Rebuild the learning graph so the v2/v3 endpoints (graph, insights,
+    # learning path, mastery) reflect the freshly written wiki pages.
+    # Failure here must not fail ingest — the user can still rebuild via
+    # the ``?rebuild=true`` query param.
+    try:
+        from services.graph_engine import build_graph
+        build_graph(project_id=project_id, force=True)
+        await _emit_optional(emit, "graph_built", source=source_relative_path,
+                             message="learning graph rebuilt from updated wiki")
+    except Exception as e:
+        await _emit_optional(emit, "graph_build_warning", source=source_relative_path,
+                             message=f"graph rebuild skipped: {e}")
+
     await _emit_optional(emit, "complete", source=source_relative_path,
                          message=f"Done: {len(created)} pages created",
                          created=created, updated=updated)
