@@ -2,28 +2,11 @@ import { useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
 import { toast } from "@/components/ui/toast"
-import { ChevronDown, ChevronRight, FileText, Hash, Sigma, Scale3D, BookOpen, FolderOpen, Loader2, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, Search, X } from "lucide-react"
 import type { SearchResult } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
 import { PageBadges } from "@/lib/page-badges"
-
-const typeIcons: Record<string, React.ReactNode> = {
-  concept: <Hash size={14} />,
-  formula: <Sigma size={14} />,
-  principle: <Scale3D size={14} />,
-  source: <FileText size={14} />,
-  synthesis: <BookOpen size={14} />,
-}
-
-const typeColors: Record<string, string> = {
-  concept: "#3b82f6",
-  formula: "#8b5cf6",
-  principle: "#f59e0b",
-  source: "#6b7280",
-  synthesis: "#ec4899",
-}
-
-const TYPE_ORDER = ["concept", "formula", "principle", "source", "synthesis", "query", "system"]
+import { PAGE_TYPE_CONFIG, PAGE_TYPE_ORDER, type PageType } from "@/lib/page-type"
 
 export function KnowledgeTree() {
   const wikiPages = useAppStore((s) => s.wikiPages)
@@ -38,16 +21,6 @@ export function KnowledgeTree() {
     const t = p.type || "unknown"
     if (!grouped[t]) grouped[t] = []
     grouped[t].push(p)
-  }
-
-  const typeLabels: Record<string, string> = {
-    concept: "Concepts",
-    formula: "Formulas",
-    principle: "Principles",
-    source: "Imported",
-    synthesis: "Synthesis",
-    query: "Q&A",
-    system: "System",
   }
 
   const handleSelect = async (p: typeof wikiPages[0]) => {
@@ -181,9 +154,11 @@ export function KnowledgeTree() {
         </div>
       )}
 
-      {[...TYPE_ORDER, ...Object.keys(grouped).filter((type) => !TYPE_ORDER.includes(type))].map((type) => {
+      {[...PAGE_TYPE_ORDER, ...Object.keys(grouped).filter((type) => !(PAGE_TYPE_ORDER as string[]).includes(type))].map((type) => {
         const pages = grouped[type] || []
         const collapsed = collapsedTypes.has(type)
+        const entry = PAGE_TYPE_CONFIG[type as PageType]
+        const Icon = entry?.Icon ?? FileText
         return (
           <div key={type} className="mb-3">
             <button
@@ -191,10 +166,10 @@ export function KnowledgeTree() {
               className="flex w-full items-center gap-1 px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] rounded hover:bg-[var(--accent)] transition-colors"
             >
               {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-              <span style={{ color: typeColors[type] || "#6b7280" }}>
-                {typeIcons[type] || <FileText size={14} />}
+              <span style={{ color: entry?.hex ?? "#6b7280" }}>
+                <Icon size={14} />
               </span>
-              <span>{typeLabels[type] || type}</span>
+              <span>{entry?.shortLabel ?? type}</span>
               <span className="ml-auto text-[10px] opacity-50">{pages.length}</span>
             </button>
             {!collapsed && (

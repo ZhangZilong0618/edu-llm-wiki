@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { Group, Panel, Separator } from "react-resizable-panels"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
@@ -7,12 +7,12 @@ import { toast } from "@/components/ui/toast"
 import { BookOpenCheck, Loader2, Microscope, Network, Save, Sparkles, X } from "lucide-react"
 import type { WikiPage } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
-
-type ResearchAction = {
-  id: string
-  label: string
-  description: string
-}
+import { COMMON_RESEARCH_ACTIONS, TYPE_RESEARCH_ACTIONS, type PageType, type ResearchAction } from "@/lib/page-type"
+import { ConceptView } from "@/components/preview/ConceptView"
+import { FormulaView } from "@/components/preview/FormulaView"
+import { PrincipleView } from "@/components/preview/PrincipleView"
+import { SynthesisView } from "@/components/preview/SynthesisView"
+import { SourceView } from "@/components/preview/SourceView"
 
 type ResearchResult = {
   title: string
@@ -27,41 +27,9 @@ type ResearchPanelState = {
   result: ResearchResult | null
 }
 
-const COMMON_RESEARCH_ACTIONS: ResearchAction[] = [
-  { id: "explain", label: "深入解释", description: "换一种更清楚的讲法，补例子和直觉。" },
-  { id: "prerequisites", label: "补前置知识", description: "列出看懂当前页需要先学什么。" },
-  { id: "related", label: "关联知识", description: "梳理它和 wiki 里其他页面的关系。" },
-  { id: "practice", label: "生成练习", description: "围绕当前页生成可训练的小题。" },
-  { id: "completeness", label: "检查完整性", description: "指出当前页还缺哪些教学要素。" },
-  { id: "custom", label: "自定义", description: "按你自己写的提示词深入研究当前页面。" },
-]
-
-const TYPE_RESEARCH_ACTIONS: Record<string, ResearchAction[]> = {
-  concept: [
-    { id: "examples", label: "例子/反例", description: "用材料科学场景说明概念边界。" },
-    { id: "boundaries", label: "易混边界", description: "说明与相近概念的区别。" },
-  ],
-  formula: [
-    { id: "derive", label: "推导公式", description: "梳理假设、推导步骤和物理意义。" },
-    { id: "variables", label: "变量与单位", description: "逐项解释符号、单位和测量方式。" },
-    { id: "boundaries", label: "适用边界", description: "说明什么时候能用，什么时候会失效。" },
-  ],
-  principle: [
-    { id: "boundaries", label: "适用边界", description: "整理条件、失效情况和近似假设。" },
-    { id: "examples", label: "材料案例", description: "对应真实或教学材料现象。" },
-  ],
-  source: [
-    { id: "outline", label: "提炼大纲", description: "整理文档结构、概念、公式和练习。" },
-    { id: "learning_path", label: "学习路线", description: "按顺序生成这份文档的学习路线。" },
-  ],
-  synthesis: [
-    { id: "examples", label: "补充证据", description: "补充例子、证据和对比视角。" },
-  ],
-}
-
 function researchActionsFor(pageType: string): ResearchAction[] {
   const seen = new Set<string>()
-  return [...COMMON_RESEARCH_ACTIONS, ...(TYPE_RESEARCH_ACTIONS[pageType] || [])].filter((action) => {
+  return [...COMMON_RESEARCH_ACTIONS, ...(TYPE_RESEARCH_ACTIONS[pageType as PageType] || [])].filter((action) => {
     if (seen.has(action.id)) return false
     seen.add(action.id)
     return true
@@ -494,18 +462,7 @@ export function PreviewPanel() {
             {editingPage ? (
               <PageEditor page={selectedPage} onSaved={(updated) => { setSelectedPage(updated); setEditingPage(false) }} onCancel={() => setEditingPage(false)} />
             ) : (
-              <>
-                <Markdown>{selectedPage.content || "*No content*"}</Markdown>
-                <div className="mt-6 flex items-center gap-2 border-t pt-3">
-                  <button
-                    onClick={() => setEditingPage(true)}
-                    className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                  >
-                    <Save size={12} />
-                    编辑页面
-                  </button>
-                </div>
-              </>
+              <PageBodyDispatch page={selectedPage} onEdit={() => setEditingPage(true)} />
             )}
           </div>
         </Panel>
@@ -524,5 +481,31 @@ export function PreviewPanel() {
           )}
       </Group>
     </div>
+  )
+}
+
+function PageBodyDispatch({ page, onEdit }: { page: WikiPage; onEdit: () => void }) {
+  let body: ReactNode
+  switch (page.page_type) {
+    case "concept":   body = <ConceptView page={page} />; break
+    case "formula":   body = <FormulaView page={page} />; break
+    case "principle": body = <PrincipleView page={page} />; break
+    case "synthesis": body = <SynthesisView page={page} />; break
+    case "source":    body = <SourceView page={page} />; break
+    default:          body = <Markdown>{page.content || "*No content*"}</Markdown>
+  }
+  return (
+    <>
+      {body}
+      <div className="mt-6 flex items-center gap-2 border-t pt-3">
+        <button
+          onClick={onEdit}
+          className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+        >
+          <Save size={12} />
+          编辑页面
+        </button>
+      </div>
+    </>
   )
 }

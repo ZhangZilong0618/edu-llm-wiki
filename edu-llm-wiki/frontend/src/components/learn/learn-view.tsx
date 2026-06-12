@@ -7,12 +7,9 @@ import {
   ChevronRight,
   Dumbbell,
   FileText,
-  FlaskConical,
   GraduationCap,
   HelpCircle,
   Loader2,
-  Layers,
-  Lightbulb,
   MessageCircle,
   Play,
   RefreshCw,
@@ -23,6 +20,7 @@ import {
 } from "lucide-react";
 import { api, setProjectId } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
+import { PAGE_TYPE_CONFIG, type PageType } from "@/lib/page-type";
 import { Markdown } from "@/components/markdown";
 import type { GraphData, GraphNode } from "@/types/wiki";
 
@@ -81,42 +79,6 @@ const STAGE_META: Record<StageId, { title: string; description: string }> = {
   review: {
     title: "Review & Gaps",
     description: "Revisit isolated, weakly connected, or high-friction knowledge points.",
-  },
-};
-
-const TYPE_CONFIG: Record<
-  string,
-  { icon: React.ElementType; color: string; bg: string; label: string }
-> = {
-  concept: {
-    icon: BookOpen,
-    color: "text-blue-600",
-    bg: "bg-blue-50 dark:bg-blue-950/30",
-    label: "Concept",
-  },
-  formula: {
-    icon: FlaskConical,
-    color: "text-violet-600",
-    bg: "bg-violet-50 dark:bg-violet-950/30",
-    label: "Formula",
-  },
-  principle: {
-    icon: Lightbulb,
-    color: "text-amber-600",
-    bg: "bg-amber-50 dark:bg-amber-950/30",
-    label: "Principle",
-  },
-  source: {
-    icon: FileText,
-    color: "text-gray-500",
-    bg: "bg-gray-50 dark:bg-gray-950/30",
-    label: "Source",
-  },
-  synthesis: {
-    icon: Layers,
-    color: "text-pink-600",
-    bg: "bg-pink-50 dark:bg-pink-950/30",
-    label: "Synthesis",
   },
 };
 
@@ -763,11 +725,11 @@ function TutorPanel({
 }
 
 function TypeIcon({ type }: { type: string }) {
-  const cfg = TYPE_CONFIG[type] ?? TYPE_CONFIG.concept;
-  const Icon = cfg.icon;
+  const cfg = PAGE_TYPE_CONFIG[type as PageType] ?? PAGE_TYPE_CONFIG.concept;
+  const Icon = cfg.Icon;
   return (
-    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${cfg.bg}`}>
-      <Icon className={`h-4 w-4 ${cfg.color}`} />
+    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${cfg.twBg}`}>
+      <Icon className={`h-4 w-4 ${cfg.twColor}`} />
     </div>
   );
 }
@@ -807,7 +769,7 @@ function LearningRow({
   onDone: () => void;
   onReview: () => void;
 }) {
-  const cfg = TYPE_CONFIG[item.type] ?? TYPE_CONFIG.concept;
+  const cfg = PAGE_TYPE_CONFIG[item.type as PageType] ?? PAGE_TYPE_CONFIG.concept;
   return (
     <div className={`group rounded-md border p-3 ${item.status === "done" ? "opacity-65" : ""}`}>
       <div className="flex items-start gap-3">
@@ -817,8 +779,8 @@ function LearningRow({
             <span className="truncate text-sm font-medium group-hover:text-[var(--primary)]">
               {item.title}
             </span>
-            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${cfg.bg} ${cfg.color}`}>
-              {cfg.label}
+            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${cfg.twBg} ${cfg.twColor}`}>
+              {cfg.shortLabel}
             </span>
             {item.isBridge && (
               <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-blue-100 px-1 py-0.5 text-[10px] text-blue-600">

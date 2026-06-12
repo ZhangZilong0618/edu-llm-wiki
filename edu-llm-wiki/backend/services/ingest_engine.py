@@ -918,24 +918,6 @@ def _merge_derived_analysis(core_plan: dict, derived: object) -> dict:
     return analysis
 
 
-async def _plan_core_knowledge(content: str, *, project_id: str, emit=None, source_relative_path: str = "") -> dict:
-    context = await read_context(project_id=project_id)
-    raw = await _chat_complete_progress(
-        system_prompt="You are an expert educational wiki planner. Output ONLY valid JSON.",
-        user_prompt=CORE_PLANNING_PROMPT.format(
-            content=content,
-            context=context[:3000],
-            language_instruction=language_instruction(),
-        ),
-        temperature=0.15,
-        max_tokens=8192,
-        emit=emit,
-        source=source_relative_path,
-        stage="plan",
-    )
-    return _augment_empty_analysis(await _load_llm_json(raw, expected="object"), content)
-
-
 async def _generate_core_pages(core_plan: dict, *, project_id: str, source_relative_path: str, emit=None) -> list[dict]:
     wp = wiki_path(project_id)
     purpose_path = wp / "purpose.md"
@@ -1092,14 +1074,12 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
                          message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
 
     await _emit_optional(emit, "stage", source=source_relative_path,
-                         stage="plan", message="Step 1/4: LLM 正在规划核心知识页面...")
+                         stage="plan", message="Step 1/4: 用规则启发式提取核心知识页面...")
     try:
-        core_plan = await _plan_core_knowledge(
-            content,
-            project_id=project_id,
-            emit=emit,
-            source_relative_path=source_relative_path,
-        )
+        # Per docs/wiki-redesign.md §5.1: drop the LLM planning stage
+        # (CORE_PLANNING_PROMPT was undefined; manual plans were a hallucination source).
+        # Use the heuristic fallback as the primary path.
+        core_plan = _fallback_analysis_from_text(content)
     except Exception as e:
         await _emit_optional(emit, "error", source=source_relative_path, message=f"知识规划失败: {e}")
         return {"source": source_relative_path, "status": "error", "error": f"Planning error: {e}"}
