@@ -94,7 +94,7 @@ def generate_insights(
         if s["node_type"] == t["node_type"]:
             continue
         types = {s["node_type"], t["node_type"]}
-        if "formula" in types and ("exercise" in types or "principle" in types):
+        if "formula" in types and "principle" in types:
             insights.append({
                 "insight_type": "surprising_connection",
                 "title": f"Cross-type: {s['label']} <-> {t['label']}",

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 class WikiPage(BaseModel):
     path: str  # relative path within wiki/
     title: str
-    page_type: str  # concept | formula | principle | exercise | source | synthesis
+    page_type: str  # concept | formula | principle | source | synthesis | inquiry | guide
     content: str
     sources: list[str] = []  # source file references
     tags: list[str] = []

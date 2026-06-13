@@ -297,10 +297,16 @@ def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[Te
             continue
         # Exercise pages are no longer lifted verbatim into the new test — the
         # generator now produces fresh questions from the concept/formula/principle
-        # context below, which avoids regenerating identical items.
-        if page.get("page_type") in {"concept", "formula", "principle", "source", "synthesis"} and len(context_parts) < 24:
+        # Treat every non-derived page as a knowledge source. Derived types
+        # (inquiry, guide) are intentionally skipped because lifting their
+        # content back into the LLM context tends to regenerate identical
+        # items below. Pages missing a `page_type` (legacy "unknown") are
+        # still included as a last-resort fallback so projects whose ingest
+        # didn't yield concept / formula / principle pages (e.g. 888, which
+        # only has inquiry + guide) can still produce a test.
+        if page.get("page_type") not in {"inquiry", "guide"} and len(context_parts) < 24:
             context_parts.append(
-                f"### {page['title']} ({page['page_type']})\n路径：{page['path']}\n来源：{', '.join(page.get('sources', []) or [])}\n{page.get('content', '')[:1800]}"
+                f"### {page['title']} ({page['page_type'] or 'unknown'})\n路径：{page['path']}\n来源：{', '.join(page.get('sources', []) or [])}\n{page.get('content', '')[:1800]}"
             )
     return extracted[: req.question_count], "\n\n".join(context_parts)
 

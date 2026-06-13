@@ -106,16 +106,22 @@ CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your
 {language_instruction}
 
 ## Instructions
-Generate wiki pages only for concept, formula, and principle items in the plan. Do not create exercises, Q&A, synthesis pages, source pages, or system/study-guide pages in this stage.
+Generate wiki pages only for concept, formula, and principle items in the plan. Do not create exercises, Q&A (inquiry), synthesis pages, source pages, or system/study-guide pages in this stage. Practice is generated on demand from the Tests view, not at import time.
 
 For each page, output a JSON object with:
 - path: relative path within wiki/ (e.g., "concepts/quantum_state.md")
 - title: page title
 - page_type: concept | formula | principle
-- content: full markdown content with useful [[wikilinks]]
-- sources: list of source file references
-- tags: list of relevant tags
-- prerequisites: list of page paths that must be understood before this page
+- frontmatter (all keys required, no omissions):
+  - sources: list of source file references this page draws on
+  - tags: list of relevant tags (use lowercase, hyphenated for multi-word)
+  - prerequisites: list of page paths that must be understood before this page (only paths that exist in the plan or current wiki)
+  - related: list of page paths that this page connects to (sibling concepts, see-also)
+  - common_misconceptions: list of concise strings naming what learners commonly get wrong about this page
+  - worked_example_ref: list of page paths that are worked examples for this content
+  - difficulty: integer 1-5 (1 = introductory recall, 5 = requires synthesis or advanced application)
+  - last_reviewed: ISO 8601 datetime stamp set to the current generation moment (do not invent historical dates)
+- content: full markdown body with [[wikilinks]] to other wiki pages and $...$ inline LaTeX for math
 
 Page rules:
 - Concept pages should define, explain, and connect the concept to related core pages.
@@ -157,31 +163,31 @@ Output a JSON object with this shape:
       "open_questions": ["follow-up questions or limitations"]
     }}
   ],
-  "q_and_a": [
+  "inquiry": [
     {{
-      "question": "A high-value learner question",
+      "title": "Inquiry page title",
+      "thesis": "A high-value learner question phrased as a one-line thesis",
+      "perspectives": ["distinct angle or sub-question that the inquiry should cover"],
       "answer": "Clear answer grounded in existing core pages",
       "why_it_matters": "Why this question is useful",
       "related_items": ["titles of existing core pages"]
     }}
   ],
-  "system_notes": [
+  "guide": [
     {{
-      "title": "Learning/navigation note title",
+      "title": "Learning/navigation guide title",
       "purpose": "How this note improves learning or wiki maintenance",
       "learning_order": ["ordered titles of existing core pages"],
-      "study_strategy": ["specific review action"],
+      "review_strategies": ["specific review action a learner can take"],
       "quality_warnings": ["things to verify against the source"]
     }}
   ]
 }}
 ```
 
-Rules:
-- Do not introduce facts that are absent from the core plan/pages.
-- Synthesis, Q&A, and system notes should help learners use the core wiki, not duplicate whole pages.
-- Spend the saved effort on richer synthesis, deeper Q&A, and more useful study strategies.
+Naming note: the key `inquiry` supersedes the legacy `q_and_a`; the key `guide` supersedes the legacy `system_notes`. Use the new keys in your output.
 
+Return a single JSON object.
 CRITICAL: Output ONLY the JSON object, no markdown fences or explanation.
 """
 
@@ -430,8 +436,8 @@ def _page_path_for(page_type: str, title: str) -> str:
         "principle": "principles",
         "source": "sources",
         "synthesis": "synthesis",
-        "query": "queries",
-        "system": "systems",
+        "inquiry": "inquiries",
+        "guide": "guides",
     }
     folder = folder_by_type.get(page_type, f"{page_type}s")
     return f"{folder}/{_slugify_title(title)}.md"
@@ -655,7 +661,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         )
         add_page("synthesis", title, content, ["synthesis", "imported"], [])
 
-    for idx, item in enumerate(_as_list(analysis.get("q_and_a")), start=1):
+    for idx, item in enumerate(_as_list(analysis.get("inquiry")), start=1):
         if not isinstance(item, dict):
             continue
         question = _clean_item_title(str(item.get("question") or f"关键问题 {idx}"))
@@ -670,24 +676,26 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 为什么重要\n\n{why or '这个问题有助于检查是否真正理解文档的核心知识。'}\n\n"
             f"## 相关知识\n\n{_bullet_list(related or all_knowledge_names[:5])}\n"
         )
-        add_page("query", title, content, ["qa", "imported"], [])
+        add_page("inquiry", title, content, ["qa", "imported"], [])
 
-    for idx, item in enumerate(_as_list(analysis.get("system_notes")), start=1):
+    for idx, item in enumerate(_as_list(analysis.get("guide")), start=1):
         if not isinstance(item, dict):
             continue
         title = _clean_item_title(str(item.get("title") or f"{source_relative_path} 学习指引 {idx}"))
         purpose = str(item.get("purpose") or "").strip()
         learning_order = _as_list(item.get("learning_order"))
-        study_strategy = _as_list(item.get("study_strategy"))
+        # New prompt uses `review_strategies`; legacy `study_strategy` is still
+        # accepted so older analyses keep rendering.
+        review_strategies = _as_list(item.get("review_strategies")) or _as_list(item.get("study_strategy"))
         quality_warnings = _as_list(item.get("quality_warnings"))
         content = (
             f"# {title}\n\n"
             f"## 用途\n\n{purpose or f'整理 {source_relative_path} 的学习路径、复习方式和维护提醒。'}\n\n"
             f"## 推荐学习顺序\n\n{_bullet_list(learning_order or all_knowledge_names)}\n\n"
-            f"## 复习策略\n\n{_bullet_list(study_strategy or ['先看概念和原理；如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
+            f"## 复习策略\n\n{_bullet_list(review_strategies or ['先看概念和原理；如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
             f"## 质量提醒\n\n{_bullet_list(quality_warnings or _as_list(analysis.get('review_items')) or ['如原文 OCR、公式或表格解析异常，请回到来源文档复核。'])}\n"
         )
-        add_page("system", title, content, ["system", "imported"], [])
+        add_page("guide", title, content, ["guide", "imported"], [])
 
     has_educational_content = bool(concepts or formulas or principles)
     if has_educational_content and not any((p.get("page_type") == "synthesis") for p in normalized_pages):
@@ -702,7 +710,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         )
         add_page("synthesis", title, content, ["synthesis", "imported"], [])
 
-    if has_educational_content and not any((p.get("page_type") == "query") for p in normalized_pages):
+    if has_educational_content and not any((p.get("page_type") == "inquiry") for p in normalized_pages):
         title = f"{source_relative_path} 关键问答"
         content = (
             f"# {title}\n\n"
@@ -711,9 +719,9 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 为什么重要\n\n这个问题能帮助学习者从被动阅读转向主动检索和自测。\n\n"
             f"## 相关知识\n\n{_bullet_list(all_knowledge_names[:6])}\n"
         )
-        add_page("query", title, content, ["qa", "imported"], [])
+        add_page("inquiry", title, content, ["qa", "imported"], [])
 
-    if has_educational_content and not any((p.get("page_type") == "system") for p in normalized_pages):
+    if has_educational_content and not any((p.get("page_type") == "guide") for p in normalized_pages):
         title = f"{source_relative_path} 导入学习指引"
         content = (
             f"# {title}\n\n"
@@ -722,7 +730,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 复习策略\n\n{_bullet_list(['阅读每个概念页后，回到对应公式和原理进行自测。', '如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
             f"## 质量提醒\n\n{_bullet_list(_as_list(analysis.get('review_items')) or ['如果公式或表格来自 OCR，请对照原始文档复核。'])}\n"
         )
-        add_page("system", title, content, ["system", "imported"], [])
+        add_page("guide", title, content, ["guide", "imported"], [])
 
     return normalized_pages
 
@@ -891,8 +899,8 @@ def _knowledge_counts(analysis: dict) -> dict[str, int]:
         "formulas": len(_as_list(analysis.get("formulas"))),
         "principles": len(_as_list(analysis.get("principles"))),
         "synthesis": len(_as_list(analysis.get("synthesis"))),
-        "q_and_a": len(_as_list(analysis.get("q_and_a"))),
-        "system_notes": len(_as_list(analysis.get("system_notes"))),
+        "inquiry": len(_as_list(analysis.get("inquiry"))),
+        "guide": len(_as_list(analysis.get("guide"))),
     }
 
 
@@ -902,18 +910,18 @@ def _analysis_details(analysis: dict) -> dict:
         "formulas": [f.get("name", "") for f in _as_list(analysis.get("formulas"))[:5] if isinstance(f, dict)],
         "principles": [p.get("name", "") for p in _as_list(analysis.get("principles"))[:5] if isinstance(p, dict)],
         "synthesis": [s.get("title", "") for s in _as_list(analysis.get("synthesis"))[:5] if isinstance(s, dict)],
-        "q_and_a": [q.get("question", "")[:40] for q in _as_list(analysis.get("q_and_a"))[:5] if isinstance(q, dict)],
-        "system_notes": [s.get("title", "") for s in _as_list(analysis.get("system_notes"))[:5] if isinstance(s, dict)],
+        "inquiry": [q.get("thesis", q.get("question", ""))[:40] for q in _as_list(analysis.get("inquiry"))[:5] if isinstance(q, dict)],
+        "guide": [s.get("title", "") for s in _as_list(analysis.get("guide"))[:5] if isinstance(s, dict)],
     }
 
 
 def _merge_derived_analysis(core_plan: dict, derived: object) -> dict:
     analysis = dict(core_plan)
     if isinstance(derived, dict):
-        for key in ("synthesis", "q_and_a", "system_notes"):
+        for key in ("synthesis", "inquiry", "guide"):
             analysis[key] = _as_list(derived.get(key))
     else:
-        for key in ("synthesis", "q_and_a", "system_notes"):
+        for key in ("synthesis", "inquiry", "guide"):
             analysis.setdefault(key, [])
     return analysis
 
@@ -1127,7 +1135,7 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
     await _emit_optional(emit, "stage_done", source=source_relative_path,
                          stage="derive",
                          message=f"进阶内容生成完成: {counts['synthesis']} 个综合, "
-                                 f"{counts['q_and_a']} 个问答, {counts['system_notes']} 个系统指引",
+                                 f"{counts['inquiry']} 个问答, {counts['guide']} 个学习指引",
                          details=_analysis_details(analysis))
 
     await _emit_optional(emit, "stage", source=source_relative_path,

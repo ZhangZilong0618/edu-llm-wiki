@@ -22,11 +22,22 @@ def sources_path(project_id: str = "default") -> Path:
     return Path(settings.projects_dir) / project_id / "sources"
 
 
+_INDEX_SECTION_NAMES: dict[str, str] = {
+    "concept": "## 概念 (Concepts)",
+    "formula": "## 公式 (Formulas)",
+    "principle": "## 原理 (Principles)",
+    "source": "## 来源 (Sources)",
+    "synthesis": "## 综合分析 (Synthesis)",
+    "inquiry": "## 问答记录 (Inquiries)",
+    "guide": "## 学习指引 (Guides)",
+}
+
+
 def ensure_dirs(project_id: str = "default"):
     """Create wiki directory structure."""
     dirs = [
         "concepts", "formulas", "principles", "sources",
-        "synthesis", "queries", "systems", "media"
+        "synthesis", "inquiries", "guides", "media"
     ]
     wp = wiki_path(project_id)
     for d in dirs:
@@ -38,7 +49,7 @@ def ensure_dirs(project_id: str = "default"):
     if not purpose.exists():
         purpose.write_text("""---
 title: 教学目标
-type: system
+type: guide
 ---
 # 教学目标
 
@@ -57,7 +68,7 @@ type: system
     if not schema.exists():
         schema.write_text("""---
 title: Wiki 结构规则
-type: system
+type: guide
 ---
 # Wiki 结构规则
 
@@ -67,15 +78,15 @@ type: system
 - **principle**: 原理/定理，包含陈述、条件、证明/推导
 - **source**: 来源摘要，对原始文档的总结
 - **synthesis**: 综合分析，跨来源的对比和综合
-- **query**: 问答记录，保存的有价值问答
-- **system**: 学习指引、质量提醒、维护规则和导入策略
+- **inquiry**: 问答记录，保存的有价值问答
+- **guide**: 学习指引、质量提醒、维护规则和导入策略
 
 ## 命名规范
 - 概念页: `concepts/{概念名}.md`
 - 公式页: `formulas/{公式名}.md`
 - 综合页: `synthesis/{主题}.md`
-- 问答页: `queries/{问题标题}.md`
-- 系统页: `systems/{指引标题}.md`
+- 问答页: `inquiries/{问题标题}.md`
+- 指引页: `guides/{指引标题}.md`
 
 ## 链接语法
 使用 `[[页面路径]]` 语法进行交叉引用。
@@ -101,9 +112,9 @@ updated: ""
 
 ## 综合分析 (Synthesis)
 
-## 问答记录 (Queries)
+## 问答记录 (Inquiries)
 
-## 系统指引 (System)
+## 学习指引 (Guides)
 """, encoding="utf-8")
 
 
@@ -337,15 +348,7 @@ def update_index(new_pages: list[dict], *, project_id: str = "default"):
     fm["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Parse existing entries from the body to preserve them
-    section_names = {
-        "concept": "## 概念 (Concepts)",
-        "formula": "## 公式 (Formulas)",
-        "principle": "## 原理 (Principles)",
-        "source": "## 来源 (Sources)",
-        "synthesis": "## 综合分析 (Synthesis)",
-        "query": "## 问答记录 (Queries)",
-        "system": "## 系统指引 (System)",
-    }
+    section_names = _INDEX_SECTION_NAMES
 
     # Collect existing links per type
     existing: dict[str, set[str]] = {t: set() for t in section_names}
@@ -399,15 +402,7 @@ def rebuild_index(*, project_id: str = "default"):
         "type": "index",
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
-    section_names = {
-        "concept": "## 概念 (Concepts)",
-        "formula": "## 公式 (Formulas)",
-        "principle": "## 原理 (Principles)",
-        "source": "## 来源 (Sources)",
-        "synthesis": "## 综合分析 (Synthesis)",
-        "query": "## 问答记录 (Queries)",
-        "system": "## 系统指引 (System)",
-    }
+    section_names = _INDEX_SECTION_NAMES
     grouped: dict[str, list[dict]] = {t: [] for t in section_names}
     for page in pages:
         if page.get("type") in grouped:

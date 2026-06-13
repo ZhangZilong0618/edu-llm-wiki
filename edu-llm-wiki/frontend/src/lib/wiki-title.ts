@@ -1,3 +1,11 @@
+/**
+ * Short, file-name-only label for a wiki path (`concepts/Seebeck效应.md` →
+ * `Seebeck效应`). Used in card lists, chips, and frontmatter footers.
+ */
+export function pathLabel(path: string): string {
+  return path.split("/").pop()?.replace(/\.md$/, "") ?? path
+}
+
 export function displayWikiTitle(page: { title: string; type?: string; page_type?: string; path: string }) {
   const type = page.type || page.page_type
   if (type !== "formula") return page.title

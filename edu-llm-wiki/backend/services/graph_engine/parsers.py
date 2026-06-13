@@ -22,8 +22,8 @@ from storage.wiki_store import list_wiki_pages, parse_frontmatter, wiki_path
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
 
 VALID_NODE_TYPES = {
-    "concept", "formula", "principle", "exercise",
-    "source", "synthesis", "query", "definition", "example",
+    "concept", "formula", "principle",
+    "source", "synthesis", "inquiry", "guide",
 }
 
 

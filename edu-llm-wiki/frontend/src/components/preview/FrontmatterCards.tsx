@@ -7,11 +7,7 @@
  * nothing.
  */
 import type { WikiPage } from "@/types/wiki"
-import { displayWikiTitle } from "@/lib/wiki-title"
-
-function pathLabel(path: string) {
-  return path.split("/").pop()?.replace(/\.md$/, "") ?? path
-}
+import { displayWikiTitle, pathLabel } from "@/lib/wiki-title"
 
 type SectionProps = {
   title: string

@@ -22,26 +22,26 @@ WEIGHTS = {
 # Cross-type affinity matrix — higher means the two node types tend to be
 # pedagogically adjacent.
 TYPE_AFFINITY: dict[str, dict[str, float]] = {
-    "concept":   {"concept": 0.8, "formula": 1.3, "principle": 1.2, "exercise": 1.2,
-                  "source": 1.0, "synthesis": 1.2, "query": 1.0},
-    "formula":   {"concept": 1.3, "formula": 0.7, "principle": 1.3, "exercise": 1.5,
-                  "source": 0.8, "synthesis": 1.0, "query": 0.8},
-    "principle": {"concept": 1.2, "formula": 1.3, "principle": 0.7, "exercise": 1.0,
-                  "source": 0.8, "synthesis": 1.1, "query": 0.8},
-    "exercise":  {"concept": 1.2, "formula": 1.5, "principle": 1.0, "exercise": 0.4,
-                  "source": 0.8, "synthesis": 0.8, "query": 0.8},
-    "source":    {"concept": 1.0, "formula": 0.8, "principle": 0.8, "exercise": 0.8,
-                  "source": 0.5, "synthesis": 1.0, "query": 0.8},
-    "synthesis": {"concept": 1.2, "formula": 1.0, "principle": 1.1, "exercise": 0.8,
-                  "source": 1.0, "synthesis": 0.8, "query": 1.0},
-    "query":     {"concept": 1.0, "formula": 0.8, "principle": 0.8, "exercise": 0.8,
-                  "source": 0.8, "synthesis": 1.0, "query": 0.5},
+    "concept":   {"concept": 0.8, "formula": 1.3, "principle": 1.2,
+                  "source": 1.0, "synthesis": 1.2, "inquiry": 1.0, "guide": 0.8},
+    "formula":   {"concept": 1.3, "formula": 0.7, "principle": 1.3,
+                  "source": 0.8, "synthesis": 1.0, "inquiry": 0.8, "guide": 0.7},
+    "principle": {"concept": 1.2, "formula": 1.3, "principle": 0.7,
+                  "source": 0.8, "synthesis": 1.1, "inquiry": 0.8, "guide": 0.8},
+    "source":    {"concept": 1.0, "formula": 0.8, "principle": 0.8,
+                  "source": 0.5, "synthesis": 1.0, "inquiry": 0.8, "guide": 0.7},
+    "synthesis": {"concept": 1.2, "formula": 1.0, "principle": 1.1,
+                  "source": 1.0, "synthesis": 0.8, "inquiry": 1.0, "guide": 0.9},
+    "inquiry":   {"concept": 1.0, "formula": 0.8, "principle": 0.8,
+                  "source": 0.8, "synthesis": 1.0, "inquiry": 0.5, "guide": 0.8},
+    "guide":     {"concept": 0.8, "formula": 0.7, "principle": 0.8,
+                  "source": 0.7, "synthesis": 0.9, "inquiry": 0.8, "guide": 0.5},
 }
 
 # Type-order for prerequisite inference: smaller = more foundational.
 PREREQ_TYPE_ORDER = {
     "concept": 0, "formula": 1, "principle": 2, "source": 3,
-    "exercise": 4, "synthesis": 5, "query": 6,
+    "synthesis": 4, "inquiry": 5, "guide": 6,
 }
 
 # Pedagogical edge types emitted by the engine.

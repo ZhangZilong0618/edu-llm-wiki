@@ -15,6 +15,17 @@ from storage.wiki_store import (
 router = APIRouter(prefix="/api/wiki", tags=["wiki"])
 
 
+_FOLDER_BY_TYPE = {
+    "concept": "concepts",
+    "formula": "formulas",
+    "principle": "principles",
+    "source": "sources",
+    "synthesis": "synthesis",
+    "inquiry": "inquiries",
+    "guide": "guides",
+}
+
+
 @router.get("/pages")
 async def get_pages(page_type: str | None = None, project_id: str = Query("default")):
     """List all wiki pages, optionally filtered by type."""
@@ -38,7 +49,8 @@ async def create_page(page: WikiPageCreate, project_id: str = Query("default")):
     # Determine path from title and type
     import re
     slug = re.sub(r'[^\w一-鿿\s-]', '', page.title).strip().replace(' ', '_')
-    path = f"{page.page_type}s/{slug}.md"
+    folder = _FOLDER_BY_TYPE.get(page.page_type, f"{page.page_type}s")
+    path = f"{folder}/{slug}.md"
 
     full_path = write_wiki_page(
         relative_path=path,
