@@ -91,6 +91,57 @@ def _sync_vectors(pages: list[dict], *, project_id: str = "default"):
 
 
 
+CORE_PLANNING_PROMPT = """You are an expert educational planner. Your task is to analyze a parsed source document and produce a structured **core page plan** covering ALL FIVE A-stage page types: source, concept, formula, principle, procedure. Output a single JSON object the downstream wiki writer will use.
+
+## Source
+- title: {source_title}
+- total_pages: {page_count}
+
+## Parsed pages (truncated to {max_chars} chars)
+{content}
+
+## Output schema (JSON object)
+For each **concept**:
+- "name": concept name (short, 2-8 字). Definition, glossary term, or named idea.
+- "definition": one-sentence definition in the output language (cite "p.5" for page number)
+- "related": list of other concept names from this plan
+- "page_refs": integer pages where this concept is defined or explained (1-indexed)
+
+For each **formula**:
+- "name": human-readable formula name (NOT raw equation)
+- "latex": the LaTeX equation, $...$ delimiters optional
+- "variables": brief description of each variable
+- "applications": one-sentence note on when to use
+- "page_refs": integer pages
+
+For each **principle**:
+- "name": principle name
+- "statement": one-sentence core claim
+- "conditions": when this principle applies
+- "page_refs": integer pages
+
+For each **procedure**:
+- "name": procedure name
+- "goal": one-sentence outcome
+- "input": what the procedure takes
+- "output": what it produces
+- "page_refs": integer pages
+
+"source" entry:
+- "summary": 2-3 sentence summary in the output language
+- "topic_tags": list of 3-6 keyword tags
+- "page_count_estimate": integer
+
+CRITICAL RULES:
+1. Cover at least 2-3 items per type (if the document supports it). Empty arrays are allowed ONLY for types that genuinely have no content in the source.
+2. Use ONLY pages that appear in the source. Do not invent page numbers; omit page_refs if unsure.
+3. Output a SINGLE JSON object with these top-level keys: source, concepts, formulas, principles, procedures. No markdown fences, no commentary.
+
+## Output Language
+{language_instruction}
+"""
+
+
 CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your task is to generate only the core wiki pages from an approved page plan.
 
 ## Core Page Plan
@@ -106,12 +157,12 @@ CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your
 {language_instruction}
 
 ## Instructions
-Generate wiki pages only for concept, formula, and principle items in the plan. Do not create exercises, Q&A (inquiry), synthesis pages, source pages, or system/study-guide pages in this stage. Practice is generated on demand from the Tests view, not at import time.
+Generate wiki pages only for the A-stage (core) page types in the plan: source, concept, formula, principle, procedure. Do NOT create example, misconception, synthesis, learning_path, learning_objective, or rubric pages in this stage — those are generated on demand from later stages.
 
 For each page, output a JSON object with:
 - path: relative path within wiki/ (e.g., "concepts/quantum_state.md")
 - title: page title
-- page_type: concept | formula | principle
+- page_type: source | concept | formula | principle | procedure
 - frontmatter (all keys required, no omissions):
   - sources: list of source file references this page draws on
   - tags: list of relevant tags (use lowercase, hyphenated for multi-word)
@@ -127,10 +178,23 @@ Page rules:
 - Concept pages should define, explain, and connect the concept to related core pages.
 - Formula pages must contain sections "## 公式", "## 变量说明", and "## 适用场景".
 - Principle pages must contain sections "## 陈述", "## 适用条件", "## 推导/说明", and "## 应用".
+- Procedure pages must contain sections "## 目标", "## 输入", "## 输出", "## 步骤", "## 检查清单".
+- Source pages summarize the source file structure and list candidate citations.
 - Formula titles must be semantic human-readable names, not raw equations.
 - Do not invent new knowledge not supported by the plan.
 - Use [[page/path]] links only for pages that are in the plan or existing wiki context.
 - All math should use lightweight inline LaTeX delimiters $...$; do not force double-dollar display blocks.
+
+### Citation marker (REQUIRED for every non-trivial claim)
+Every substantive sentence that draws from the source MUST end with an inline citation marker in this exact form:
+  [ref:<filename>#p=N]
+where <filename> is the source file's exact name (e.g. "第三章第四节.pdf") and N is the page number.
+- If a sentence is grounded in multiple pages of the same file, use a comma-separated page list:
+  [ref:第三章第四节.pdf#p=5, 8]
+- If a sentence cites multiple files, write a separate marker after the sentence for each file.
+- Do NOT invent page numbers. If you are not certain, omit the marker.
+- Definitions, principle statements, formula applicability conditions, and procedure step goals all require markers.
+- Do not put markers inside math expressions or code blocks.
 
 Return a JSON array of page objects.
 CRITICAL: Output ONLY the JSON array, no markdown fences or explanation.
@@ -431,16 +495,34 @@ def _formula_title_from_latex(latex: str, *, variables: str = "", applications: 
 
 def _page_path_for(page_type: str, title: str) -> str:
     folder_by_type = {
+        # A 组基础页（import 时生成）
         "concept": "concepts",
         "formula": "formulas",
         "principle": "principles",
-        "source": "sources",
+        "procedure": "procedures",
+        # B 组应用页（按需生成）
+        "example": "examples",
+        "misconception": "misconceptions",
+        # C 组整合 / 评价页（按需生成）
         "synthesis": "synthesis",
+        "learning_path": "learning_paths",
+        "learning_objective": "objectives",
+        "rubric": "rubrics",
+        # 源页（A 组 0 号）
+        "source": "sources",
+        # v2 历史 / 兼容
         "inquiry": "inquiries",
         "guide": "guides",
     }
     folder = folder_by_type.get(page_type, f"{page_type}s")
     return f"{folder}/{_slugify_title(title)}.md"
+
+
+# Stage 分组常量 — 跟前端 lib/page-type.tsx 的 STAGE_GROUPS 对齐
+A_STAGE_TYPES = ("source", "concept", "principle", "formula", "procedure")
+B_STAGE_TYPES = ("example", "misconception")
+C_STAGE_TYPES = ("synthesis", "learning_path", "learning_objective", "rubric")
+ALL_PAGE_TYPES = A_STAGE_TYPES + B_STAGE_TYPES + C_STAGE_TYPES
 
 
 def _as_list(value) -> list:
@@ -511,8 +593,111 @@ def _normalize_generated_pages(pages: list[dict], source_relative_path: str) -> 
             content = str(page.get("content") or "")
             page["content"] = _prefer_inline_math(content)
         page.setdefault("sources", [source_relative_path])
+        # 容错: LLM 常用 (p.N) 代替 [ref:…]，自动转
+        page["content"] = _convert_inline_citations(
+            str(page.get("content") or ""), source_relative_path
+        )
         normalized.append(page)
     return normalized
+
+
+def _convert_inline_citations(content: str, source_filename: str) -> str:
+    """把 LLM 写的'(p.N)'、'（p.N）'等内联引用转成 [ref:file#p=N] 格式。
+
+    LLM 抽风时常用人类可读格式而非严格语法。本函数是 LLM 输出的容错层。
+    """
+    if not content:
+        return content
+    src_file = source_filename.rsplit("/", 1)[-1]
+
+    def _repl(m: re.Match) -> str:
+        nums = [int(x.strip()) for x in m.group(1).split(",") if x.strip().isdigit()]
+        if not nums:
+            return m.group(0)
+        return f"[ref:{src_file}#p={','.join(str(n) for n in nums)}]"
+
+    return INLINE_PAGE_REF_RE.sub(_repl, content)
+
+
+# Stage 3 — citation 校验：扫 [ref:file#p=N, ...] 标号，用 parsed.json 反查 quote offset
+# --------------------------------------------------------------------------------------
+
+CITE_REF_TOKEN_RE = re.compile(r"\[ref:([^\]\|#]+)#p=([\d,\s]+)\]")
+
+# 容错: LLM 不一定遵守 [ref:…] 语法，常写成"（p.1）" / "(p.2)" / "（p.3, 5）"等。
+# 这些是 LLM 输出的"想表达引用但格式不对"的情况，我们在 verify 之前自动转。
+INLINE_PAGE_REF_RE = re.compile(
+    r"[（(]\s*p\.?\s*([0-9,\s]+)\s*[）)]",  # 兼容中英括号 + 可选 p./P. 前缀
+    re.IGNORECASE,
+)
+
+
+def _extract_cite_refs(content: str) -> list[dict]:
+    """返回 [{file, page, quote, ...}] 列表，每个 (file, page) 唯一。
+
+    quote 取标号前最近的一句（不超过 60 字符）作为回查用。
+    """
+    out: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+    for m in CITE_REF_TOKEN_RE.finditer(content):
+        file = m.group(1).strip()
+        pages = [int(p.strip()) for p in m.group(2).split(",") if p.strip().isdigit()]
+        # 抓该标号之前的最近一个完整句（"。" 或换行），最多 60 字
+        start = max(0, m.start() - 60)
+        head = content[start:m.start()]
+        last_punct = max(head.rfind("。"), head.rfind(".\n"), head.rfind("\n"))
+        quote = head[last_punct + 1 :].strip() if last_punct != -1 else head.strip()
+        quote = quote[:60]
+        for p in pages:
+            key = (file, p)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"file": file, "page": p, "quote": quote})
+    return out
+
+
+def _verify_cite_refs(pages: list[dict], project_id: str) -> None:
+    """Stage 3 校验：把 verified / offset_start / offset_end 写进 page frontmatter。
+
+    parsed.json 由 build_parsed_index 在 import 阶段（或请求时）落盘。
+    """
+    from services.parsed_index import load_parsed_index
+    from storage.wiki_store import sources_path
+
+    sp = sources_path(project_id)
+    # 按 file 缓存 parsed.json，避免一页校验多 ref 时反复读盘
+    parsed_cache: dict[str, dict | None] = {}
+
+    for page in pages:
+        refs = _extract_cite_refs(str(page.get("content") or ""))
+        if not refs:
+            page.setdefault("source_refs", [])
+            page.setdefault("unverified_refs", [])
+            continue
+        verified: list[dict] = []
+        unverified: list[dict] = []
+        for r in refs:
+            if r["file"] not in parsed_cache:
+                # source_filename 形如 "第三章第四节.pdf"，但 parsed 目录用相对路径的 base 名
+                parsed_cache[r["file"]] = load_parsed_index(sp, r["file"])
+            parsed = parsed_cache[r["file"]]
+            if not parsed:
+                unverified.append(r)
+                continue
+            # 在该页 md 里反查 quote
+            from services.parsed_index import find_quote
+            offsets = find_quote(parsed, r["page"], r["quote"])
+            if offsets:
+                r["verified"] = True
+                r["offset_start"] = offsets[0][0]
+                r["offset_end"] = offsets[0][1]
+                verified.append(r)
+            else:
+                r["verified"] = False
+                unverified.append(r)
+        page["source_refs"] = verified
+        page["unverified_refs"] = unverified
 
 
 def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_path: str) -> list[dict]:
@@ -534,13 +719,26 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         if not title or key in existing:
             return
         existing.add(key)
+        # 如果 core_pages 里有同 title 的 LLM 长文，优先用它的 content（带 [ref:…]）
+        merged_content = content
+        for cp in normalized_pages:
+            if (
+                (cp.get("page_type") or "concept") == page_type
+                and (cp.get("title") or "").strip().lower() == title.strip().lower()
+                and cp.get("content")
+            ):
+                merged_content = cp["content"]
+                merged_tags = list({*(cp.get("tags") or []), *tags})
+                break
+        else:
+            merged_tags = tags
         normalized_pages.append({
             "path": _page_path_for(page_type, title),
             "title": title,
             "page_type": page_type,
-            "content": content,
+            "content": merged_content,
             "sources": [source_relative_path],
-            "tags": tags,
+            "tags": merged_tags,
             "prerequisites": prerequisites or [],
         })
 
@@ -737,6 +935,75 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
 
 def _analysis_is_empty(analysis: dict) -> bool:
     return not any(analysis.get(key) for key in ("concepts", "formulas", "principles"))
+
+
+async def _generate_core_plan_llm(
+    content: str,
+    source_title: str,
+    page_count: int,
+    *,
+    project_id: str = "default",
+    emit=None,
+    source_relative_path: str = "",
+) -> dict:
+    """Step 1/4: 用 LLM 把 parsed document.md 规划成 A 组 5 类候选。
+
+    Returns dict with keys: source, concepts, formulas, principles, procedures.
+    On any error returns {} (caller will fall back to heuristic).
+    """
+    from services.language import language_instruction as _li
+
+    # 截断到 ~24k 字符，给 LLM 留余量生成完整 JSON
+    max_chars = 24_000
+    snippet = content if len(content) <= max_chars else content[:max_chars] + "\n\n[... truncated ...]"
+
+    user_prompt = CORE_PLANNING_PROMPT.format(
+        source_title=source_title,
+        page_count=page_count,
+        max_chars=max_chars,
+        content=snippet,
+        language_instruction=_li(),
+    )
+    raw = await _chat_complete_progress(
+        system_prompt="You are an expert educational planner. Output ONLY valid JSON.",
+        user_prompt=user_prompt,
+        temperature=0.25,
+        max_tokens=8192,
+        emit=emit,
+        source=source_relative_path,
+        stage="plan",
+    )
+    try:
+        plan = await _load_llm_json(raw, expected="object")
+    except Exception:
+        return {}
+    if not isinstance(plan, dict):
+        return {}
+    return plan
+
+
+def _llm_plan_to_core_plan(plan: dict, source_title: str, page_count: int = 0) -> dict:
+    """把 LLM 的 5 类规划 normalize 成 ingest engine 用的 core_plan。
+
+    core_plan 历史上用 _knowledge_counts() 数 {concepts, formulas, principles, synthesis, inquiry, guide}。
+    5 类 A 组里 synthesis/inquiry/guide 是 C 组，不在 plan 里——初始化为空。
+    """
+    source = plan.get("source") or {}
+    return {
+        "summary": source.get("summary", "") or f"文档：{source_title}",
+        "tags": source.get("topic_tags", []) or [],
+        "concepts": plan.get("concepts", []) or [],
+        "formulas": plan.get("formulas", []) or [],
+        "principles": plan.get("principles", []) or [],
+        "procedures": plan.get("procedures", []) or [],
+        # C 组 — planning 阶段不规划，按需生成
+        "synthesis": [],
+        "inquiry": [],
+        "guide": [],
+        # 元信息
+        "page_count_estimate": source.get("page_count_estimate", page_count),
+        "planning_source": "llm",
+    }
 
 
 def _fallback_analysis_from_text(content: str) -> dict:
@@ -981,6 +1248,189 @@ async def _generate_derived_analysis(core_plan: dict, core_pages: list[dict], *,
     return await _load_llm_json(raw, expected="object")
 
 
+# --------------------------------------------------------------------------------------
+# B / C 阶段：按需触发，独立函数
+# --------------------------------------------------------------------------------------
+
+B_STAGE_PROMPT = """You are an expert educational wiki writer. Generate B-stage (applied) wiki pages from an existing core wiki page.
+
+## Anchor Page
+{anchor}
+
+## Source file (parsed)
+{source_summary}
+
+## Requested page types
+{page_types}
+
+## Extra context
+{extra_context}
+
+## Schema
+Each page is a JSON object with:
+- path: relative path within wiki/ (e.g. "examples/foo.md")
+- title: page title
+- page_type: example | misconception
+- content: full markdown body, with sections:
+    - example → "## 题目", "## 步骤", "## 答案", "## 变式"
+    - misconception → "## 错误说法", "## 正确理解", "## 诊断题"
+- frontmatter (all keys required):
+    - sources, tags, prerequisites, related, difficulty, last_reviewed
+- INCLUDE inline citations: whenever a sentence is grounded in a specific page of the source, append a marker `[ref:<source_filename>#p=<page>]` (multiple sources: comma-separated within one `[ref:...]` block). Do NOT invent page numbers; omit the marker if unsure. Multi-page same file is allowed: `[ref:file.pdf#p=5, 8]`.
+
+## Output
+Return a JSON array of page objects. CRITICAL: Output ONLY the JSON array, no fences or explanation.
+"""
+
+
+async def _generate_b_stage_pages(
+    anchor_page: dict,
+    *,
+    page_types: list[str],
+    source_file: str,
+    extra_context: str = "",
+    project_id: str = "default",
+    emit=None,
+) -> list[dict]:
+    """按需生成 B 组应用页。anchor_page 是触发页（已存在的 A 组页）。"""
+    from storage.wiki_store import read_wiki_page
+
+    pages: list[dict] = []
+    for ptype in page_types:
+        if ptype not in B_STAGE_TYPES:
+            continue
+        # 给 LLM 一个精简的源页摘要，避免 prompt 爆炸
+        try:
+            parsed = load_parsed_index(sources_path(project_id), source_file)
+        except Exception:
+            parsed = None
+        if parsed and parsed.get("pages"):
+            # 找 anchor_page 提到的页 + 邻居几页作上下文
+            source_summary = "\n\n---\n\n".join(
+                p["md"][:600] for p in parsed["pages"][:3]
+            )
+        else:
+            source_summary = "(未解析的源文件)"
+
+        user_prompt = B_STAGE_PROMPT.format(
+            anchor=json.dumps({
+                "path": anchor_page.get("path"),
+                "title": anchor_page.get("title"),
+                "page_type": anchor_page.get("page_type"),
+                "content": str(anchor_page.get("content") or "")[:1500],
+            }, ensure_ascii=False, indent=2),
+            source_summary=source_summary[:4000],
+            page_types=ptype,
+            extra_context=extra_context or "(无)",
+            language_instruction=language_instruction(),
+        )
+        raw = await _chat_complete_progress(
+            system_prompt="You are an expert educational wiki writer. Output ONLY valid JSON.",
+            user_prompt=user_prompt,
+            temperature=0.3,
+            max_tokens=4096,
+            emit=emit,
+            source=source_file,
+            stage=f"b_stage_{ptype}",
+        )
+        try:
+            arr = await _load_llm_json(raw, expected="array")
+        except Exception:
+            arr = []
+        if isinstance(arr, list):
+            for p in arr:
+                if isinstance(p, dict):
+                    p.setdefault("page_type", ptype)
+                    p.setdefault("sources", [source_file])
+                    pages.append(p)
+    return pages
+
+
+C_STAGE_PROMPT = """You are an expert educational designer. Generate a single C-stage wiki page from the provided context.
+
+## Page type
+{page_type}
+
+## Target pages (anchor content)
+{targets}
+
+## Source files (parsed excerpts)
+{sources}
+
+## Extra context
+{extra_context}
+
+## Schema
+- path, title, page_type ∈ {synthesis, learning_path, learning_objective, rubric}
+- content: full markdown body, with sections:
+    - synthesis → "## 综合论点", "## 关联知识" (use [[wikilinks]])
+    - learning_path → "## 先修知识", "## 推荐顺序", "## 检测点" (use [[wikilinks]])
+    - learning_objective → "## 行为动词", "## 认知层级", "## 达成证据"
+    - rubric → "## 掌握等级", "## 表现描述", "## 评分规则"
+- frontmatter (all keys required)
+- INCLUDE inline citations `[ref:<file>#p=<page>]` ONLY for synthesis pages. For other C types, omit citations.
+
+## Output
+Return ONE JSON object. CRITICAL: Output ONLY the JSON object, no fences or explanation.
+"""
+
+
+async def _generate_c_stage_page(
+    *,
+    page_type: str,
+    target_pages: list[dict],
+    source_files: list[str],
+    extra_context: str = "",
+    project_id: str = "default",
+    emit=None,
+) -> dict | None:
+    """按需生成 C 组整合 / 评价页。"""
+    if page_type not in C_STAGE_TYPES:
+        return None
+    sp = sources_path(project_id)
+    source_excerpts: list[str] = []
+    for src in source_files:
+        parsed = load_parsed_index(sp, src)
+        if parsed and parsed.get("pages"):
+            source_excerpts.append(
+                f"### {src}\n\n" + "\n\n---\n\n".join(p["md"][:400] for p in parsed["pages"][:3])
+            )
+    sources_text = "\n\n".join(source_excerpts)[:5000] or "(未提供源文件)"
+
+    user_prompt = C_STAGE_PROMPT.format(
+        page_type=page_type,
+        targets=json.dumps(
+            [{"path": t.get("path"), "title": t.get("title"),
+              "page_type": t.get("page_type"),
+              "content": str(t.get("content") or "")[:1200]}
+             for t in target_pages],
+            ensure_ascii=False, indent=2,
+        ),
+        sources=sources_text,
+        extra_context=extra_context or "(无)",
+        language_instruction=language_instruction(),
+    )
+    raw = await _chat_complete_progress(
+        system_prompt="You are an expert educational designer. Output ONLY valid JSON.",
+        user_prompt=user_prompt,
+        temperature=0.3,
+        max_tokens=4096,
+        emit=emit,
+        source=(source_files[0] if source_files else ""),
+        stage=f"c_stage_{page_type}",
+    )
+    try:
+        obj = await _load_llm_json(raw, expected="object")
+    except Exception:
+        return None
+    if isinstance(obj, dict):
+        obj.setdefault("page_type", page_type)
+        if not obj.get("sources"):
+            obj["sources"] = list(source_files)
+        return obj
+    return None
+
+
 def _write_ingest_outputs(
     pages: list[dict],
     analysis: dict,
@@ -1082,12 +1532,25 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
                          message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
 
     await _emit_optional(emit, "stage", source=source_relative_path,
-                         stage="plan", message="Step 1/4: 用规则启发式提取核心知识页面...")
+                         stage="plan", message="Step 1/4: 调用大模型规划 A 组 5 类核心知识页面...")
     try:
-        # Per docs/wiki-redesign.md §5.1: drop the LLM planning stage
-        # (CORE_PLANNING_PROMPT was undefined; manual plans were a hallucination source).
-        # Use the heuristic fallback as the primary path.
-        core_plan = _fallback_analysis_from_text(content)
+        # Primary: LLM 规划 5 类 (source/concept/formula/principle/procedure)
+        plan_llm = await _generate_core_plan_llm(
+            content,
+            source_title=source_relative_path,
+            page_count=0,
+            project_id=project_id,
+            emit=emit,
+            source_relative_path=source_relative_path,
+        )
+        if plan_llm and any(plan_llm.get(k) for k in ("concepts", "formulas", "principles", "procedures", "source")):
+            core_plan = _llm_plan_to_core_plan(plan_llm, source_title=source_relative_path)
+            await _emit_optional(emit, "info", source=source_relative_path,
+                                 message="LLM 规划成功；回退启发式未启用。")
+        else:
+            await _emit_optional(emit, "info", source=source_relative_path,
+                                 message="LLM 规划为空，回退到启发式。")
+            core_plan = _fallback_analysis_from_text(content)
     except Exception as e:
         await _emit_optional(emit, "error", source=source_relative_path, message=f"知识规划失败: {e}")
         return {"source": source_relative_path, "status": "error", "error": f"Planning error: {e}"}
@@ -1095,7 +1558,8 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
     counts = _knowledge_counts(core_plan)
     await _emit_optional(emit, "stage_done", source=source_relative_path,
                          stage="plan",
-                         message=f"规划完成: {counts['concepts']} 个概念, {counts['formulas']} 个公式, {counts['principles']} 个原理",
+                         message=f"规划完成: {counts['concepts']} 个概念, {counts['formulas']} 个公式, {counts['principles']} 个原理"
+                                 + (f", {len(core_plan.get('procedures', []))} 个方法" if core_plan.get('procedures') else ""),
                          details=_analysis_details(core_plan))
 
     await _emit_optional(emit, "stage", source=source_relative_path,
@@ -1148,6 +1612,19 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
 
     await _emit_optional(emit, "stage_done", source=source_relative_path,
                          stage="generate_derived", message=f"页面组装完成: {len(pages)} 个页面")
+
+    await _emit_optional(emit, "stage", source=source_relative_path,
+                         stage="verify_refs",
+                         message="Step 3.5/4: 校验引用 [ref:…] 标号并反查原页 offset...")
+    try:
+        _verify_cite_refs(pages, project_id)
+    except Exception as e:
+        # 校验失败不阻塞写入 —— 标记到日志，UI 仍能渲染
+        await _emit_optional(emit, "warn", source=source_relative_path,
+                             message=f"引用校验失败 (不阻塞): {e}")
+
+    await _emit_optional(emit, "stage_done", source=source_relative_path,
+                         stage="verify_refs", message="引用校验完成")
 
     await _emit_optional(emit, "stage", source=source_relative_path,
                          stage="write", message=f"正在写入 {len(pages)} 个页面...", total=len(pages))

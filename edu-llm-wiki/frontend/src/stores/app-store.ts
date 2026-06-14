@@ -21,6 +21,8 @@ function initialActiveView(): ActiveView {
 
 export interface IngestProgress {
   filename: string
+  status: "running" | "done" | "error"
+  error?: string
   stages: {
     stage: string
     message: string
@@ -31,7 +33,6 @@ export interface IngestProgress {
     created?: number
     updated?: number
   }[]
-  error?: string
 }
 
 export interface OperationState {

@@ -1,3 +1,19 @@
+export interface SourceRef {
+  file: string
+  page: number
+  quote: string
+  verified: boolean
+  offset_start?: number | null
+  offset_end?: number | null
+}
+
+export interface UnverifiedRef {
+  file: string
+  page: number
+  quote: string
+  reason?: string
+}
+
 export interface WikiPage {
   path: string
   title: string
@@ -14,6 +30,9 @@ export interface WikiPage {
   common_misconceptions: string[]
   worked_example_ref: string[]
   last_reviewed: string
+  // --- v3 citation fields (added with parsed.json stage) ---
+  source_refs?: SourceRef[]
+  unverified_refs?: UnverifiedRef[]
 }
 
 export interface GraphNode {

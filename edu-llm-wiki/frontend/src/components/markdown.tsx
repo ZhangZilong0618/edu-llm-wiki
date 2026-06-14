@@ -1,4 +1,4 @@
-import { Children, cloneElement, isValidElement, useMemo, type ReactNode } from "react"
+import { Children, cloneElement, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { renderToString } from "katex"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -102,6 +102,409 @@ function processWikiLinks(text: string): string {
     const clean = path.trim().replace(/\.md$/, "")
     const display = (label || clean.split("/").pop() || clean).trim()
     return `[${display}](/wiki/${clean})`
+  })
+}
+
+// Inline citation refs.
+//
+// Two accepted syntaxes inside one [ref: … ]:
+//   1) Same file, multiple pages:  [ref:file.pdf#p=5, 8]
+//   2) Multiple distinct refs:     [ref:fileA.pdf#p=5, fileB.pdf#p=8]
+//
+// We tokenize once, then emit one sentinel per (file, page) pair. Sentinels
+// round-trip through markdown as plain text and are post-processed back into
+// <CitationPopover> nodes by `renderTextWithCitations`.
+const CITE_REF_BLOCK_RE = /\[ref:([^\]]+)\]/g
+
+// 容错: LLM 写（p.1） / (p.1, 3) 之类纯括号页码时，前端也当引用处理。
+// 升级这些为 [ref:<source>#p=N]，需要 Markdown 接收 defaultSource（页面所在源文件）做兜底。
+const INLINE_PAGE_HINT_RE = /[（(]\s*p\.?\s*([0-9,\s]+)\s*[）)]/gi
+function upgradeInlinePageHints(text: string, defaultSource: string | undefined): string {
+  if (!defaultSource) return text
+  return text.replace(INLINE_PAGE_HINT_RE, (_m, pages: string) => {
+    const nums = pages.split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s))
+    if (!nums.length) return _m
+    return nums.map((n) => `[ref:${defaultSource}#p=${n}]`).join("")
+  })
+}
+
+function tokenizeCiteBlock(body: string): Array<{ file: string; page: number }> {
+  // body is the inside of [...], e.g. "fileA.pdf#p=5, fileB.pdf#p=8" or "fileA.pdf#p=5,8".
+  const parts = body.split(",").map((s) => s.trim()).filter(Boolean)
+  const out: Array<{ file: string; page: number }> = []
+  let currentFile: string | null = null
+  for (const part of parts) {
+    // Match "file#p=N" or just "N" (when a previous entry already supplied the file).
+    const m = part.match(/^([^#]+)#p=(\d+)\s*$/)
+    if (m) {
+      currentFile = m[1].trim()
+      const page = Number(m[2])
+      if (currentFile && Number.isFinite(page) && page > 0) {
+        out.push({ file: currentFile, page })
+      }
+      continue
+    }
+    const bare = part.match(/^(\d+)\s*$/)
+    if (bare && currentFile) {
+      const page = Number(bare[1])
+      if (Number.isFinite(page) && page > 0) out.push({ file: currentFile, page })
+      continue
+    }
+    // Malformed chunk — skip silently.
+  }
+  return out
+}
+
+function processCitationRefs(text: string): string {
+  return text.replace(CITE_REF_BLOCK_RE, (_m, body: string) => {
+    const tokens = tokenizeCiteBlock(body)
+    if (!tokens.length) return _m
+    // Group consecutive tokens from the same file so the popover shows
+    // "multi-page" as tabs (and cross-file splits into multiple popovers).
+    const groups: Array<Array<{ file: string; page: number }>> = []
+    for (const t of tokens) {
+      const last = groups[groups.length - 1]
+      if (last && last[0].file === t.file) {
+        last.push(t)
+      } else {
+        groups.push([t])
+      }
+    }
+    return groups
+      .map((g) =>
+        g
+          .map((t) => `@@CITE_REF:${t.file}#p=${t.page}@@`)
+          .join("@@CITE_SEP@@"),
+      )
+      .join("@@CITE_GRP@@")
+  })
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Citation popover
+
+type PageCache = { content: string; hit_offsets: number[][]; page_label?: string }
+
+const pageFetchCache = new Map<string, Promise<PageCache | null>>()
+async function fetchPage(
+  projectId: string,
+  file: string,
+  page: number,
+  q: string,
+): Promise<PageCache | null> {
+  const key = `${projectId}|${file}|${page}|${q}`
+  const cached = pageFetchCache.get(key)
+  if (cached) return cached
+  const url = `/api/ingest/sources/${encodeURIComponent(file)}/parsed-page/${page}` +
+    `?project_id=${encodeURIComponent(projectId)}` +
+    (q ? `&q=${encodeURIComponent(q)}` : "")
+  const promise = fetch(url)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => (j ? ({ content: j.content, hit_offsets: j.hit_offsets, page_label: j.page_label } as PageCache) : null))
+    .catch(() => null)
+  pageFetchCache.set(key, promise)
+  return promise
+}
+
+function CitationPopover({
+  file,
+  pages,
+  trigger,
+  projectId,
+  quote,
+  verified,
+}: {
+  file: string
+  pages: number[]
+  trigger: ReactNode
+  projectId: string
+  quote?: string
+  verified?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [cache, setCache] = useState<Record<number, PageCache | null>>({})
+  const closeTimer = useRef<number | null>(null)
+
+  const ensureLoaded = (page: number) => {
+    if (cache[page] !== undefined) return
+    // Pass quote through so the server can compute hit_offsets and the
+    // popover body can highlight the cited sentence.
+    fetchPage(projectId, file, page, quote || "").then((p) => {
+      setCache((c) => ({ ...c, [page]: p }))
+    })
+  }
+
+  const enter = () => {
+    if (closeTimer.current) {
+      window.clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+    setOpen(true)
+    // Load all pages on first hover so they stack immediately.
+    for (const p of pages) ensureLoaded(p)
+  }
+  const leave = () => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => setOpen(false), 120)
+  }
+
+  const imageBase = `/api/ingest/sources/${encodeURIComponent(file)}/parsed-image/`
+  const allLoaded = pages.every((p) => cache[p] !== undefined)
+  const triggerClass = `cite-ref${verified === false ? " cite-ref--unverified" : ""}`
+  const headBadge =
+    verified === false ? (
+      <span className="cite-popover__unverified-badge">未验证</span>
+    ) : quote ? (
+      <span className="cite-popover__quote-badge">quote 已定位</span>
+    ) : null
+
+  return (
+    <span
+      className="cite-popover-trigger"
+      onMouseEnter={enter}
+      onMouseLeave={leave}
+      onFocus={enter}
+      onBlur={leave}
+      tabIndex={0}
+    >
+      {isValidElement<{ className?: string }>(trigger) && verified === false
+        ? cloneElement(trigger, {
+            className: [trigger.props.className, "cite-ref--unverified"]
+              .filter(Boolean)
+              .join(" "),
+          })
+        : trigger}
+      {open && (
+        <span
+          className="cite-popover"
+          role="dialog"
+          onMouseEnter={enter}
+          onMouseLeave={leave}
+        >
+          <span className="cite-popover__head">
+            <span className="cite-popover__file">{file}</span>
+            <span className="cite-popover__pages">
+              {pages.length === 1
+                ? `第 ${pages[0]} 页`
+                : `第 ${pages.join("、")} 页 · 全部展开`}
+            </span>
+            {headBadge}
+          </span>
+
+          <div className="cite-popover__body">
+            {!allLoaded && (
+              <span className="cite-popover__empty">加载 {pages.length} 页…</span>
+            )}
+            {pages.map((p, i) => {
+              const data = cache[p]
+              if (!data) return null
+              return (
+                <div key={p} className="cite-popover__page">
+                  {pages.length > 1 && (
+                    <div className="cite-popover__page-label">第 {p} 页</div>
+                  )}
+                  <HighlightedMarkdown
+                    content={data.content}
+                    hitOffsets={data.hit_offsets}
+                    imageBase={imageBase}
+                    projectId={projectId}
+                  />
+                  {i < pages.length - 1 && (
+                    <hr className="cite-popover__divider" />
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </span>
+      )}
+    </span>
+  )
+}
+
+// Renders the page markdown (with image URLs rewritten to absolute) and wraps
+// `hitOffsets` ranges in a yellow <mark>. The full set of supported blocks
+// is intentionally narrow — the same subset the existing <Markdown> covers.
+function HighlightedMarkdown({
+  content,
+  hitOffsets,
+  imageBase,
+}: {
+  content: string
+  hitOffsets: number[][]
+  imageBase: string
+  projectId: string
+}) {
+  // Rewrite relative image paths to absolute /api/ingest/.../parsed-image/...
+  const rewritten = useMemo(() => {
+    return content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, src) => {
+      if (/^https?:\/\//.test(src) || src.startsWith("/api/")) return `![${alt}](${src})`
+      // Take the basename — the existing /parsed-image/{name} route accepts just the filename.
+      const fname = src.split("/").pop() || src
+      return `![${alt}](${imageBase}${encodeURIComponent(fname)})`
+    })
+  }, [content, imageBase])
+
+  // Pre-mark the hit offsets with sentinel tokens, then post-process in the
+  // p component to split into <mark>.
+  const marked = useMemo(() => {
+    if (!hitOffsets?.length) return rewritten
+    const valid = hitOffsets
+      .map(([s, e]) => [Math.max(0, s), Math.min(rewritten.length, e)] as [number, number])
+      .filter(([s, e]) => e > s)
+      .sort((a, b) => a[0] - b[0])
+    if (!valid.length) return rewritten
+    let out = ""
+    let cursor = 0
+    for (const [s, e] of valid) {
+      if (s < cursor) continue
+      out += rewritten.slice(cursor, s)
+      out += `@@CITE_HIT@@${rewritten.slice(s, e)}@@/CITE_HIT@@`
+      cursor = e
+    }
+    out += rewritten.slice(cursor)
+    return out
+  }, [rewritten, hitOffsets])
+
+  // Recursively split a string with our hit sentinels into a list of nodes.
+  const splitHits = (text: string, keyPrefix: string): ReactNode => {
+    if (!text.includes("@@CITE_HIT@@")) return text
+    const nodes: ReactNode[] = []
+    const re = /@@CITE_HIT@@([\s\S]*?)@@\/CITE_HIT@@/g
+    let last = 0
+    let m: RegExpExecArray | null
+    let k = 0
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) nodes.push(text.slice(last, m.index))
+      nodes.push(
+        <mark key={`${keyPrefix}-hit-${k++}`} className="cite-hit">
+          {m[1]}
+        </mark>,
+      )
+      last = re.lastIndex
+    }
+    if (last < text.length) nodes.push(text.slice(last))
+    return nodes
+  }
+
+  const wrapHits = (children: ReactNode, keyPrefix: string): ReactNode =>
+    Children.map(children, (child, idx) => {
+      if (typeof child === "string") return splitHits(child, `${keyPrefix}-${idx}`)
+      if (isValidElement<{ children?: ReactNode }>(child) && child.props.children) {
+        return cloneElement(child, {
+          children: wrapHits(child.props.children, `${keyPrefix}-${idx}`),
+        })
+      }
+      return child
+    })
+
+  return (
+    <span className="markdown-body cite-popover__md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
+        components={{
+          ...components,
+          p({ children: pChildren, ...props }: any) {
+            return <p {...props}>{wrapHits(pChildren, "pp")}</p>
+          },
+          li({ children: lChildren, ...props }: any) {
+            return <li {...props}>{wrapHits(lChildren, "ll")}</li>
+          },
+        }}
+      >
+        {marked}
+      </ReactMarkdown>
+    </span>
+  )
+}
+
+// Counterpart: take the plain-text children react-markdown gives us, find the
+// sentinel markers, and split them out into <CitationPopover> nodes.
+
+type CitationStatus = (file: string, page: number) => "verified" | "unverified" | undefined
+type CitationQuoteLookup = (file: string, page: number) => string | undefined
+
+function renderTextWithCitations(
+  text: string,
+  keyPrefix: string,
+  projectId: string,
+  status: CitationStatus | undefined,
+  quoteLookup: CitationQuoteLookup | undefined,
+): ReactNode {
+  if (!text.includes("@@CITE_REF:")) return text
+  const nodes: ReactNode[] = []
+  // Match one citation GROUP (one or more same-file refs joined by @@CITE_SEP@@).
+  const groupRe = /@@CITE_REF:([^#]+)#p=\d+@@(?:@@CITE_SEP@@@@CITE_REF:\1#p=\d+@@)*/g
+  let last = 0
+  let m: RegExpExecArray | null
+  let k = 0
+  while ((m = groupRe.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index))
+    // Split the group back into per-page entries.
+    const chunk = m[0]
+    const entries: Array<{ file: string; page: number }> = []
+    const entryRe = /@@CITE_REF:([^#]+)#p=(\d+)@@/g
+    let em: RegExpExecArray | null
+    while ((em = entryRe.exec(chunk)) !== null) {
+      entries.push({ file: em[1], page: Number(em[2]) })
+    }
+    if (!entries.length) continue
+    const file = entries[0].file
+    const pages = entries.map((e) => e.page)
+    const label = pages.length === 1 ? `⁽ᵖ${pages[0]}⁾` : `⁽ᵖ${pages.join("·")}⁾`
+    // Group status: if any page in the group is unverified, mark the whole
+    // group unverified (mixed groups are rare and safer to err on the side
+    // of caution).
+    let groupVerified: boolean | undefined
+    if (status) {
+      let anyUnverified = false
+      let anyVerified = false
+      for (const e of entries) {
+        const s = status(e.file, e.page)
+        if (s === "unverified") anyUnverified = true
+        else if (s === "verified") anyVerified = true
+      }
+      if (anyUnverified) groupVerified = false
+      else if (anyVerified) groupVerified = true
+    }
+    // The first page's quote is forwarded to the popover so the server can
+    // compute hit_offsets and the popover body can highlight the cited span.
+    const primaryQuote = quoteLookup?.(file, pages[0])
+    nodes.push(
+      <CitationPopover
+        key={`${keyPrefix}-cite-${k++}`}
+        file={file}
+        pages={pages}
+        projectId={projectId}
+        verified={groupVerified}
+        quote={primaryQuote}
+        trigger={<span className="cite-ref">{label}</span>}
+      />,
+    )
+    last = groupRe.lastIndex
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
+
+function withCitations(
+  children: ReactNode,
+  keyPrefix: string,
+  projectId: string,
+  status: CitationStatus | undefined,
+  quoteLookup: CitationQuoteLookup | undefined,
+): ReactNode {
+  return Children.map(children, (child, idx) => {
+    if (typeof child === "string") {
+      return renderTextWithCitations(child, `${keyPrefix}-${idx}`, projectId, status, quoteLookup)
+    }
+    if (isValidElement<{ children?: ReactNode }>(child) && child.props.children) {
+      return cloneElement(child, {
+        children: withCitations(child.props.children, `${keyPrefix}-${idx}`, projectId, status, quoteLookup),
+      })
+    }
+    return child
   })
 }
 
@@ -242,15 +645,68 @@ const components: any = {
   },
 }
 
-export function Markdown({ children }: { children: string }) {
-  const processed = useMemo(() => wrapBareLatexCommands(convertLatexDelimiters(processWikiLinks(stripFrontmatter(children)))), [children])
+export function Markdown({
+  children,
+  projectId,
+  enableCitations = false,
+  citationStatus,
+  citationQuoteLookup,
+  defaultSource,
+}: {
+  children: string
+  projectId?: string
+  enableCitations?: boolean
+  citationStatus?: CitationStatus
+  citationQuoteLookup?: CitationQuoteLookup
+  defaultSource?: string
+}) {
+  const processed = useMemo(
+    () =>
+      wrapBareLatexCommands(
+        convertLatexDelimiters(
+          processCitationRefs(
+            upgradeInlinePageHints(
+              processWikiLinks(stripFrontmatter(children)),
+              defaultSource,
+            ),
+          ),
+        ),
+      ),
+    [children, defaultSource],
+  )
+
+  const pid = projectId || "default"
+  const componentsWithCitations = useMemo(
+    () => ({
+      ...components,
+      p({ children: pChildren, ...props }: any) {
+        return (
+          <p {...props}>
+            {enableCitations
+              ? withCitations(pChildren, "p", pid, citationStatus, citationQuoteLookup)
+              : renderMathChildren(pChildren, "p")}
+          </p>
+        )
+      },
+      li({ children: lChildren, ...props }: any) {
+        return (
+          <li {...props}>
+            {enableCitations
+              ? withCitations(lChildren, "li", pid, citationStatus, citationQuoteLookup)
+              : renderMathChildren(lChildren, "li")}
+          </li>
+        )
+      },
+    }),
+    [enableCitations, pid, citationStatus, citationQuoteLookup],
+  )
 
   return (
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeRaw, rehypeKatex]}
-        components={components}
+        components={componentsWithCitations}
       >
         {processed}
       </ReactMarkdown>

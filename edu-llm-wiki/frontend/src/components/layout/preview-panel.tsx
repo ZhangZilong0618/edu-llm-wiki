@@ -7,12 +7,18 @@ import { toast } from "@/components/ui/toast"
 import { BookOpenCheck, Loader2, Microscope, Network, Save, Sparkles, X } from "lucide-react"
 import type { WikiPage } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
-import { COMMON_RESEARCH_ACTIONS, TYPE_RESEARCH_ACTIONS, type PageType, type ResearchAction } from "@/lib/page-type"
+import { COMMON_RESEARCH_ACTIONS, PageTypeBadge, TYPE_RESEARCH_ACTIONS, type PageType, type ResearchAction } from "@/lib/page-type"
 import { ConceptView } from "@/components/preview/ConceptView"
 import { FormulaView } from "@/components/preview/FormulaView"
 import { PrincipleView } from "@/components/preview/PrincipleView"
 import { SynthesisView } from "@/components/preview/SynthesisView"
 import { SourceView } from "@/components/preview/SourceView"
+import { ProcedureView } from "@/components/preview/ProcedureView"
+import { ExampleView } from "@/components/preview/ExampleView"
+import { MisconceptionView } from "@/components/preview/MisconceptionView"
+import { LearningPathView } from "@/components/preview/LearningPathView"
+import { LearningObjectiveView } from "@/components/preview/LearningObjectiveView"
+import { RubricView } from "@/components/preview/RubricView"
 
 type ResearchResult = {
   title: string
@@ -424,9 +430,7 @@ export function PreviewPanel() {
       {/* Header */}
       <div className="shrink-0 p-3 border-b">
         <div className="flex items-center gap-2">
-          <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-[var(--muted)] text-[var(--muted-foreground)]">
-            {selectedPage.page_type}
-          </span>
+          <PageTypeBadge pageType={selectedPage.page_type} />
           <h2 className="text-sm font-semibold truncate">{displayWikiTitle(selectedPage)}</h2>
           <button
             onClick={() => setResearchOpen((v) => !v)}
@@ -496,12 +500,18 @@ export function PreviewPanel() {
 function PageBodyDispatch({ page, onEdit, onPractice }: { page: WikiPage; onEdit: () => void; onPractice: () => void }) {
   let body: ReactNode
   switch (page.page_type) {
-    case "concept":   body = <ConceptView page={page} />; break
-    case "formula":   body = <FormulaView page={page} />; break
-    case "principle": body = <PrincipleView page={page} />; break
-    case "synthesis": body = <SynthesisView page={page} />; break
-    case "source":    body = <SourceView page={page} />; break
-    default:          body = <Markdown>{page.content || "*No content*"}</Markdown>
+    case "concept":            body = <ConceptView page={page} />; break
+    case "formula":            body = <FormulaView page={page} />; break
+    case "principle":          body = <PrincipleView page={page} />; break
+    case "procedure":          body = <ProcedureView page={page} />; break
+    case "example":            body = <ExampleView page={page} />; break
+    case "misconception":      body = <MisconceptionView page={page} />; break
+    case "synthesis":          body = <SynthesisView page={page} />; break
+    case "learning_path":      body = <LearningPathView page={page} />; break
+    case "learning_objective": body = <LearningObjectiveView page={page} />; break
+    case "rubric":             body = <RubricView page={page} />; break
+    case "source":             body = <SourceView page={page} />; break
+    default:                   body = <Markdown>{page.content || "*No content*"}</Markdown>
   }
   return (
     <>

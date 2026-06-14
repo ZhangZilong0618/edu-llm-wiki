@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react"
 import { useAppStore, type IngestProgress } from "@/stores/app-store"
 import { api, type ParseStatus } from "@/lib/api"
 import { toast } from "@/components/ui/toast"
-import { Upload, Loader2, Trash2, Play, ChevronDown, ChevronUp, FileText, Brain, PenLine, CheckCircle2, X, Zap, Eye, FileScan, RefreshCw, Clock, AlertCircle, ScanSearch } from "lucide-react"
+import { Upload, Loader2, Trash2, Play, ChevronDown, ChevronUp, FileText, Brain, PenLine, CheckCircle2, X, Zap, Eye, FileScan, RefreshCw, Clock, AlertCircle, ScanSearch, FileCheck } from "lucide-react"
 import { Markdown } from "@/components/markdown"
 
 function viewableExt(filename: string): boolean {
@@ -16,12 +16,13 @@ const STAGE_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
   generate_core: { label: "生成主干", icon: <PenLine size={12} /> },
   derive: { label: "生成进阶", icon: <Zap size={12} /> },
   generate_derived: { label: "组装页面", icon: <FileScan size={12} /> },
+  verify_refs: { label: "引用校验", icon: <FileCheck size={12} /> },
   analyze: { label: "LLM 分析", icon: <Brain size={12} /> },
   generate: { label: "LLM 生成", icon: <PenLine size={12} /> },
   write: { label: "写入页面", icon: <CheckCircle2 size={12} /> },
 }
 
-const INGEST_STAGES = ["parse", "plan", "generate_core", "derive", "generate_derived", "write"]
+const INGEST_STAGES = ["parse", "plan", "generate_core", "derive", "generate_derived", "verify_refs", "write"]
 
 const PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg"]
 
@@ -162,6 +163,7 @@ export function SourcesView() {
     setIngesting(filename)
     updateProgress(() => ({
       filename,
+      status: "running" as const,
       stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
     }))
     try {
@@ -216,7 +218,7 @@ export function SourcesView() {
               }
             }
           } else if (event.event === "error") {
-            return { ...prev, error: event.message }
+            return { ...prev, status: "error" as const, error: event.message }
           } else if (event.event === "cached") {
             return {
               ...prev,
@@ -227,6 +229,7 @@ export function SourcesView() {
             return {
               ...prev,
               filename,
+              status: "done" as const,
               stages: prev.stages.map((s) => ({
                 ...s,
                 status: "done" as const,
@@ -262,6 +265,7 @@ export function SourcesView() {
     setIngesting("all")
     updateProgress(() => ({
       filename: `[Batch] ${filenames.length} files`,
+      status: "running" as const,
       stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
     }))
 
@@ -627,6 +631,19 @@ function IngestProgressPanel({
   setExpandedStages: (s: Set<string>) => void
 }) {
   const dismiss = useAppStore((s) => s.setIngestProgress)
+  // 当某阶段有 LLM 日志且 ingest 已完成/出错时，自动展开该阶段。
+  useEffect(() => {
+    if (progress?.status !== "done" && progress?.status !== "error") return
+    const auto = new Set(expandedStages)
+    let changed = false
+    for (const s of progress.stages) {
+      if (s.logs && s.logs.length > 0 && !auto.has(s.stage)) {
+        auto.add(s.stage)
+        changed = true
+      }
+    }
+    if (changed) setExpandedStages(auto)
+  }, [progress?.status, progress?.stages])
   const toggleExpand = (stage: string) => {
     const next = new Set(expandedStages)
     if (next.has(stage)) next.delete(stage)

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from models.wiki import WikiPageCreate, WikiPageUpdate
+from models.wiki import BStageRequest, CStageRequest, StageGenerateResult, WikiPageCreate, WikiPageUpdate
 from storage.wiki_store import (
     delete_wiki_page,
     ensure_dirs,
@@ -138,3 +138,125 @@ async def update_schema(content: dict, project_id: str = Query("default")):
     p = wiki_path(project_id) / "schema.md"
     p.write_text(content.get("content", ""), encoding="utf-8")
     return {"status": "updated"}
+
+
+# ---------- B / C 阶段按需触发（独立 endpoint）----------
+
+@router.post("/generate-b-stage", response_model=StageGenerateResult)
+async def generate_b_stage(req: BStageRequest, project_id: str = Query("default")):
+    """基于一个 A 组页面，按需生成 B 组（example / misconception）页面。
+
+    用法：前端在 Concept / Formula / Principle 详情页的"..." 菜单里
+    挂"基于此页生成 Example / 找出易错点"按钮。
+    """
+    from services.ingest_engine import _generate_b_stage_pages, _verify_cite_refs
+
+    if not req.source_file or not req.page_types:
+        raise HTTPException(status_code=400, detail="source_file and page_types are required")
+
+    # 用 req.source_file 找出"被此 source 引用"的一个 anchor page
+    all_pages = list_wiki_pages(project_id=project_id)
+    candidate = next(
+        (
+            p for p in all_pages
+            if req.source_file in (p.get("sources") or [])
+        ),
+        None,
+    )
+    if not candidate:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No A-stage page found that references source '{req.source_file}'",
+        )
+    full_anchor = read_wiki_page(candidate["path"], project_id=project_id) or candidate
+    new_pages = await _generate_b_stage_pages(
+        anchor_page=full_anchor,
+        page_types=req.page_types,
+        source_file=req.source_file,
+        extra_context=req.extra_context,
+        project_id=project_id,
+    )
+    if not new_pages:
+        return StageGenerateResult(pages_created=[], pages_updated=[], error="LLM 未返回任何页面")
+
+    _verify_cite_refs(new_pages, project_id)
+
+    created: list[str] = []
+    updated: list[str] = []
+    for p in new_pages:
+        try:
+            path = p["path"]
+            existing = read_wiki_page(path, project_id=project_id)
+            write_wiki_page(
+                relative_path=path,
+                title=p.get("title", "Untitled"),
+                page_type=p.get("page_type", "example"),
+                content=p.get("content", ""),
+                sources=p.get("sources", [req.source_file]),
+                tags=p.get("tags", []),
+                prerequisites=p.get("prerequisites", []),
+                project_id=project_id,
+            )
+            (updated if existing else created).append(path)
+        except Exception as exc:
+            continue
+    return StageGenerateResult(pages_created=created, pages_updated=updated, error="")
+
+
+@router.post("/generate-c-stage", response_model=StageGenerateResult)
+async def generate_c_stage(req: CStageRequest, project_id: str = Query("default")):
+    """按需生成一个 C 组（synthesis / learning_path / learning_objective / rubric）页面。"""
+    from services.ingest_engine import _generate_c_stage_page, _verify_cite_refs
+
+    if req.page_type not in ("synthesis", "learning_path", "learning_objective", "rubric"):
+        raise HTTPException(status_code=400, detail=f"Unsupported C-stage page_type: {req.page_type}")
+
+    targets: list[dict] = []
+    for p in req.target_pages or []:
+        full = read_wiki_page(p, project_id=project_id)
+        if full:
+            targets.append(full)
+    if not targets:
+        # 兜底：用项目里所有 A 组页
+        for meta in list_wiki_pages(project_id=project_id):
+            full = read_wiki_page(meta["path"], project_id=project_id)
+            if full and full.get("page_type") in ("concept", "formula", "principle", "procedure"):
+                targets.append(full)
+
+    source_files: list[str] = []
+    for t in targets:
+        for s in t.get("sources", []) or []:
+            if s not in source_files:
+                source_files.append(s)
+
+    new_page = await _generate_c_stage_page(
+        page_type=req.page_type,
+        target_pages=targets,
+        source_files=source_files,
+        extra_context=req.extra_context,
+        project_id=project_id,
+    )
+    if not new_page:
+        return StageGenerateResult(pages_created=[], pages_updated=[], error="LLM 未返回任何内容")
+
+    _verify_cite_refs([new_page], project_id)
+
+    path = new_page.get("path")
+    if not path:
+        return StageGenerateResult(error="生成结果缺 path 字段")
+    existing = read_wiki_page(path, project_id=project_id)
+    write_wiki_page(
+        relative_path=path,
+        title=new_page.get("title", req.page_type.title()),
+        page_type=new_page.get("page_type", req.page_type),
+        content=new_page.get("content", ""),
+        sources=new_page.get("sources", source_files),
+        tags=new_page.get("tags", []),
+        prerequisites=new_page.get("prerequisites", []),
+        project_id=project_id,
+    )
+    return StageGenerateResult(
+        pages_created=[] if existing else [path],
+        pages_updated=[path] if existing else [],
+        error="",
+    )

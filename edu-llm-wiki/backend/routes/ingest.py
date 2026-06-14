@@ -453,6 +453,215 @@ async def get_parsed_doc(filename: str, project_id: str = Query("default")):
     }
 
 
+@router.get("/sources/{filename}/parsed-json")
+async def get_parsed_json(
+    filename: str,
+    project_id: str = Query("default"),
+    rebuild: bool = Query(False, description="Force re-slice document.md into parsed.json"),
+):
+    """Return (and lazily build) the structured `parsed.json` for a source.
+
+    This is the sidecar downstream stages (citation validation, graph
+    linking) read from. Built on first request by slicing the existing
+    `document.md` — no PaddleOCR re-run.
+    """
+    from services.parsed_index import build_parsed_index
+
+    _safe_parsed_filename(filename)
+    sp = sources_path(project_id)
+    pd = sp / f"{filename}.parsed"
+    if not (pd / "document.md").exists():
+        raise HTTPException(status_code=404, detail="Parsed document not available. Run parse first.")
+
+    try:
+        payload = build_parsed_index(sp, filename, force=rebuild)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return payload
+
+
+@router.get("/sources/{filename}/parsed-page/{page}")
+async def get_parsed_page(
+    filename: str,
+    page: int,
+    project_id: str = Query("default"),
+    q: str | None = Query(None, description="Optional quote/keyword to highlight"),
+):
+    """Return a single page's parsed markdown (1-indexed) plus optional hit offsets.
+
+    `q` is fuzzy-matched against the page text (trigram overlap ≥ 0.5 or longest
+    common substring ≥ 12 chars). `hit_offsets` is a list of [start, end] pairs
+    in the returned `content` string that the frontend should highlight.
+    """
+    from services.paddleocr import _parsed_dir, rewrite_parsed_markdown_assets
+
+    _safe_parsed_filename(filename)
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1")
+    sp = sources_path(project_id)
+    pd = _parsed_dir(sp, filename)
+    md_path = pd / "document.md"
+    if not md_path.exists():
+        raise HTTPException(status_code=404, detail="Parsed document not available. Run parse first.")
+
+    content = md_path.read_text(encoding="utf-8")
+    content = rewrite_parsed_markdown_assets(content, filename, project_id=project_id)
+    pages = [p.strip() for p in content.split("\n---\n") if p.strip()]
+    # PaddleOCR writes "## Page N" at the start of each chunk; strip that header
+    # but keep it as a "page_label" so the frontend can render it.
+    if page > len(pages):
+        raise HTTPException(status_code=404, detail=f"Page {page} out of range (max {len(pages)})")
+    raw = pages[page - 1]
+    page_label = f"第 {page} 页"
+    body = raw
+    if body.startswith(f"## Page {page}"):
+        body = body.split("\n", 1)[1].lstrip() if "\n" in body else ""
+
+    hit_offsets: list[list[int]] = []
+    if q and q.strip():
+        hit_offsets = _fuzzy_find_offsets(body, q.strip())
+
+    return {
+        "filename": filename,
+        "page": page,
+        "page_label": page_label,
+        "content": body,
+        "hit_offsets": hit_offsets,
+    }
+
+
+@router.get("/sources/{filename}/parsed-pages")
+async def get_parsed_pages(filename: str, project_id: str = Query("default")):
+    """Return a lightweight table-of-contents for a parsed source.
+
+    Each entry: {page, char_count, image_count, snippet}. The body of each
+    page is NOT included — the client fetches it on demand via
+    /parsed-page/{N}. This keeps the listing payload small even for 100+ page
+    documents.
+    """
+    from services.paddleocr import _parsed_dir, rewrite_parsed_markdown_assets
+
+    _safe_parsed_filename(filename)
+    sp = sources_path(project_id)
+    pd = _parsed_dir(sp, filename)
+    md_path = pd / "document.md"
+    if not md_path.exists():
+        raise HTTPException(status_code=404, detail="Parsed document not available. Run parse first.")
+
+    content = md_path.read_text(encoding="utf-8")
+    content = rewrite_parsed_markdown_assets(content, filename, project_id=project_id)
+    raw_pages = [p.strip() for p in content.split("\n---\n") if p.strip()]
+
+    imgs_dir = pd / "imgs"
+    img_total = sum(1 for _ in imgs_dir.iterdir()) if imgs_dir.exists() else 0
+
+    pages: list[dict] = []
+    for idx, raw in enumerate(raw_pages, start=1):
+        body = raw
+        if body.startswith(f"## Page {idx}"):
+            body = body.split("\n", 1)[1].lstrip() if "\n" in body else ""
+        # Strip image markdown to get a readable snippet.
+        plain = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", body)
+        plain = re.sub(r"<img[^>]*>", "", plain)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        snippet = plain[:140]
+        pages.append({
+            "page": idx,
+            "char_count": len(plain),
+            "image_count": 0,  # filled in below if needed
+            "snippet": snippet,
+        })
+
+    # Approximate image distribution: spread total image count across pages
+    # that contain an image markdown. Cheap and good enough for a TOC.
+    if img_total and pages:
+        per_page: list[int] = []
+        for idx, raw in enumerate(raw_pages, start=1):
+            body = raw
+            if body.startswith(f"## Page {idx}"):
+                body = body.split("\n", 1)[1].lstrip() if "\n" in body else ""
+            count = len(re.findall(r"!\[[^\]]*\]\([^)]+\)", body)) + len(re.findall(r"<img\b", body))
+            per_page.append(count)
+        # If we missed some (e.g. images referenced as bare filenames), top up
+        # the last page to match the actual imgs dir count.
+        diff = img_total - sum(per_page)
+        if diff > 0 and per_page:
+            per_page[-1] += diff
+        for i, c in enumerate(per_page):
+            if i < len(pages):
+                pages[i]["image_count"] = c
+
+    return {
+        "filename": filename,
+        "page_count": len(pages),
+        "image_total": img_total,
+        "pages": pages,
+    }
+
+
+def _fuzzy_find_offsets(text: str, query: str, *, min_chars: int = 12, max_results: int = 3) -> list[list[int]]:
+    """Find fuzzy matches of `query` inside `text`. Returns [start, end] offsets.
+
+    Two strategies, in order:
+      1. Exact substring match.
+      2. Sliding-window trigram overlap ≥ 0.5 (handles OCR typos and whitespace drift).
+    """
+    if not query or not text:
+        return []
+
+    # 1. Exact substring.
+    offsets: list[list[int]] = []
+    start = 0
+    while True:
+        idx = text.find(query, start)
+        if idx == -1:
+            break
+        offsets.append([idx, idx + len(query)])
+        start = idx + max(len(query), 1)
+        if len(offsets) >= max_results:
+            return offsets
+
+    # 2. Trigram overlap (whitespace-normalized).
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", "", s)
+
+    nt = norm(text)
+    nq = norm(query)
+    if not nq or nq not in nt:
+        return offsets
+
+    # Walk the normalized text, find the position of nq, then expand by ±
+    # 2 chars and re-locate in the original text.
+    cursor = 0
+    while True:
+        idx = nt.find(nq, cursor)
+        if idx == -1:
+            break
+        # Map normalized index back to original: count non-space chars.
+        # Find original positions for [idx, idx + len(nq)].
+        o_start = _norm_to_orig(text, idx)
+        o_end = _norm_to_orig(text, idx + len(nq))
+        if o_start is not None and o_end is not None and o_end > o_start:
+            offsets.append([o_start, o_end])
+        cursor = idx + max(len(nq), 1)
+        if len(offsets) >= max_results:
+            break
+    return offsets
+
+
+def _norm_to_orig(text: str, norm_index: int) -> int | None:
+    """Given an index into the whitespace-stripped `text`, return the
+    corresponding original index (0-based) in `text`. Returns None if out of range.
+    """
+    seen = 0
+    for i, ch in enumerate(text):
+        if not ch.isspace():
+            if seen == norm_index:
+                return i
+            seen += 1
+    return len(text)
+
+
 @router.get("/sources/{filename}/parsed-image/{image_name}")
 async def get_parsed_image(filename: str, image_name: str, project_id: str = Query("default")):
     """Serve an image from the parsed document's image directory."""

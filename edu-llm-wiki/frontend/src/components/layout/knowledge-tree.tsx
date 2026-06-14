@@ -6,7 +6,7 @@ import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, Search, X } f
 import type { SearchResult } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
 import { PageBadges } from "@/lib/page-badges"
-import { PAGE_TYPE_CONFIG, PAGE_TYPE_ORDER, type PageType } from "@/lib/page-type"
+import { PAGE_TYPE_CONFIG, PAGE_TYPE_ORDER, STAGE_GROUPS, type PageType } from "@/lib/page-type"
 
 export function KnowledgeTree() {
   const wikiPages = useAppStore((s) => s.wikiPages)
@@ -154,7 +154,11 @@ export function KnowledgeTree() {
         </div>
       )}
 
-      {[...PAGE_TYPE_ORDER, ...Object.keys(grouped).filter((type) => !(PAGE_TYPE_ORDER as string[]).includes(type))].map((type) => {
+      {(
+        STAGE_GROUPS.flatMap((g) => g.types) as string[]
+      ).concat(
+        Object.keys(grouped).filter((t) => !(PAGE_TYPE_ORDER as string[]).includes(t))
+      ).map((type) => {
         const pages = grouped[type] || []
         const collapsed = collapsedTypes.has(type)
         const entry = PAGE_TYPE_CONFIG[type as PageType]

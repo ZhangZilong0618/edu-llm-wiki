@@ -305,6 +305,22 @@ async def _run_parse(source_filename: str, *, project_id: str = "default") -> di
         combined = "\n\n---\n\n".join(md_parts)
         (pd / "document.md").write_text(combined, encoding="utf-8")
 
+        # Slice the combined markdown into the structured sidecar used by
+        # downstream stages (citation validation, graph linking). Built
+        # eagerly so the first /parsed-json request is a cache hit.
+        try:
+            from services.parsed_index import build_parsed_index
+            build_parsed_index(
+                sources_path=sp,
+                source_filename=source_filename,
+                project_id=project_id,
+                force=True,
+            )
+        except Exception as index_err:
+            # Indexing failures must not fail the parse — the lazy endpoint
+            # will rebuild on next request.
+            print(f"[paddleocr] parsed.json build skipped: {index_err}")
+
         _write_status(pd, "done", page_count=len(parsed_pages), image_count=image_count, job_id=job_id)
         return {"status": "done", "page_count": len(parsed_pages), "image_count": image_count}
     except Exception as e:

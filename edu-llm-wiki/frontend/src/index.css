@@ -91,3 +91,111 @@ body {
 .markdown-body img { max-width: 100%; border-radius: var(--radius); margin: 1rem 0; }
 .markdown-body strong { font-weight: 600; color: var(--foreground); }
 .markdown-body em { font-style: italic; }
+
+/* ── Citation popover (global) ──────────────────────────────────────
+   Shared by all preview views that render wiki content. Demo pages
+   carry their own scoped styles and override these as needed. */
+.cite-ref {
+  display: inline-block;
+  color: var(--primary);
+  font-size: 0.78em;
+  vertical-align: super;
+  line-height: 1;
+  margin-left: 2px;
+  padding: 0 3px;
+  border-bottom: 1px dashed var(--primary);
+  cursor: help;
+  position: relative;
+}
+.cite-ref:hover { opacity: 0.7; }
+.cite-ref--unverified {
+  color: #b45309;
+  border-bottom-color: #b45309;
+  border-bottom-style: dotted;
+  opacity: 0.75;
+}
+.cite-ref--unverified:hover { opacity: 1; }
+
+.cite-popover-trigger {
+  position: relative;
+  display: inline-block;
+}
+.cite-popover {
+  position: fixed;
+  z-index: 100;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 720px;
+  max-width: 92vw;
+  max-height: 80vh;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cite-popover__head {
+  padding: 8px 14px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cite-popover__file { font-weight: 500; color: var(--foreground); }
+.cite-popover__pages { color: var(--muted-foreground); margin-left: auto; }
+.cite-popover__unverified-badge {
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #fcd34d;
+}
+.cite-popover__quote-badge {
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #6ee7b7;
+}
+.cite-popover__page { margin-bottom: 4px; }
+.cite-popover__page-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin: 6px 0 8px;
+  padding: 4px 8px;
+  background: var(--muted);
+  border-left: 3px solid var(--primary);
+  border-radius: 0 4px 4px 0;
+}
+.cite-popover__divider {
+  border: none;
+  border-top: 1px dashed var(--border);
+  margin: 14px 0;
+}
+.cite-popover__loading { font-style: italic; }
+.cite-popover__body {
+  padding: 14px 20px 18px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.cite-popover__empty { color: var(--muted-foreground); font-style: italic; }
+.cite-popover__md img { max-width: 100%; height: auto; border-radius: 4px; }
+.cite-popover__md table { font-size: 12px; }
+.cite-hit {
+  background: #fff3a3;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #f0d75a inset;
+}
