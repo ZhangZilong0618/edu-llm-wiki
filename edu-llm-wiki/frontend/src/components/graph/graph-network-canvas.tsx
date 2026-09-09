@@ -9,6 +9,7 @@ import {
 } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import noverlap from "graphology-layout-noverlap";
 import { Maximize, ZoomIn, ZoomOut } from "lucide-react";
 
 import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki";
@@ -174,7 +175,7 @@ function NetworkGraphLoader({
       graph.addNode(node.id, {
         x: radius * Math.cos(angle),
         y: radius * Math.sin(angle),
-        size: (4 + (Math.sqrt(node.size) / Math.sqrt(maxSize)) * 6) * nodeScale,
+        size: (7 + (Math.sqrt(node.size) / Math.sqrt(maxSize)) * 9) * nodeScale,
         color: nodeColorByMode(node, colorMode),
         label: readableLabel(node.label),
         fullLabel: node.label,
@@ -208,18 +209,33 @@ function NetworkGraphLoader({
         iterations: layoutIterations(visible.nodes.length),
         settings: {
           ...settings,
-          gravity: 0.9,
-          scalingRatio: spacing * 1.8,
-          slowDown: 3,
-          strongGravityMode: false,
+          linLogMode: true,
+          outboundAttractionDistribution: true,
+          adjustSizes: true,
+          gravity: 0.45,
+          scalingRatio: spacing * 8,
+          slowDown: 8,
+          strongGravityMode: true,
           barnesHutOptimize: visible.nodes.length > 50,
+        },
+      });
+
+      // Prevent dense clusters from collapsing into an unreadable ring.
+      noverlap.assign(graph, {
+        maxIterations: 250,
+        settings: {
+          gridSize: 40,
+          margin: 10,
+          expansion: 1.25,
+          ratio: 1.2,
+          speed: 3,
         },
       });
     }
 
-    normalizePositions(graph, Math.max(350, Math.sqrt(visible.nodes.length) * 70 * spacing));
+    normalizePositions(graph, Math.max(420, Math.sqrt(visible.nodes.length) * 90 * spacing));
     packComponents(graph, spacing);
-    normalizePositions(graph, Math.max(320, Math.sqrt(visible.nodes.length) * 60 * spacing));
+    normalizePositions(graph, Math.max(380, Math.sqrt(visible.nodes.length) * 80 * spacing));
 
     loadGraph(graph);
     sigma.getCamera().animatedReset({ duration: 0 });
@@ -239,10 +255,18 @@ function NetworkEvents({
   const registerEvents = useRegisterEvents();
   const sigma = useSigma();
   const dragRef = useRef<string | null>(null);
+  const dragMovedRef = useRef(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     registerEvents({
-      clickNode: ({ node }) => onSelect(node),
+      clickNode: ({ node }) => {
+        if (dragMovedRef.current) {
+          dragMovedRef.current = false;
+          return;
+        }
+        onSelect(node);
+      },
 
       enterNode: ({ node }) => {
         sigma.getContainer().style.cursor = "pointer";
@@ -260,12 +284,17 @@ function NetworkEvents({
       downNode: (event) => {
         event.preventSigmaDefault();
         dragRef.current = event.node;
+        dragMovedRef.current = false;
+        dragStartRef.current = { x: event.event.x, y: event.event.y };
         sigma.getContainer().style.cursor = "grabbing";
       },
 
       mousemove: (event) => {
         if (!dragRef.current) return;
         event.preventSigmaDefault();
+        const dx = event.x - dragStartRef.current.x;
+        const dy = event.y - dragStartRef.current.y;
+        if (Math.hypot(dx, dy) > 4) dragMovedRef.current = true;
         const position = sigma.viewportToGraph({ x: event.x, y: event.y });
         sigma.getGraph().setNodeAttribute(dragRef.current, "x", position.x);
         sigma.getGraph().setNodeAttribute(dragRef.current, "y", position.y);

@@ -30,7 +30,7 @@ export function GraphView() {
   const [hover, setHover] = useState<GraphHoverState>(null);
   const [search, setSearch] = useState("");
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set(DEFAULT_HIDDEN_TYPES));
-  const [showWeakLinks, setShowWeakLinks] = useState(false);
+  const [showWeakLinks, setShowWeakLinks] = useState(true);
   const [colorMode, setColorMode] = useState<ColorMode>("type");
   const [nodeScale, setNodeScale] = useState(1);
   const [spacing, setSpacing] = useState(1);
