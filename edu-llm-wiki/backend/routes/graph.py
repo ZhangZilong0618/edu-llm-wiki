@@ -10,7 +10,6 @@ The store layer owns persistence; this file owns HTTP wiring only.
 """
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Query
@@ -68,22 +67,28 @@ async def get_graph(
     many pages at once).
     """
     if rebuild:
-        graph = build_graph(project_id=project_id, force=True)
+        graph = await asyncio.to_thread(build_graph, project_id=project_id, force=True)
     else:
-        nodes = store_get_nodes(project_id)
-        edges = store_get_edges(project_id)
+        nodes, edges = await asyncio.gather(
+            asyncio.to_thread(store_get_nodes, project_id),
+            asyncio.to_thread(store_get_edges, project_id),
+        )
         if not nodes or (len(nodes) > 1 and not edges):
             # New/imported projects can have wiki pages before graph.sqlite has
             # been populated (for example if ingest graph rebuild was skipped).
             # Build once here so the UI does not show an empty graph/path for a
             # project that already has usable wiki content.
-            graph = build_graph(project_id=project_id)
+            graph = await asyncio.to_thread(build_graph, project_id=project_id)
         else:
+            communities, insights = await asyncio.gather(
+                asyncio.to_thread(store_get_communities, project_id),
+                asyncio.to_thread(store_get_insights, project_id),
+            )
             graph = {
                 "nodes": nodes,
                 "edges": edges,
-                "communities": store_get_communities(project_id),
-                "insights": store_get_insights(project_id),
+                "communities": communities,
+                "insights": insights,
             }
     return GraphData(**graph)
 
@@ -97,13 +102,13 @@ async def get_neighborhood(
     """Get a node and its neighbours up to ``depth`` hops, anchored at the
     store snapshot so it benefits from the same incremental indexing.
     """
-    return get_node_neighborhood(node_id, depth, project_id=project_id)
+    return await asyncio.to_thread(get_node_neighborhood, node_id, depth, project_id=project_id)
 
 
 @router.get("/insights")
 async def get_insights(project_id: str = Query("default")) -> list[dict]:
     """Get graph insights only, served from the persistent store."""
-    return store_get_insights(project_id)
+    return await asyncio.to_thread(store_get_insights, project_id)
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +128,16 @@ async def get_learning_path(
     reached the ``proficient`` level on.
     """
     from services.graph_store import list_mastery
-    mastery_rows = list_mastery(project_id, user_id)
-    return compute_learning_path(
+    mastery_rows, edges, nodes = await asyncio.gather(
+        asyncio.to_thread(list_mastery, project_id, user_id),
+        asyncio.to_thread(store_get_edges, project_id),
+        asyncio.to_thread(store_get_nodes, project_id),
+    )
+    return await asyncio.to_thread(
+        compute_learning_path,
         target=node_id,
-        edges=store_get_edges(project_id),
-        nodes_by_id={n["id"]: n for n in store_get_nodes(project_id)},
+        edges=edges,
+        nodes_by_id={n["id"]: n for n in nodes},
         mastery_map={r["node_id"]: r.get("state", "new") for r in mastery_rows},
         mastery_scores={r["node_id"]: float(r.get("score", 0.0)) for r in mastery_rows},
         max_steps=max_steps,
@@ -140,7 +150,7 @@ async def get_mastery_summary(
     project_id: str = Query("default"),
 ) -> list[dict]:
     """Per-node mastery records for the user (consumed by the graph view)."""
-    return store_mastery_summary(project_id=project_id, user_id=user_id) if False else _list_mastery(project_id, user_id)
+    return await asyncio.to_thread(_list_mastery, project_id, user_id)
 
 
 def _list_mastery(project_id: str, user_id: str) -> list[dict]:
@@ -162,7 +172,7 @@ async def get_node_mastery(
     project_id: str = Query("default"),
 ) -> dict:
     """Return the mastery record for a single node."""
-    record = store_get_mastery(project_id=project_id, user_id=user_id, node_id=node_id)
+    record = await asyncio.to_thread(store_get_mastery, project_id=project_id, user_id=user_id, node_id=node_id)
     return record or {"node_id": node_id, "level": "new", "score": 0.0}
 
 
@@ -175,8 +185,9 @@ async def post_node_exposure(
     """Mark the learner as having seen ``node_id`` (page open, chat
     referenced, etc.). Promotes ``new`` → ``exposed``.
     """
-    level = store_record_exposure(project_id=project_id, user_id=user_id, node_id=node_id)
-    record_graph_event(
+    level = await asyncio.to_thread(store_record_exposure, project_id=project_id, user_id=user_id, node_id=node_id)
+    await asyncio.to_thread(
+        record_graph_event,
         project_id=project_id,
         event_type="node_exposed",
         payload={"node_id": node_id, "level": level},
@@ -194,13 +205,15 @@ async def post_node_attempt(
     """Record a graded attempt against ``node_id``. ``score`` is the
     normalised 0..1 result returned by the grader.
     """
-    level = store_record_attempt(
+    level = await asyncio.to_thread(
+        store_record_attempt,
         project_id=project_id,
         user_id=user_id,
         node_id=node_id,
         score=score,
     )
-    record_graph_event(
+    await asyncio.to_thread(
+        record_graph_event,
         project_id=project_id,
         event_type="node_attempted",
         payload={"node_id": node_id, "score": score, "level": level},
@@ -270,7 +283,7 @@ async def get_learner_state(
 ) -> dict:
     """8-dim learner state summary (BKT p_known avg, weak KCs, etc.)."""
     from services import mastery
-    return mastery.learner_state_summary(project_id=project_id, user_id=user_id)
+    return await asyncio.to_thread(mastery.learner_state_summary, project_id=project_id, user_id=user_id)
 
 
 @router.get("/learning/schedule")
@@ -281,7 +294,7 @@ async def get_learning_schedule(
 ) -> list[dict]:
     """SR review queue ordered by due_at."""
     from services import mastery
-    return mastery.queue_for_user(project_id=project_id, user_id=user_id, limit=limit)
+    return await asyncio.to_thread(mastery.queue_for_user, project_id=project_id, user_id=user_id, limit=limit)
 
 
 @router.post("/learning/review")
@@ -329,9 +342,12 @@ async def get_learning_insights(
     from services.graph_engine import generate_learner_insights
     from services.graph_engine import build_graph as _bg
     from services import mastery
-    graph = _bg(project_id=project_id)
-    state = mastery.learner_state_summary(project_id=project_id, user_id=user_id)
-    return generate_learner_insights(
+    graph, state = await asyncio.gather(
+        asyncio.to_thread(_bg, project_id=project_id),
+        asyncio.to_thread(mastery.learner_state_summary, project_id=project_id, user_id=user_id),
+    )
+    return await asyncio.to_thread(
+        generate_learner_insights,
         graph["nodes"],
         graph["edges"],
         graph.get("communities") or [],

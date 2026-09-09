@@ -121,18 +121,29 @@ async def run_ingest_endpoint(req: IngestRequest, project_id: str = Query("defau
 
 @router.get("/sources")
 async def list_sources(project_id: str = Query("default")):
-    """List all files in sources/ directory."""
+    """List all files in sources/ directory.
+
+    ``imported`` marks files that currently have generated wiki pages recorded
+    in the source manifest, so the UI can distinguish files already ingested
+    into the knowledge graph from files that still need processing.
+    """
     sp = sources_path(project_id)
     if not sp.exists():
         return []
+
+    manifest = read_source_manifest(project_id=project_id)
     files = []
     for f in sorted(sp.iterdir()):
-        if f.is_file():
-            files.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "modified": f.stat().st_mtime,
-            })
+        if not f.is_file():
+            continue
+        generated_pages = manifest.get(f.name, [])
+        stat = f.stat()
+        files.append({
+            "name": f.name,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "imported": bool(generated_pages),
+        })
     return files
 
 

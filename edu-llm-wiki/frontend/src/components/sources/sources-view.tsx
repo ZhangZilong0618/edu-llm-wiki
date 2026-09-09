@@ -485,6 +485,15 @@ export function SourcesView() {
               onDoubleClick={() => handlePreview(f.name)}
             >
               <span className="flex-1 truncate text-[var(--sidebar-foreground)]">{f.name}</span>
+              {f.imported ? (
+                <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                  已入图谱
+                </span>
+              ) : (
+                <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                  未导入
+                </span>
+              )}
               <span className="text-[10px] text-[var(--muted-foreground)]">
                 {(f.size / 1024).toFixed(0)} KB
               </span>

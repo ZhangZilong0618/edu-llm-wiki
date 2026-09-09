@@ -69,8 +69,8 @@ interface AppState {
   setIsSearching: (v: boolean) => void
 
   // Sources
-  sourceFiles: { name: string; size: number; modified: number }[]
-  setSourceFiles: (files: { name: string; size: number; modified: number }[]) => void
+  sourceFiles: { name: string; size: number; modified: number; imported?: boolean }[]
+  setSourceFiles: (files: { name: string; size: number; modified: number; imported?: boolean }[]) => void
 
   // Ingest progress
   ingestStatus: string

@@ -103,6 +103,7 @@ export interface FileEntry {
   name: string
   size: number
   modified: number
+  imported?: boolean
 }
 
 export interface Project {

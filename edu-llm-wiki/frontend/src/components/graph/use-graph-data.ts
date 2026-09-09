@@ -10,6 +10,7 @@ import type { GraphData } from "@/types/wiki";
 export type MasteryMap = Record<string, MasterySnapshot>;
 
 export interface MasterySnapshot {
+  node_id: string;
   level: "new" | "exposed" | "learning" | "proficient" | "mastered";
   score: number;
   attempts: number;
@@ -48,21 +49,22 @@ export function useGraphData({
     setProjectId(projectId);
     (async () => {
       try {
-        const graph = (await api.getGraph()) as GraphData;
+        const [graph, masteryList] = await Promise.all([
+          api.getGraph() as Promise<GraphData>,
+          withMastery
+            ? api.listMastery().catch(() => {
+                // mastery is optional — non-fatal
+                return [] as MasterySnapshot[];
+              })
+            : Promise.resolve([] as MasterySnapshot[]),
+        ]);
         if (cancelled) return;
         setData(graph);
-        if (withMastery) {
-          try {
-            const list = (await api.listMastery()) ?? [];
-            if (!cancelled) {
-              const map: MasteryMap = {};
-              for (const m of list) map[m.node_id] = m as MasterySnapshot;
-              setMastery(map);
-            }
-          } catch {
-            // mastery is optional — non-fatal
-          }
-        }
+
+        const list: MasterySnapshot[] = masteryList ?? [];
+        const map: MasteryMap = {};
+        for (const m of list) map[m.node_id] = m as MasterySnapshot;
+        setMastery(map);
       } catch (e: any) {
         if (!cancelled) setError(e?.message || String(e));
       } finally {

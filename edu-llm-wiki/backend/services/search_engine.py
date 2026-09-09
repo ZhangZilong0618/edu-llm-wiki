@@ -8,10 +8,11 @@ Phase 2: Graph expansion (1-2 hop)
 import asyncio
 import re
 from collections import defaultdict
+from functools import lru_cache
 
 from config import settings
 from services.graph_store import get_edges, get_nodes, make_node_id, record_exposure
-from storage.wiki_store import list_wiki_pages, read_wiki_page
+from storage.wiki_store import list_wiki_pages, parse_frontmatter, wiki_path
 
 # Stop words for Chinese and English
 STOP_WORDS = {
@@ -23,6 +24,34 @@ STOP_WORDS = {
 }
 
 WIKILINK_RE = re.compile(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]')
+
+
+@lru_cache(maxsize=512)
+def _cached_page_body(
+    path: str,
+    mtime_ns: int,
+    size: int,
+    project_id: str,
+) -> str:
+    """Cache a wiki page body by its file signature.
+
+    The key includes ``mtime`` and size, so normal edits still invalidate the
+    entry without a global cache reset.
+    """
+    full_path = wiki_path(project_id) / path
+    raw = full_path.read_text(encoding="utf-8")
+    _, body = parse_frontmatter(raw)
+    return body
+
+
+def _page_body(path: str, *, project_id: str = "default") -> str:
+    """Return a page body, using the signature-aware cache when possible."""
+    full_path = wiki_path(project_id) / path
+    try:
+        stat = full_path.stat()
+    except OSError:
+        return ""
+    return _cached_page_body(path, stat.st_mtime_ns, stat.st_size, project_id)
 
 
 def tokenize_query(query: str) -> list[str]:
@@ -64,13 +93,10 @@ def keyword_search(query: str, top_k: int = 20, *, project_id: str = "default") 
     page_by_path = {p["path"]: p for p in pages}
     for page in pages:
         path = page["path"]
-        content = ""
         try:
-            page_data = read_wiki_page(path, project_id=project_id)
-            if page_data:
-                content = page_data.get("content", "")
+            content = _page_body(path, project_id=project_id)
         except Exception:
-            pass
+            content = ""
 
         title = page.get("title", "")
         title_lower = title.lower()
@@ -192,8 +218,10 @@ async def graph_expand(
         for neighbor, neighbor_path, weight in candidates[:3]:
             seen_paths.add(neighbor_path)
             node = nodes_by_id[neighbor]
-            page = read_wiki_page(neighbor_path, project_id=project_id)
-            content = page.get("content", "") if page else ""
+            try:
+                content = _page_body(neighbor_path, project_id=project_id)
+            except Exception:
+                content = ""
             # Score combines original score + edge weight (normalized)
             new_results.append({
                 "path": neighbor_path,

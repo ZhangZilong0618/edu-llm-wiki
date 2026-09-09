@@ -65,7 +65,25 @@ const PADDING_Y = 96;
 const LANE_TOP = 56;
 
 export function GraphCanvas(props: GraphCanvasProps) {
-  const layout = useMemo(() => buildLearningMapLayout(props), [props]);
+  const layout = useMemo(
+    () =>
+      buildLearningMapLayout({
+        data: props.data,
+        hiddenTypes: props.hiddenTypes,
+        showWeakLinks: props.showWeakLinks,
+        searchQuery: props.searchQuery,
+        nodeScale: props.nodeScale,
+        spacing: props.spacing,
+      }),
+    [
+      props.data,
+      props.hiddenTypes,
+      props.showWeakLinks,
+      props.searchQuery,
+      props.nodeScale,
+      props.spacing,
+    ],
+  );
   const query = props.searchQuery.trim().toLowerCase();
 
   if (layout.nodes.length === 0) {
@@ -330,7 +348,12 @@ function GraphNodeCard({
   );
 }
 
-function buildLearningMapLayout(props: GraphCanvasProps) {
+function buildLearningMapLayout(
+  props: Pick<
+    GraphCanvasProps,
+    "data" | "hiddenTypes" | "showWeakLinks" | "searchQuery" | "nodeScale" | "spacing"
+  >,
+) {
   const graph = sanitizeGraphData(props.data);
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
   const visibleNodeIds = new Set(
