@@ -70,6 +70,17 @@ export function GraphView() {
     };
   }, [selected, data, nodesById]);
 
+  // A graph rebuild can remove the selected page (for example after generated
+  // wiki pages are deleted). Clear both the selection and its learning path so
+  // the sidebar never continues to display a route to a nonexistent node.
+  useEffect(() => {
+    if (!data || !selected) return;
+    if (!nodesById[selected.node.id]) {
+      setSelected(null);
+      setPath(null);
+    }
+  }, [data, nodesById, selected]);
+
   // Auto-load a learning path when the user selects a node they haven't
   // mastered yet. Skipped silently if mastery is still loading.
   useEffect(() => {
