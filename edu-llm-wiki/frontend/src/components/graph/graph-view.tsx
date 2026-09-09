@@ -9,7 +9,7 @@ import { useAppStore } from "@/stores/app-store";
 import { api, type LearningPathResponse } from "@/lib/api";
 import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki";
 
-import { GraphCanvas, type GraphHoverState, type GraphSelection } from "./graph-canvas";
+import { GraphNetworkCanvas, type GraphHoverState, type GraphSelection } from "./graph-network-canvas";
 import { GraphFilterPanel } from "./graph-filter-panel";
 import { GraphMasteryBadge } from "./graph-mastery-badge";
 import { useGraphData, type MasteryMap } from "./use-graph-data";
@@ -133,7 +133,7 @@ export function GraphView() {
       }
     >
       <section className="relative min-h-0 min-w-0 overflow-hidden bg-[var(--background)]">
-        <GraphCanvas
+        <GraphNetworkCanvas
           data={data}
           selected={selected}
           hover={hover}
@@ -144,7 +144,7 @@ export function GraphView() {
           nodeScale={nodeScale}
           spacing={spacing}
           showWeakLinks={showWeakLinks}
-          onSelect={(id) => {
+          onSelect={(id: string) => {
             const node = nodesById[id] || null;
             setSelected(node ? { node, degree: 0 } : null);
             if (node) void jumpToWiki(node);
