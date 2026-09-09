@@ -394,9 +394,13 @@ export function SourcesView() {
     }
     try {
       const result = await api.deleteSourceWiki(filename)
-      const pages = await api.listPages()
+      const [pages, sources] = await Promise.all([
+        api.listPages(),
+        api.listSources(),
+      ])
       useAppStore.getState().setWikiPages(pages)
       useAppStore.getState().setSelectedPage(null)
+      setSourceFiles(Array.isArray(sources) ? sources : [])
       toast({ type: "success", message: `Deleted ${result.deleted_count} generated wiki page(s)` })
     } catch (e: any) {
       toast({ type: "error", message: `Failed to delete generated wiki: ${e?.message || e}` })

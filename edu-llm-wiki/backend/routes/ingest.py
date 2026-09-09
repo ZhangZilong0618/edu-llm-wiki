@@ -132,17 +132,33 @@ async def list_sources(project_id: str = Query("default")):
         return []
 
     manifest = read_source_manifest(project_id=project_id)
+    wp = wiki_path(project_id)
     files = []
     for f in sorted(sp.iterdir()):
         if not f.is_file():
             continue
-        generated_pages = manifest.get(f.name, [])
+        generated_pages = [
+            path
+            for path in manifest.get(f.name, [])
+            if (wp / path).is_file()
+        ]
+        # Legacy imports may predate the manifest. Fall back to the standard
+        # source-summary page so their status remains accurate after a manual
+        # manifest reset or an older ingest.
+        source_stem = _safe_source_stem(f.name)
+        legacy_summary_exists = any(
+            (wp / path).is_file()
+            for path in (
+                f"sources/{source_stem}.md",
+                f"source/{source_stem}.md",
+            )
+        )
         stat = f.stat()
         files.append({
             "name": f.name,
             "size": stat.st_size,
             "modified": stat.st_mtime,
-            "imported": bool(generated_pages),
+            "imported": bool(generated_pages or legacy_summary_exists),
         })
     return files
 
@@ -242,12 +258,26 @@ async def delete_source_wiki(filename: str, project_id: str = Query("default")):
     remove_source_manifest(filename, project_id=project_id)
     rebuild_index(project_id=project_id)
 
+    # The persistent learning graph is derived from wiki pages. Rebuild it after
+    # deletion so graph nodes, mastery references, and the UI's "already
+    # imported" state do not continue to reflect removed pages.
+    graph_rebuilt = False
+    graph_error = ""
+    try:
+        from services.graph_engine import build_graph
+        build_graph(project_id=project_id, force=True)
+        graph_rebuilt = True
+    except Exception as exc:
+        graph_error = str(exc)
+
     return {
         "status": "deleted",
         "source": filename,
         "deleted_pages": deleted,
         "deleted_count": len(deleted),
         "cache_deleted": cache_deleted,
+        "graph_rebuilt": graph_rebuilt,
+        "graph_error": graph_error,
     }
 
 
