@@ -3,7 +3,7 @@
 // persist across view changes; each child component is dumb.
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { GitFork, RefreshCw } from "lucide-react";
+import { BookOpen, GitFork, RefreshCw, X } from "lucide-react";
 
 import { useAppStore } from "@/stores/app-store";
 import { api, type LearningPathResponse } from "@/lib/api";
@@ -36,6 +36,7 @@ export function GraphView() {
   const [spacing, setSpacing] = useState(1);
   const [path, setPath] = useState<LearningPathResponse | null>(null);
   const [pathLoading, setPathLoading] = useState(false);
+  const [nodeDetail, setNodeDetail] = useState<{ text: string; loading: boolean } | null>(null);
 
   const visibleNodes = useMemo<GraphNode[]>(() => {
     if (!data) return [];
@@ -48,7 +49,7 @@ export function GraphView() {
     return m;
   }, [data]);
 
-  const jumpToWiki = useCallback(async (node: GraphNode) => {
+  const openNodeInWiki = useCallback(async (node: GraphNode) => {
     const path = typeof node.metadata?.path === "string" ? node.metadata.path : null
     if (!path) return
     setActiveView("wiki")
@@ -69,6 +70,40 @@ export function GraphView() {
       degree: neighbors.length,
     };
   }, [selected, data, nodesById]);
+
+  // Clicking a graph node only shows an inline description. It never changes
+  // the active app view, so users can explore without losing the graph.
+  useEffect(() => {
+    if (!selectedNodeData) {
+      setNodeDetail(null);
+      return;
+    }
+    const node = selectedNodeData.node;
+    const localDescription = ["description", "definition", "summary"]
+      .map((key) => (typeof node.metadata?.[key] === "string" ? node.metadata[key] as string : ""))
+      .find((value) => value.trim());
+    if (localDescription) {
+      setNodeDetail({ text: cleanNodeDescription(localDescription), loading: false });
+      return;
+    }
+
+    const pagePath = typeof node.metadata?.path === "string" ? node.metadata.path : null;
+    if (!pagePath) {
+      setNodeDetail({ text: "暂无节点描述。", loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setNodeDetail({ text: "", loading: true });
+    api.getPage(pagePath)
+      .then((page) => {
+        if (!cancelled) setNodeDetail({ text: cleanNodeDescription(page.content), loading: false });
+      })
+      .catch(() => {
+        if (!cancelled) setNodeDetail({ text: "暂无节点描述。", loading: false });
+      });
+    return () => { cancelled = true; };
+  }, [selectedNodeData]);
 
   // A graph rebuild can remove the selected page (for example after generated
   // wiki pages are deleted). Clear both the selection and its learning path so
@@ -147,7 +182,6 @@ export function GraphView() {
           onSelect={(id: string) => {
             const node = nodesById[id] || null;
             setSelected(node ? { node, degree: 0 } : null);
-            if (node) void jumpToWiki(node);
           }}
           onHover={setHover}
         />
@@ -164,6 +198,40 @@ export function GraphView() {
             节点 {visibleNodes.length}/{data.nodes.length} · 边 {data.edges.length}
           </span>
         </div>
+
+        {selectedNodeData && (
+          <div className="pointer-events-auto absolute bottom-4 right-4 z-10 w-[min(380px,calc(100%-2rem))] rounded-xl border bg-white/95 shadow-xl backdrop-blur">
+            <div className="flex items-start justify-between gap-2 border-b px-3 py-2">
+              <div className="min-w-0">
+                <h3 className="truncate text-sm font-semibold">{selectedNodeData.node.label}</h3>
+                <p className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
+                  {selectedNodeData.node.node_type} · 邻居 {selectedNodeData.degree}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                className="rounded p-1 text-slate-500 hover:bg-slate-100"
+                title="关闭"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="max-h-40 overflow-y-auto px-3 py-2 text-[12px] leading-5 text-slate-700">
+              {nodeDetail?.loading ? "正在加载描述…" : nodeDetail?.text || "暂无节点描述。"}
+            </div>
+            {typeof selectedNodeData.node.metadata?.path === "string" && (
+              <div className="border-t px-3 py-2">
+                <button
+                  onClick={() => void openNodeInWiki(selectedNodeData.node)}
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
+                >
+                  <BookOpen size={12} />
+                  在 Wiki 中打开
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <aside
@@ -213,7 +281,6 @@ export function GraphView() {
                       <button
                         onClick={() => {
                           setSelected({ node: n.node, degree: 0 });
-                          void jumpToWiki(n.node);
                         }}
                         className="truncate text-left"
                       >
@@ -300,4 +367,22 @@ function computeDegree(nodeId: string, edges: GraphEdge[]): number {
     if (e.source === nodeId || e.target === nodeId) deg++;
   }
   return deg;
+}
+
+
+function cleanNodeDescription(content: string): string {
+  const withoutRefs = (content || "")
+    .replace(/\[ref:[^\]]+\]/g, "")
+    .replace(/\{\{[^}]+\}\}/g, "")
+    .trim();
+
+  const definitionMatch = withoutRefs.match(/^##\s*定义\s*\n?([\s\S]*?)(?=\n##\s|$)/im);
+  const explanationMatch = withoutRefs.match(/^##\s*(?:解释|说明)\s*\n?([\s\S]*?)(?=\n##\s|$)/im);
+  const paragraph = (definitionMatch?.[1] || explanationMatch?.[1] || withoutRefs)
+    .replace(/^#+\s*/gm, "")
+    .replace(/\n+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return paragraph.length > 360 ? `${paragraph.slice(0, 360)}…` : paragraph || "暂无节点描述。";
 }

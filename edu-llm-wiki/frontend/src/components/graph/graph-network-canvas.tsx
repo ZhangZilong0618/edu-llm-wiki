@@ -202,8 +202,8 @@ function hexAlpha(color: string, alpha: number) {
 }
 
 function nodeRadius(node: RuntimeNode, nodeScale: number, globalScale: number) {
-  const base = 3.2 + Math.sqrt(Math.max(node.size, 1)) * 0.62 + Math.min(node.degree * 0.055, 0.65);
-  return Math.min(14, base * nodeScale) / Math.max(globalScale, 0.2);
+  const base = 6.2 + Math.sqrt(Math.max(node.size, 1)) * 0.82 + Math.min(node.degree * 0.07, 1.1);
+  return Math.min(22, base * nodeScale) / Math.max(globalScale, 0.2);
 }
 
 export function GraphNetworkCanvas(props: GraphCanvasProps) {
@@ -354,9 +354,10 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
       }
 
       const shouldShowLabel =
+        graph.nodes.length <= 220 ||
         isHovered ||
         isSelected ||
-        globalScale >= (graph.nodes.length > 220 ? 2.7 : 1.9) ||
+        globalScale >= 1.5 ||
         (searchQuery.trim().length > 0 && isHighlighted);
 
       if (!shouldShowLabel) return;
@@ -392,8 +393,26 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
       ctx.strokeStyle = dimmed ? hexAlpha(color, 0.08) : hexAlpha(color, strong ? 0.52 : 0.28);
       ctx.lineWidth = (highlighted ? 2.1 : strong ? 1.25 : 0.68) / globalScale;
       ctx.stroke();
+
+      const shouldShowEdgeLabel =
+        highlighted ||
+        (!dimmed && (graph.links.length <= 260 || globalScale >= 1.15));
+      if (!shouldShowEdgeLabel) return;
+
+      const text = readableLabel(edgeLabel(rawLink.edge_type), 14);
+      const fontSize = 9.5 / globalScale;
+      ctx.font = `${fontSize}px Inter, ui-sans-serif, system-ui, -apple-system, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const mx = (source.x + target.x) / 2;
+      const my = (source.y + target.y) / 2;
+      ctx.strokeStyle = "rgba(255,255,255,0.88)";
+      ctx.lineWidth = 2.8 / globalScale;
+      ctx.strokeText(text, mx, my);
+      ctx.fillStyle = dimmed ? "rgba(100,116,139,0.45)" : strong ? "rgba(37,99,235,0.82)" : "rgba(71,85,105,0.72)";
+      ctx.fillText(text, mx, my);
     },
-    [highlightedLinkKeys, hover, searchQuery],
+    [graph.links.length, highlightedLinkKeys, hover, searchQuery],
   );
 
   const handleHover = useCallback(
@@ -479,7 +498,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
         onNodeHover={handleHover}
       />
 
-      <div className="absolute bottom-4 right-4 flex flex-col gap-2 rounded-lg border bg-white/90 p-1 shadow-sm backdrop-blur">
+      <div className="absolute bottom-4 left-4 flex flex-col gap-2 rounded-lg border bg-white/90 p-1 shadow-sm backdrop-blur">
         <button
           type="button"
           onClick={() => fgRef.current?.zoom(zoom * 1.25, 180)}
