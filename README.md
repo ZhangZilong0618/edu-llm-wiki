@@ -90,6 +90,22 @@ pip install pytest      # 跑学习理论单测
    review  ────►  SM-2 scheduler
 ```
 
+### 材料科学领域图谱流水线
+
+`backend/services/materials_graph.py` 提供一条面向材料科学教学的四阶段领域图谱抽取流程：
+
+1. **Course profile**：识别课程、主题、章节、先修课程与核心能力；
+2. **Knowledge atoms**：抽取 `material / composition / processing / structure / property / mechanism / instrument / algorithm / descriptor / dataset / failure_mode / case / safety_rule` 等领域节点；
+3. **Typed relations**：抽取 `composition → processing → structure → property → performance → failure → diagnosis` 以及 `measured_by / characterized_by / modeled_by / predicted_by` 等领域边；
+4. **Pedagogical attributes**：为每个节点补充难度、Bloom 层级、前置知识、常见误解、学习目标、预计学习时长和跨课程关联。
+
+该流水线通过 DeepSeek/OpenAI-compatible API 调用 `deepseek-v4-flash`，并暴露两个端点：
+
+- `POST /api/materials-graph/extract`：从原始课程文本抽取领域图谱；
+- `POST /api/materials-graph/from-page`：从已有 Wiki 页面抽取领域图谱。
+
+相关单测位于 `backend/tests/materials_graph/`，覆盖本体归一化、四阶段编排、无效边过滤和 JSON 修复重试。
+
 ### 后端目录树
 
 ```

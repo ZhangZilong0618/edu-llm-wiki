@@ -34,6 +34,49 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 type FileEntry = { name: string; size: number; modified: number }
 type WikiPageSummary = { path: string; title: string; type: string; summary: string }
 
+export interface MaterialsGraphNode {
+  id: string
+  label: string
+  node_type: string
+  definition: string
+  source_ref?: string | null
+  difficulty?: number | null
+  bloom_level?: string | null
+  prerequisites?: string[]
+  common_misconceptions?: string[]
+  learning_objectives?: string[]
+  estimated_minutes?: number | null
+  related_courses?: string[]
+}
+
+export interface MaterialsGraphEdge {
+  source: string
+  target: string
+  edge_type: string
+  evidence: string
+  confidence: number
+  weight: number
+}
+
+export interface MaterialsGraphData {
+  source_title: string
+  course_profile: {
+    course: string
+    topic: string
+    chapters: { title: string; summary: string }[]
+    prerequisite_courses: string[]
+    core_competencies: string[]
+  }
+  nodes: MaterialsGraphNode[]
+  edges: MaterialsGraphEdge[]
+  stats: {
+    node_count: number
+    edge_count: number
+    node_types: string[]
+    edge_types: string[]
+  }
+}
+
 export const api = {
   // Projects
   listProjects: () => request<Project[]>(`${BASE}/projects`),
@@ -338,6 +381,18 @@ export const api = {
     request<LearnerInsight[]>(
       `${BASE}/graph/learning/insights?${p()}&user_id=${user_id}`,
     ),
+
+  // Materials-science domain graph
+  extractMaterialsGraph: (sourceTitle: string, content: string) =>
+    request<MaterialsGraphData>(`${BASE}/materials-graph/extract`, {
+      method: "POST",
+      body: JSON.stringify({ source_title: sourceTitle, content }),
+    }),
+  extractMaterialsGraphFromPage: (pagePath: string) =>
+    request<MaterialsGraphData>(`${BASE}/materials-graph/from-page`, {
+      method: "POST",
+      body: JSON.stringify({ page_path: pagePath }),
+    }),
 }
 
 export interface LlmSettings {

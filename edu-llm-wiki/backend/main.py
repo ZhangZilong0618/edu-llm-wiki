@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from routes import chat, conversations, graph, ingest, projects, research, search, settings_api, tests, wiki
+from routes import chat, conversations, graph, ingest, materials_graph, projects, research, search, settings_api, tests, wiki
 from storage.wiki_store import ensure_dirs
 
 app = FastAPI(
@@ -28,6 +28,7 @@ app.add_middleware(
 app.include_router(ingest.router)
 app.include_router(search.router)
 app.include_router(graph.router)
+app.include_router(materials_graph.router)
 app.include_router(chat.router)
 app.include_router(wiki.router)
 app.include_router(projects.router)
