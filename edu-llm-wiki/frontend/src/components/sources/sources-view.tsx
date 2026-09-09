@@ -26,6 +26,13 @@ const INGEST_STAGES = ["parse", "plan", "generate_core", "derive", "generate_der
 
 const PARSEABLE_EXTS = [".pdf", ".png", ".jpg", ".jpeg"]
 
+type IngestTaskStatus = "queued" | "running" | "done" | "error"
+
+interface IngestTaskState {
+  status: IngestTaskStatus
+  message?: string
+}
+
 export function SourcesView() {
   const { sourceFiles, setSourceFiles } = useAppStore()
   const progress = useAppStore((s) => s.ingestProgress)
@@ -38,7 +45,12 @@ export function SourcesView() {
   const beginOperation = useAppStore((s) => s.beginOperation)
   const endOperation = useAppStore((s) => s.endOperation)
   const uploading = Boolean(operations["sources:upload"])
-  const [ingesting, setIngesting] = useState<string>("")
+  const [taskQueue, setTaskQueue] = useState<string[]>([])
+  const [activeTask, setActiveTask] = useState<string | null>(null)
+  const [taskStates, setTaskStates] = useState<Record<string, IngestTaskState>>({})
+  const queueRef = useRef<string[]>([])
+  const activeTaskRef = useRef<string | null>(null)
+  const queueRunningRef = useRef(false)
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [confirmDeleteWiki, setConfirmDeleteWiki] = useState<string | null>(null)
@@ -158,14 +170,15 @@ export function SourcesView() {
     }
   }
 
-  const handleIngest = async (filename: string) => {
+  const runIngestTask = useCallback(async (filename: string) => {
     clearProgressDismissTimer()
-    setIngesting(filename)
     updateProgress(() => ({
       filename,
       status: "running" as const,
       stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
     }))
+
+    let failed = false
     try {
       for await (const event of api.runIngestStream([filename])) {
         updateProgress((prev) => {
@@ -218,6 +231,7 @@ export function SourcesView() {
               }
             }
           } else if (event.event === "error") {
+            failed = true
             return { ...prev, status: "error" as const, error: event.message }
           } else if (event.event === "cached") {
             return {
@@ -241,6 +255,7 @@ export function SourcesView() {
 
           return { ...prev, stages }
         })
+
         if (event.event === "complete" || event.event === "cached") {
           const [pages, sources] = await Promise.all([
             api.listPages(),
@@ -252,124 +267,94 @@ export function SourcesView() {
         }
       }
     } catch (e: any) {
+      failed = true
       updateProgress((prev) => prev ? { ...prev, error: `${e.message || e}` } : prev)
     }
-    setIngesting("")
-  }
 
-  const handleIngestAll = useCallback(async () => {
-    const filenames = sourceFiles.map((f) => f.name)
-    if (filenames.length === 0) return
-
-    clearProgressDismissTimer()
-    setIngesting("all")
-    updateProgress(() => ({
-      filename: `[Batch] ${filenames.length} files`,
-      status: "running" as const,
-      stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
+    setTaskStates((prev) => ({
+      ...prev,
+      [filename]: {
+        status: failed ? "error" : "done",
+        message: failed ? "处理失败，可重新加入队列" : undefined,
+      },
     }))
+  }, [clearProgressDismissTimer, scheduleProgressDismiss, setSourceFiles, updateProgress])
 
-    const fileStatus = new Map<string, string>()
-    let completedCount = 0
+  const processQueue = useCallback(async () => {
+    if (queueRunningRef.current) return
+    queueRunningRef.current = true
 
     try {
-      for await (const event of api.runIngestBatch(filenames)) {
-        const src = event.source || ""
+      while (true) {
+        const next = queueRef.current.shift()
+        if (!next) break
 
-        updateProgress((prev) => {
-          if (!prev) return null
-          const stages = prev.stages.map((s) => ({ ...s, items: s.pages?.items ? [...s.pages.items] : s.pages?.items }))
+        setTaskQueue([...queueRef.current])
+        activeTaskRef.current = next
+        setActiveTask(next)
+        setTaskStates((prev) => ({ ...prev, [next]: { status: "running" } }))
 
-          if (event.event === "stage") {
-            fileStatus.set(src, event.stage)
-            const activeFiles = [...fileStatus.entries()].filter(([, s]) => s === event.stage)
-            const stageLabel = STAGE_LABELS[event.stage]?.label || event.stage
-            const idx = stages.findIndex((s) => s.stage === event.stage)
-            if (idx >= 0) {
-              stages[idx] = {
-                ...stages[idx],
-                status: "active",
-                message: `${stageLabel} (${activeFiles.length} files)`,
-              }
-            }
-          } else if (event.event === "llm_delta") {
-            const idx = stages.findIndex((s) => s.stage === event.stage)
-            if (idx >= 0) {
-              stages[idx] = {
-                ...stages[idx],
-                logs: `${stages[idx].logs || ""}${event.text || ""}`.slice(-12000),
-              }
-            }
-          } else if (event.event === "stage_done") {
-            fileStatus.delete(src)
-            const idx = stages.findIndex((s) => s.stage === event.stage)
-            if (idx >= 0 && stages[idx].status !== "done") {
-              stages[idx] = {
-                ...stages[idx],
-                status: "done",
-                message: event.message,
-                details: event.details,
-              }
-            }
-          } else if (event.event === "write_page") {
-            const idx = stages.findIndex((s) => s.stage === "write")
-            if (idx >= 0) {
-              stages[idx] = {
-                ...stages[idx],
-                message: `[${src}] ${event.message}`,
-                pages: {
-                  current: event.current,
-                  total: event.total,
-                  items: [...(stages[idx].pages?.items || []), {
-                    title: event.title,
-                    page_type: event.page_type,
-                    action: event.action || (event.skipped ? "skip" : "new"),
-                  }],
-                },
-              }
-            }
-          } else if (event.event === "error") {
-            completedCount++
-            return {
-              ...prev,
-              filename: `[Batch] ${completedCount}/${filenames.length} done — Error: ${src}: ${event.message}`,
-            }
-          } else if (event.event === "cached") {
-            completedCount++
-          } else if (event.event === "complete") {
-            completedCount++
-          }
+        await runIngestTask(next)
 
-          const allFinished = completedCount >= filenames.length
-          return {
-            ...prev,
-            stages: allFinished
-              ? stages.map((s) => ({ ...s, status: "done" as const }))
-              : stages,
-            filename: allFinished
-              ? `[Batch] ${completedCount}/${filenames.length} completed`
-              : `[Batch] ${completedCount}/${filenames.length} completed`,
-          }
-        })
-
-        if (event.event === "complete" || event.event === "cached") {
-          const [pages, sources] = await Promise.all([
-            api.listPages(),
-            api.listSources(),
-          ])
-          useAppStore.getState().setWikiPages(pages)
-          setSourceFiles(Array.isArray(sources) ? sources : [])
-          if (completedCount >= filenames.length) scheduleProgressDismiss()
-        }
-        if (event.event === "error" && completedCount >= filenames.length) {
-          scheduleProgressDismiss(5000)
-        }
+        activeTaskRef.current = null
+        setActiveTask(null)
       }
-    } catch (e: any) {
-      updateProgress((prev) => prev ? { ...prev, error: `${e.message || e}` } : prev)
+    } finally {
+      queueRunningRef.current = false
     }
-    setIngesting("")
-  }, [clearProgressDismissTimer, scheduleProgressDismiss, sourceFiles, setSourceFiles, updateProgress])
+
+    // A task may have been enqueued while the loop was exiting.
+    if (queueRef.current.length > 0) void processQueue()
+  }, [runIngestTask])
+
+  const enqueueIngest = useCallback((filename: string) => {
+    if (activeTaskRef.current === filename || queueRef.current.includes(filename)) return
+    const file = sourceFiles.find((f) => f.name === filename)
+    if (file?.imported) return
+
+    queueRef.current = [...queueRef.current, filename]
+    setTaskQueue(queueRef.current)
+    setTaskStates((prev) => ({ ...prev, [filename]: { status: "queued" } }))
+    void processQueue()
+  }, [processQueue, sourceFiles])
+
+  const enqueueAllPending = useCallback(() => {
+    const filenames = sourceFiles
+      .filter((f) => !f.imported)
+      .map((f) => f.name)
+      .filter((name) => name !== activeTaskRef.current && !queueRef.current.includes(name))
+    if (filenames.length === 0) return
+
+    queueRef.current = [...queueRef.current, ...filenames]
+    setTaskQueue(queueRef.current)
+    setTaskStates((prev) => {
+      const next = { ...prev }
+      for (const filename of filenames) next[filename] = { status: "queued" }
+      return next
+    })
+    void processQueue()
+  }, [processQueue, sourceFiles])
+
+  const removeQueuedTask = useCallback((filename: string) => {
+    queueRef.current = queueRef.current.filter((name) => name !== filename)
+    setTaskQueue(queueRef.current)
+    setTaskStates((prev) => ({
+      ...prev,
+      [filename]: { status: "done", message: "已从队列移除" },
+    }))
+  }, [])
+
+  const clearPendingQueue = useCallback(() => {
+    queueRef.current = []
+    setTaskQueue([])
+    setTaskStates((prev) => {
+      const next = { ...prev }
+      for (const [filename, state] of Object.entries(prev)) {
+        if (state.status === "queued") next[filename] = { status: "done", message: "已从队列移除" }
+      }
+      return next
+    })
+  }, [])
 
   const handleDelete = async (filename: string) => {
     if (confirmDelete !== filename) {
@@ -426,6 +411,11 @@ export function SourcesView() {
     return !st || st.status === "not_started" || st.status === "failed"
   }).length
 
+  const queuedSet = new Set(taskQueue)
+  const pendingIngestFiles = sourceFiles.filter(
+    (f) => !f.imported && !queuedSet.has(f.name) && f.name !== activeTask
+  )
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b">
@@ -449,17 +439,54 @@ export function SourcesView() {
 
         {sourceFiles.length > 1 && (
           <button
-            onClick={handleIngestAll}
-            disabled={!!ingesting}
+            onClick={enqueueAllPending}
+            disabled={pendingIngestFiles.length === 0}
             className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
+            title="将所有未导入的文档加入任务队列"
           >
-            {ingesting === "all" ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Zap size={14} />
-            )}
-            {ingesting === "all" ? `Processing ${sourceFiles.length} files...` : `Ingest All (${sourceFiles.length} files)`}
+            <Clock size={14} />
+            添加 {pendingIngestFiles.length} 个任务
           </button>
+        )}
+
+        {(activeTask || taskQueue.length > 0) && (
+          <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--muted)] p-2">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
+                任务队列
+              </span>
+              {taskQueue.length > 0 && (
+                <button
+                  onClick={clearPendingQueue}
+                  className="text-[10px] text-[var(--muted-foreground)] hover:text-rose-600"
+                >
+                  清空待处理
+                </button>
+              )}
+            </div>
+            {activeTask && (
+              <div className="flex items-center gap-2 rounded bg-white px-2 py-1 text-[11px]">
+                <Loader2 size={12} className="shrink-0 animate-spin text-blue-600" />
+                <span className="flex-1 truncate">{activeTask}</span>
+                <span className="shrink-0 text-[10px] text-blue-600">运行中</span>
+              </div>
+            )}
+            {taskQueue.map((filename) => (
+              <div key={filename} className="mt-1 flex items-center gap-2 rounded bg-white px-2 py-1 text-[11px]">
+                <Clock size={12} className="shrink-0 text-[var(--muted-foreground)]" />
+                <span className="flex-1 truncate">{filename}</span>
+                <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">待处理</span>
+                <button
+                  onClick={() => removeQueuedTask(filename)}
+                  className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-rose-50 hover:text-rose-600"
+                  title="从队列移除"
+                  aria-label={`从队列移除 ${filename}`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
         )}
 
         {unparsedCount > 0 && (
@@ -514,14 +541,44 @@ export function SourcesView() {
                 </button>
               )}
               <button
-                onClick={(e) => { e.stopPropagation(); handleIngest(f.name) }}
-                disabled={!!ingesting}
+                onClick={(e) => { e.stopPropagation(); enqueueIngest(f.name) }}
+                disabled={f.imported || activeTask === f.name || queuedSet.has(f.name)}
                 className="group relative p-1 rounded hover:bg-green-100 text-green-600 disabled:opacity-50"
-                title="用 LLM 生成知识 Wiki"
-                aria-label="用 LLM 生成知识 Wiki"
+                title={
+                  f.imported
+                    ? "已入图谱；如需重新生成，请先删除生成的 Wiki"
+                    : activeTask === f.name
+                      ? "正在处理"
+                      : queuedSet.has(f.name)
+                        ? "已加入任务队列"
+                        : "用 LLM 生成知识 Wiki"
+                }
+                aria-label={
+                  f.imported
+                    ? "已入图谱，不能重复执行"
+                    : activeTask === f.name
+                      ? "正在处理"
+                      : queuedSet.has(f.name)
+                        ? "已加入任务队列"
+                        : "用 LLM 生成知识 Wiki"
+                }
               >
-                {ingesting === f.name ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-                <IconTooltip>生成知识 Wiki</IconTooltip>
+                {activeTask === f.name ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : queuedSet.has(f.name) ? (
+                  <Clock size={14} />
+                ) : (
+                  <Play size={14} />
+                )}
+                <IconTooltip>
+                  {f.imported
+                    ? "已入图谱"
+                    : activeTask === f.name
+                      ? "正在处理"
+                      : queuedSet.has(f.name)
+                        ? "已加入队列"
+                        : "生成知识 Wiki"}
+                </IconTooltip>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteWiki(f.name) }}
