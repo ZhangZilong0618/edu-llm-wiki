@@ -66,6 +66,11 @@ async def stream_chat(
             stream=True,
         )
         async for chunk in stream:
+            # OpenAI-compatible gateways commonly emit a final usage-only chunk
+            # with an empty ``choices`` array. It is not a content delta and must
+            # be skipped rather than raising IndexError.
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
             if delta.content:
                 yield delta.content
@@ -112,7 +117,9 @@ async def chat_complete(
         kwargs["response_format"] = response_format
 
     resp = await client.chat.completions.create(**kwargs)
-    return resp.choices[0].message.content
+    if not resp.choices:
+        return ""
+    return resp.choices[0].message.content or ""
 
 
 async def test_connection(data) -> tuple[bool, str]:

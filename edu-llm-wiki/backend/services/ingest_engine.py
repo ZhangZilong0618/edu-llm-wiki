@@ -142,6 +142,88 @@ CRITICAL RULES:
 """
 
 
+CHUNK_PLANNING_PROMPT = """You are an expert educational planner. Analyze ONE page-range chunk of a materials-science course document and extract only the most teaching-relevant knowledge atoms.
+
+## Source
+- title: {source_title}
+- chunk pages: {start_page}-{end_page}
+
+## Chunk content
+{content}
+
+## Output JSON schema
+{{
+  "chunk_summary": "2-sentence summary of this chunk",
+  "topic_tags": ["3-6 tags"],
+  "concepts": [
+    {{"name": "short concept name", "definition": "one concise sentence", "related": ["names"], "page_refs": [1]}}
+  ],
+  "formulas": [
+    {{"name": "human-readable formula name", "latex": "LaTeX", "variables": "brief variables", "applications": "one sentence", "page_refs": [1]}}
+  ],
+  "principles": [
+    {{"name": "principle name", "statement": "one concise claim", "conditions": "when it applies", "page_refs": [1]}}
+  ],
+  "procedures": [
+    {{"name": "procedure name", "goal": "one sentence", "input": "required input", "output": "produced output", "page_refs": [1]}}
+  ]
+}}
+
+Rules:
+- Extract 4-10 concepts, 0-3 formulas, 2-6 principles, and 0-3 procedures when supported.
+- Use ONLY page numbers in this chunk. Do not invent page numbers.
+- Prefer compact, high-value atoms over exhaustive slide headings.
+- Return ONLY one valid JSON object; no markdown fences or commentary.
+
+## Output Language
+{language_instruction}
+"""
+
+
+CORE_PAGE_BATCH_PROMPT = """You are an expert educational wiki writer. Generate concise core wiki pages for the provided knowledge-atom batch.
+
+## Source
+{source_title}
+
+## Purpose
+{purpose}
+
+## Knowledge-atom batch
+{plan}
+
+## Output JSON schema
+Return a JSON array. Each object must contain:
+- path
+- title
+- page_type: concept | formula | principle | procedure
+- content: 120-350 Chinese characters, with required section headings
+- sources: ["{source_title}"]
+- tags
+- prerequisites
+- related
+
+Section requirements:
+- concept: "## 定义", "## 解释", "## 相关知识"
+- formula: "## 公式", "## 变量说明", "## 适用场景"
+- principle: "## 陈述", "## 适用条件", "## 应用"
+- procedure: "## 目标", "## 输入", "## 输出", "## 步骤"
+
+Citation rule:
+Every substantive source-backed sentence must end with:
+[ref:{source_title}#p=N]
+Use only page numbers supplied in the batch.
+
+Rules:
+- Generate exactly one page for every item in the batch.
+- Keep each page concise and teaching-oriented.
+- Do not generate source, synthesis, inquiry, guide, example, or misconception pages.
+- Return ONLY the JSON array; no markdown fences or commentary.
+
+## Output Language
+{language_instruction}
+"""
+
+
 CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your task is to generate only the core wiki pages from an approved page plan.
 
 ## Core Page Plan
@@ -588,7 +670,10 @@ def _normalize_generated_pages(pages: list[dict], source_relative_path: str) -> 
             continue
         page["page_type"] = ptype
         page["title"] = title
-        page.setdefault("path", _page_path_for(ptype, title))
+        raw_path = str(page.get("path") or "").strip().lstrip("/")
+        if raw_path and not raw_path.endswith(".md"):
+            raw_path = f"{raw_path}.md"
+        page["path"] = raw_path or _page_path_for(ptype, title)
         if ptype == "formula":
             content = str(page.get("content") or "")
             page["content"] = _prefer_inline_math(content)
@@ -865,7 +950,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 易混点/对比\n\n{_bullet_list(key_points, '请对照相关概念、公式和原理理解它们的边界。')}\n\n"
             f"## 进一步问题\n\n{_bullet_list(open_questions or _as_list(analysis.get('knowledge_gaps')))}\n"
         )
-        add_page("synthesis", title, content, ["synthesis", "imported"], [], connections or all_knowledge_names)
+        add_page("synthesis", title, content, ["synthesis", "imported"], [], all_knowledge_names)
 
     for idx, item in enumerate(_as_list(analysis.get("inquiry")), start=1):
         if not isinstance(item, dict):
@@ -882,7 +967,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 为什么重要\n\n{why or '这个问题有助于检查是否真正理解文档的核心知识。'}\n\n"
             f"## 相关知识\n\n{_bullet_list(related or all_knowledge_names[:5])}\n"
         )
-        add_page("inquiry", title, content, ["qa", "imported"], [], related or all_knowledge_names[:5])
+        add_page("inquiry", title, content, ["qa", "imported"], [], all_knowledge_names[:5])
 
     for idx, item in enumerate(_as_list(analysis.get("guide")), start=1):
         if not isinstance(item, dict):
@@ -914,7 +999,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"{_bullet_list(_as_list(analysis.get('knowledge_gaps')), '重点比较概念、公式和原理之间的适用边界。')}\n\n"
             f"## 进一步问题\n\n{_bullet_list(_as_list(analysis.get('review_items')), '哪些公式可以用于解决哪些练习？哪些概念是后续内容的前提？')}\n"
         )
-        add_page("synthesis", title, content, ["synthesis", "imported"], [], connections or all_knowledge_names)
+        add_page("synthesis", title, content, ["synthesis", "imported"], [], all_knowledge_names)
 
     if has_educational_content and not any((p.get("page_type") == "inquiry") for p in normalized_pages):
         title = f"{source_relative_path} 关键问答"
@@ -925,7 +1010,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 为什么重要\n\n这个问题能帮助学习者从被动阅读转向主动检索和自测。\n\n"
             f"## 相关知识\n\n{_bullet_list(all_knowledge_names[:6])}\n"
         )
-        add_page("inquiry", title, content, ["qa", "imported"], [], related or all_knowledge_names[:5])
+        add_page("inquiry", title, content, ["qa", "imported"], [], all_knowledge_names[:5])
 
     if has_educational_content and not any((p.get("page_type") == "guide") for p in normalized_pages):
         title = f"{source_relative_path} 导入学习指引"
@@ -936,13 +1021,162 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 复习策略\n\n{_bullet_list(['阅读每个概念页后，回到对应公式和原理进行自测。', '如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
             f"## 质量提醒\n\n{_bullet_list(_as_list(analysis.get('review_items')) or ['如果公式或表格来自 OCR，请对照原始文档复核。'])}\n"
         )
-        add_page("guide", title, content, ["guide", "imported"], [], learning_order or all_knowledge_names)
+        add_page("guide", title, content, ["guide", "imported"], [], all_knowledge_names)
 
     return normalized_pages
 
 
 def _analysis_is_empty(analysis: dict) -> bool:
     return not any(analysis.get(key) for key in ("concepts", "formulas", "principles"))
+
+
+def _build_page_chunks(
+    content: str,
+    *,
+    source_title: str,
+    project_id: str = "default",
+    max_chars: int = 18_000,
+    max_pages: int = 18,
+) -> list[dict] | None:
+    """Build page-aware chunks from parsed.json when available."""
+    from services.parsed_index import build_parsed_index, load_parsed_index
+    from storage.wiki_store import sources_path
+
+    sources_root = sources_path(project_id)
+    parsed = load_parsed_index(sources_root, source_title)
+    if parsed is None:
+        try:
+            parsed = build_parsed_index(sources_root, source_title)
+        except Exception:
+            parsed = None
+    if not parsed or not parsed.get("pages"):
+        return None
+
+    pages = parsed["pages"]
+    if len(pages) <= 8 and len(content) <= 24_000:
+        return None
+
+    chunks: list[dict] = []
+    current_pages: list[dict] = []
+    current_chars = 0
+
+    def flush() -> None:
+        nonlocal current_pages, current_chars
+        if not current_pages:
+            return
+        chunks.append({
+            "start_page": int(current_pages[0].get("page", 1)),
+            "end_page": int(current_pages[-1].get("page", len(current_pages))),
+            "content": "\n\n---\n\n".join(
+                f"## Page {page.get('page', idx + 1)}\n\n{_strip_images(str(page.get('md') or ''))}"
+                for idx, page in enumerate(current_pages)
+            ),
+        })
+        current_pages = []
+        current_chars = 0
+
+    for page in pages:
+        text = _strip_images(str(page.get("md") or ""))
+        if current_pages and (
+            current_chars + len(text) > max_chars or len(current_pages) >= max_pages
+        ):
+            flush()
+        current_pages.append(page)
+        current_chars += len(text)
+
+    flush()
+    return chunks or None
+
+
+def _merge_chunk_plans(plans: list[dict], *, source_title: str, page_count: int) -> dict:
+    """Deterministically merge chunk plans and deduplicate knowledge atoms."""
+    def merge_items(items: list[dict], fields: tuple[str, ...]) -> list[dict]:
+        merged: dict[str, dict] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = _clean_item_title(str(item.get("name") or item.get("title") or ""))
+            if not name:
+                continue
+            k = name.lower()
+            if k not in merged:
+                merged[k] = {**item, "name": name}
+                continue
+            target = merged[k]
+            for field in fields:
+                old = str(target.get(field) or "").strip()
+                new = str(item.get(field) or "").strip()
+                if new and (not old or len(new) > len(old)):
+                    target[field] = new
+            for field in ("related", "page_refs"):
+                values = target.setdefault(field, [])
+                for value in item.get(field, []) or []:
+                    if value not in values:
+                        values.append(value)
+        return list(merged.values())
+
+    concepts: list[dict] = []
+    formulas: list[dict] = []
+    principles: list[dict] = []
+    procedures: list[dict] = []
+    summaries: list[str] = []
+    tags: list[str] = []
+
+    for plan in plans:
+        if not isinstance(plan, dict):
+            continue
+        concepts.extend([x for x in plan.get("concepts", []) or [] if isinstance(x, dict)])
+        formulas.extend([x for x in plan.get("formulas", []) or [] if isinstance(x, dict)])
+        principles.extend([x for x in plan.get("principles", []) or [] if isinstance(x, dict)])
+        procedures.extend([x for x in plan.get("procedures", []) or [] if isinstance(x, dict)])
+        summary = str(plan.get("chunk_summary") or "").strip()
+        if summary:
+            summaries.append(summary)
+        for tag in plan.get("topic_tags", []) or []:
+            tag = str(tag).strip()
+            if tag and tag not in tags:
+                tags.append(tag)
+
+    return {
+        "source": {
+            "summary": " ".join(summaries[:4]) or f"{source_title} 的分块知识抽取结果。",
+            "topic_tags": tags[:8],
+            "page_count_estimate": page_count,
+        },
+        "concepts": merge_items(concepts, ("definition",)),
+        "formulas": merge_items(formulas, ("latex", "variables", "applications")),
+        "principles": merge_items(principles, ("statement", "conditions")),
+        "procedures": merge_items(procedures, ("goal", "input", "output")),
+    }
+
+
+async def _generate_chunk_plan(
+    chunk: dict,
+    *,
+    source_title: str,
+    language: str,
+) -> dict:
+    prompt = CHUNK_PLANNING_PROMPT.format(
+        source_title=source_title,
+        start_page=chunk["start_page"],
+        end_page=chunk["end_page"],
+        content=chunk["content"],
+        language_instruction=language,
+    )
+    raw = await chat_complete(
+        system_prompt=(
+            "You are an expert educational planner for materials science. "
+            "Output only valid JSON."
+        ),
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.15,
+        max_tokens=12_000,
+    )
+    try:
+        plan = await _load_llm_json(raw, expected="object")
+    except Exception:
+        return {}
+    return plan if isinstance(plan, dict) else {}
 
 
 async def _generate_core_plan_llm(
@@ -954,40 +1188,80 @@ async def _generate_core_plan_llm(
     emit=None,
     source_relative_path: str = "",
 ) -> dict:
-    """Step 1/4: 用 LLM 把 parsed document.md 规划成 A 组 5 类候选。
-
-    Returns dict with keys: source, concepts, formulas, principles, procedures.
-    On any error returns {} (caller will fall back to heuristic).
-    """
+    """Generate a core plan with page-aware chunk extraction for long documents."""
     from services.language import language_instruction as _li
 
-    # 截断到 ~24k 字符，给 LLM 留余量生成完整 JSON
-    max_chars = 24_000
-    snippet = content if len(content) <= max_chars else content[:max_chars] + "\n\n[... truncated ...]"
+    chunks = _build_page_chunks(
+        content,
+        source_title=source_title,
+        project_id=project_id,
+    )
+    if not chunks:
+        max_chars = 24_000
+        snippet = content if len(content) <= max_chars else content[:max_chars] + "\n\n[... truncated ...]"
+        user_prompt = CORE_PLANNING_PROMPT.format(
+            source_title=source_title,
+            page_count=page_count,
+            max_chars=max_chars,
+            content=snippet,
+            language_instruction=_li(),
+        )
+        raw = await _chat_complete_progress(
+            system_prompt="You are an expert educational planner. Output ONLY valid JSON.",
+            user_prompt=user_prompt,
+            temperature=0.25,
+            max_tokens=16_000,
+            emit=emit,
+            source=source_relative_path,
+            stage="plan",
+        )
+        try:
+            plan = await _load_llm_json(raw, expected="object")
+        except Exception:
+            return {}
+        return plan if isinstance(plan, dict) else {}
 
-    user_prompt = CORE_PLANNING_PROMPT.format(
+    await _emit_optional(
+        emit,
+        "info",
+        source=source_relative_path,
+        message=f"长文档分块抽取: {len(chunks)} 个页面块",
+    )
+
+    language = _li()
+    semaphore = asyncio.Semaphore(3)
+
+    async def bounded(chunk: dict) -> dict:
+        async with semaphore:
+            return await _generate_chunk_plan(
+                chunk,
+                source_title=source_title,
+                language=language,
+            )
+
+    chunk_plans = await asyncio.gather(
+        *(bounded(chunk) for chunk in chunks),
+        return_exceptions=True,
+    )
+    valid_plans = [plan for plan in chunk_plans if isinstance(plan, dict)]
+    merged = _merge_chunk_plans(
+        valid_plans,
         source_title=source_title,
         page_count=page_count,
-        max_chars=max_chars,
-        content=snippet,
-        language_instruction=_li(),
     )
-    raw = await _chat_complete_progress(
-        system_prompt="You are an expert educational planner. Output ONLY valid JSON.",
-        user_prompt=user_prompt,
-        temperature=0.25,
-        max_tokens=8192,
-        emit=emit,
+
+    await _emit_optional(
+        emit,
+        "info",
         source=source_relative_path,
-        stage="plan",
+        message=(
+            f"分块抽取完成: {len(valid_plans)}/{len(chunks)} 块成功; "
+            f"{len(merged.get('concepts', []))} 概念, "
+            f"{len(merged.get('formulas', []))} 公式, "
+            f"{len(merged.get('principles', []))} 原理"
+        ),
     )
-    try:
-        plan = await _load_llm_json(raw, expected="object")
-    except Exception:
-        return {}
-    if not isinstance(plan, dict):
-        return {}
-    return plan
+    return merged
 
 
 def _llm_plan_to_core_plan(plan: dict, source_title: str, page_count: int = 0) -> dict:
@@ -1201,30 +1475,95 @@ def _merge_derived_analysis(core_plan: dict, derived: object) -> dict:
     return analysis
 
 
+def _build_core_plan_batches(core_plan: dict, *, batch_size: int = 8) -> list[dict]:
+    """Split a normalized core plan into compact, type-aware generation batches."""
+    batches: list[dict] = []
+    for page_type in ("concepts", "formulas", "principles", "procedures"):
+        items = [item for item in core_plan.get(page_type, []) or [] if isinstance(item, dict)]
+        for start in range(0, len(items), batch_size):
+            batch = items[start : start + batch_size]
+            batches.append({
+                "summary": core_plan.get("summary", ""),
+                "tags": core_plan.get("tags", []),
+                page_type: batch,
+            })
+    return batches
+
+
+async def _generate_core_page_batch(
+    batch: dict,
+    *,
+    source_title: str,
+    purpose: str,
+) -> list[dict]:
+    prompt = CORE_PAGE_BATCH_PROMPT.format(
+        source_title=source_title,
+        purpose=purpose,
+        plan=json.dumps(batch, ensure_ascii=False, indent=2),
+        language_instruction=language_instruction(),
+    )
+    raw = await chat_complete(
+        system_prompt=(
+            "You are an expert educational wiki writer. "
+            "Output only a valid JSON array."
+        ),
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+        max_tokens=16_000,
+    )
+    try:
+        pages = await _load_llm_json(raw, expected="array")
+    except Exception:
+        return []
+    return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
+
+
 async def _generate_core_pages(core_plan: dict, *, project_id: str, source_relative_path: str, emit=None) -> list[dict]:
+    """Generate core wiki pages in small concurrent batches."""
     wp = wiki_path(project_id)
     purpose_path = wp / "purpose.md"
-    schema_path = wp / "schema.md"
-    purpose_text = purpose_path.read_text(encoding="utf-8")[:3000] if purpose_path.exists() else "Not defined yet"
-    schema_text = schema_path.read_text(encoding="utf-8")[:3000] if schema_path.exists() else "Not defined yet"
+    purpose_text = purpose_path.read_text(encoding="utf-8")[:1200] if purpose_path.exists() else "Not defined yet"
 
-    raw = await _chat_complete_progress(
-        system_prompt="You are an expert educational wiki writer. Output ONLY valid JSON array.",
-        user_prompt=CORE_PAGE_GENERATION_PROMPT.format(
-            plan=json.dumps(core_plan, ensure_ascii=False, indent=2),
-            purpose=purpose_text,
-            schema=schema_text,
-            language_instruction=language_instruction(),
-        ),
-        temperature=0.25,
-        max_tokens=8192,
-        emit=emit,
+    batches = _build_core_plan_batches(core_plan)
+    if not batches:
+        return _ensure_pages_from_analysis(core_plan, [], source_relative_path)
+
+    await _emit_optional(
+        emit,
+        "info",
         source=source_relative_path,
-        stage="generate_core",
+        message=f"主干页面分批生成: {len(batches)} 批",
     )
+
+    semaphore = asyncio.Semaphore(3)
+
+    async def bounded(batch: dict) -> list[dict]:
+        async with semaphore:
+            return await _generate_core_page_batch(
+                batch,
+                source_title=source_relative_path,
+                purpose=purpose_text,
+            )
+
+    results = await asyncio.gather(
+        *(bounded(batch) for batch in batches),
+        return_exceptions=True,
+    )
+    generated_pages: list[dict] = []
+    for result in results:
+        if isinstance(result, list):
+            generated_pages.extend(result)
+
+    await _emit_optional(
+        emit,
+        "info",
+        source=source_relative_path,
+        message=f"LLM 主干页面生成 {len(generated_pages)} 个; 正在补全剩余结构化页面",
+    )
+
     return _ensure_pages_from_analysis(
         core_plan,
-        await _load_llm_json(raw, expected="array"),
+        generated_pages,
         source_relative_path,
     )
 
