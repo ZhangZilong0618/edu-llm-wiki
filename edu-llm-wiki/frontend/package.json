@@ -26,6 +26,7 @@
     "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-force-graph-2d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.3.0",
     "rehype-katex": "^7.0.1",
