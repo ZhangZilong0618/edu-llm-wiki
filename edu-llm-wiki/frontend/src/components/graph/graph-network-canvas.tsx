@@ -202,8 +202,8 @@ function hexAlpha(color: string, alpha: number) {
 }
 
 function nodeRadius(node: RuntimeNode, nodeScale: number, globalScale: number) {
-  const base = 6.2 + Math.sqrt(Math.max(node.size, 1)) * 0.82 + Math.min(node.degree * 0.07, 1.1);
-  return Math.min(22, base * nodeScale) / Math.max(globalScale, 0.2);
+  const base = 8.4 + Math.sqrt(Math.max(node.size, 1)) * 0.98 + Math.min(node.degree * 0.085, 1.5);
+  return Math.min(28, base * nodeScale) / Math.max(globalScale, 0.2);
 }
 
 export function GraphNetworkCanvas(props: GraphCanvasProps) {
@@ -353,17 +353,13 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
         ctx.stroke();
       }
 
-      const shouldShowLabel =
-        graph.nodes.length <= 220 ||
-        isHovered ||
-        isSelected ||
-        globalScale >= 1.5 ||
-        (searchQuery.trim().length > 0 && isHighlighted);
-
-      if (!shouldShowLabel) return;
+      // The user explicitly wants names visible by default, even for large
+      // graphs. Hover/search still brighten or focus labels, but never gate
+      // whether the text is drawn.
+      const shouldShowLabel = true;
 
       const label = readableLabel(rawNode.label, 26);
-      const fontSize = 11 / globalScale;
+      const fontSize = 10.5 / globalScale;
       ctx.font = `${fontSize}px Inter, ui-sans-serif, system-ui, -apple-system, sans-serif`;
       ctx.textBaseline = "middle";
       ctx.textAlign = "left";
