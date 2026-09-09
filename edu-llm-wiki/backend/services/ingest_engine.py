@@ -714,7 +714,14 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         for p in normalized_pages
     }
 
-    def add_page(page_type: str, title: str, content: str, tags: list[str], prerequisites: list[str] | None = None):
+    def add_page(
+        page_type: str,
+        title: str,
+        content: str,
+        tags: list[str],
+        prerequisites: list[str] | None = None,
+        related: list[str] | None = None,
+    ):
         key = (page_type, title.strip().lower())
         if not title or key in existing:
             return
@@ -740,6 +747,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             "sources": [source_relative_path],
             "tags": merged_tags,
             "prerequisites": prerequisites or [],
+            "related": related or [],
         })
 
     for item in analysis.get("concepts", []) or []:
@@ -758,7 +766,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 上位概念\n\n{parent or '待补充'}\n\n"
             f"## 相关概念\n\n{_bullet_list(related, '待补充')}\n"
         )
-        add_page("concept", title, content, ["concept"], prereqs)
+        add_page("concept", title, content, ["concept"], prereqs, related)
 
     for item in analysis.get("formulas", []) or []:
         if not isinstance(item, dict):
@@ -857,7 +865,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 易混点/对比\n\n{_bullet_list(key_points, '请对照相关概念、公式和原理理解它们的边界。')}\n\n"
             f"## 进一步问题\n\n{_bullet_list(open_questions or _as_list(analysis.get('knowledge_gaps')))}\n"
         )
-        add_page("synthesis", title, content, ["synthesis", "imported"], [])
+        add_page("synthesis", title, content, ["synthesis", "imported"], [], connections or all_knowledge_names)
 
     for idx, item in enumerate(_as_list(analysis.get("inquiry")), start=1):
         if not isinstance(item, dict):
@@ -874,7 +882,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 为什么重要\n\n{why or '这个问题有助于检查是否真正理解文档的核心知识。'}\n\n"
             f"## 相关知识\n\n{_bullet_list(related or all_knowledge_names[:5])}\n"
         )
-        add_page("inquiry", title, content, ["qa", "imported"], [])
+        add_page("inquiry", title, content, ["qa", "imported"], [], related or all_knowledge_names[:5])
 
     for idx, item in enumerate(_as_list(analysis.get("guide")), start=1):
         if not isinstance(item, dict):
@@ -893,7 +901,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 复习策略\n\n{_bullet_list(review_strategies or ['先看概念和原理；如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
             f"## 质量提醒\n\n{_bullet_list(quality_warnings or _as_list(analysis.get('review_items')) or ['如原文 OCR、公式或表格解析异常，请回到来源文档复核。'])}\n"
         )
-        add_page("guide", title, content, ["guide", "imported"], [])
+        add_page("guide", title, content, ["guide", "imported"], [], learning_order or all_knowledge_names)
 
     has_educational_content = bool(concepts or formulas or principles)
     if has_educational_content and not any((p.get("page_type") == "synthesis") for p in normalized_pages):
@@ -906,7 +914,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"{_bullet_list(_as_list(analysis.get('knowledge_gaps')), '重点比较概念、公式和原理之间的适用边界。')}\n\n"
             f"## 进一步问题\n\n{_bullet_list(_as_list(analysis.get('review_items')), '哪些公式可以用于解决哪些练习？哪些概念是后续内容的前提？')}\n"
         )
-        add_page("synthesis", title, content, ["synthesis", "imported"], [])
+        add_page("synthesis", title, content, ["synthesis", "imported"], [], connections or all_knowledge_names)
 
     if has_educational_content and not any((p.get("page_type") == "inquiry") for p in normalized_pages):
         title = f"{source_relative_path} 关键问答"
@@ -917,7 +925,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 为什么重要\n\n这个问题能帮助学习者从被动阅读转向主动检索和自测。\n\n"
             f"## 相关知识\n\n{_bullet_list(all_knowledge_names[:6])}\n"
         )
-        add_page("inquiry", title, content, ["qa", "imported"], [])
+        add_page("inquiry", title, content, ["qa", "imported"], [], related or all_knowledge_names[:5])
 
     if has_educational_content and not any((p.get("page_type") == "guide") for p in normalized_pages):
         title = f"{source_relative_path} 导入学习指引"
@@ -928,7 +936,7 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             f"## 复习策略\n\n{_bullet_list(['阅读每个概念页后，回到对应公式和原理进行自测。', '如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
             f"## 质量提醒\n\n{_bullet_list(_as_list(analysis.get('review_items')) or ['如果公式或表格来自 OCR，请对照原始文档复核。'])}\n"
         )
-        add_page("guide", title, content, ["guide", "imported"], [])
+        add_page("guide", title, content, ["guide", "imported"], [], learning_order or all_knowledge_names)
 
     return normalized_pages
 
@@ -1454,6 +1462,7 @@ def _write_ingest_outputs(
                 sources=page.get("sources", [source_relative_path]),
                 tags=page.get("tags", []),
                 prerequisites=page.get("prerequisites", []),
+                related=page.get("related", []),
                 project_id=project_id,
             )
             if existing:

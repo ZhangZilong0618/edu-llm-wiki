@@ -35,7 +35,6 @@ from services.graph_store import (
     record_graph_event,
     ensure_schema as store_ensure_schema,
 )
-from services.mastery import learner_state_summary, record_attempt, record_confidence, queue_for_user
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -123,10 +122,14 @@ async def get_learning_path(
     ``node_id``. Steps are prerequisite nodes the learner has not yet
     reached the ``proficient`` level on.
     """
+    from services.graph_store import list_mastery
+    mastery_rows = list_mastery(project_id, user_id)
     return compute_learning_path(
         target=node_id,
         edges=store_get_edges(project_id),
         nodes_by_id={n["id"]: n for n in store_get_nodes(project_id)},
+        mastery_map={r["node_id"]: r.get("state", "new") for r in mastery_rows},
+        mastery_scores={r["node_id"]: float(r.get("score", 0.0)) for r in mastery_rows},
         max_steps=max_steps,
     )
 
@@ -243,7 +246,7 @@ async def stream_graph_events(
                     continue
                 for event in events:
                     model = GraphEventModel(
-                        id=0,
+                        id=int(event.get("id", 0) or 0),
                         project_id=event["project_id"],
                         event_type=event["event_type"],
                         payload=event.get("payload") or {},
@@ -290,18 +293,29 @@ async def post_learning_review(
     """Submit a single review attempt; updates BKT + SM-2 + confidence."""
     from services import mastery
     kc_id = payload.get("kc_id") or payload.get("node_id")
-    score = float(payload.get("score", 0.0))
+    if not kc_id:
+        return {"ok": False, "error": "kc_id required"}
+    if "score" in payload:
+        score = float(payload.get("score", 0.0))
+    elif "correct" in payload:
+        score = 1.0 if bool(payload.get("correct")) else 0.0
+    else:
+        score = 0.0
     max_score = float(payload.get("max_score", 1.0)) or 1.0
     confidence = payload.get("confidence")
     if confidence is not None:
         confidence = int(confidence)
-    new_state = mastery.record_attempt(
+    new_state = await asyncio.to_thread(
+        mastery.record_attempt,
         project_id=project_id,
         user_id=user_id,
         kc_id=str(kc_id),
         score=score,
         max_score=max_score,
         confidence=confidence,
+        response=str(payload.get("response", "")),
+        expected=str(payload.get("expected", "")),
+        attempt_id=payload.get("attempt_id"),
     )
     return new_state
 
@@ -323,91 +337,3 @@ async def get_learning_insights(
         graph.get("communities") or [],
         state,
     )
-
-
-# ============================================================================
-# v3: learner-facing endpoints
-# ============================================================================
-
-from services.graph_engine import generate_learner_insights
-from services.learning import error_model
-
-
-@router.get("/learning/state")
-async def get_learner_state(
-    user_id: str = Query("default"),
-    project_id: str = Query("default"),
-) -> dict:
-    """The 8-dim learner state used by the v3 learning panel."""
-    return learner_state_summary(project_id=project_id, user_id=user_id)
-
-
-@router.get("/learning/schedule")
-async def get_review_schedule(
-    user_id: str = Query("default"),
-    project_id: str = Query("default"),
-    limit: int = Query(10, ge=1, le=50),
-) -> list[dict]:
-    """Return the spaced-repetition review queue for ``user_id``."""
-    return queue_for_user(project_id=project_id, user_id=user_id, limit=limit)
-
-
-@router.post("/learning/review")
-async def post_review(
-    payload: dict,
-    user_id: str = Query("default"),
-    project_id: str = Query("default"),
-) -> dict:
-    """Record a review answer.
-
-    ``payload`` carries ``kc_id`` (or ``node_id`` for backwards compat),
-    ``score`` (0..1) and optional ``confidence`` (1..5).
-    """
-    kc_id = payload.get("kc_id") or payload.get("node_id") or ""
-    if not kc_id:
-        return {"ok": False, "error": "kc_id required"}
-    score = float(payload.get("score", 0.0))
-    confidence = payload.get("confidence")
-    expected = payload.get("expected", "")
-    response = payload.get("response", "")
-    misconceptions = error_model.classify_error(response, expected) if expected else []
-    record_attempt(
-        project_id=project_id,
-        user_id=user_id,
-        node_id=kc_id,
-        score=score,
-    )
-    if confidence is not None:
-        record_confidence(
-            project_id=project_id,
-            user_id=user_id,
-            kc_id=kc_id,
-            level=int(confidence),
-            correct=score >= 0.6,
-        )
-    return {
-        "ok": True,
-        "kc_id": kc_id,
-        "score": score,
-        "misconceptions": misconceptions,
-    }
-
-
-@router.get("/learning/insights")
-async def get_learner_insights(
-    user_id: str = Query("default"),
-    project_id: str = Query("default"),
-) -> list[dict]:
-    """Structural + learner-aware insights filtered to ``R7`` threshold."""
-    state = learner_state_summary(project_id=project_id, user_id=user_id)
-    graph = {
-        "nodes": store_get_nodes(project_id),
-        "edges": store_get_edges(project_id),
-        "communities": store_get_communities(project_id),
-    }
-    return generate_learner_insights(graph, state)
-
-
-# ============================================================================
-
-# (end of routes/graph.py — v3 learner endpoints registered above)

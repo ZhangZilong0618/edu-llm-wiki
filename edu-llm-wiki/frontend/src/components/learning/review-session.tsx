@@ -63,6 +63,7 @@ export function ReviewSession({
         correct,
         confidence,
         correct ? Math.min(5, confidence + 1) : Math.max(0, confidence - 2),
+        userId,
       )
       setStats((s) => ({ correct: s.correct + (correct ? 1 : 0), total: s.total + 1 }))
     } catch {

@@ -46,6 +46,7 @@ class ParsedPage:
     content: str
     sources: list[str] = field(default_factory=list)
     prerequisites: list[str] = field(default_factory=list)
+    related: list[str] = field(default_factory=list)
     parent_concept: str = ""
     relationships: list[Relationship] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
@@ -104,6 +105,25 @@ def _parse_relationships_field(content: str) -> list[Relationship]:
     return out
 
 
+def _related_from_body(content: str) -> list[str]:
+    """Extract related-page titles from generated “关联知识/相关概念” sections."""
+    out: list[str] = []
+    for heading in ("相关知识", "相关概念"):
+        pattern = rf"##\s*{heading}\s*\n([\s\S]*?)(?=\n##\s+|\Z)"
+        match = re.search(pattern, content, re.IGNORECASE)
+        if not match:
+            continue
+        for raw_line in match.group(1).splitlines():
+            line = raw_line.strip("-* \t")
+            if not line or line == "待补充":
+                continue
+            # Generated bullets may contain explanatory text after a colon.
+            title = line.split("：", 1)[0].split(":", 1)[0].strip()
+            if title and title != "待补充" and title not in out:
+                out.append(title)
+    return out
+
+
 def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, str]]:
     """Read all wiki pages for ``project_id`` and return them in normalised form.
 
@@ -138,6 +158,11 @@ def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, st
                 for p in (front.get("prerequisites", []) or [])
                 if p
             ] + _wikilink_prereqs(body),
+            related=_dedupe([
+                str(p).replace(".md", "").strip()
+                for p in (front.get("related", []) or [])
+                if p
+            ] + _related_from_body(body)),
             parent_concept=str(front.get("parent_concept") or "").strip(),
             relationships=(
                 _normalise_relationships(front.get("relationships"))
@@ -164,6 +189,14 @@ def parse_pages(*, project_id: str) -> tuple[dict[str, ParsedPage], dict[str, st
         title_to_id.setdefault(slug.lower(), node_id)
         title_to_id.setdefault(parsed.title.lower(), node_id)
     return out, title_to_id
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        if value and value not in out:
+            out.append(value)
+    return out
 
 
 def _hash_content(content: str) -> str:

@@ -69,10 +69,11 @@ class GraphData(BaseModel):
 class GraphEvent(BaseModel):
     """Server-sent event payload for graph updates."""
 
-    event: str
+    id: int = 0
     project_id: str
+    event_type: str
     payload: dict = Field(default_factory=dict)
-    ts: float = 0.0
+    created_at: float = 0.0
 
 
 class LearningPathStep(BaseModel):

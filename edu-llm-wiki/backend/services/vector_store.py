@@ -138,11 +138,19 @@ def vector_search(query: str, top_k: int = 20, *, project_id: str = "default") -
     t = db.open_table(table_name)
     results = t.search(query_vec).metric("cosine").limit(top_k).to_list()
 
-    return [{
-        "path": r["path"],
-        "title": r.get("title", ""),
-        "snippet": (r.get("content", "") or "")[:200],
-        "score": round(r.get("_distance", 0), 3),
-        "title_match": False,
-        "vector_score": round(r.get("_distance", 0), 3),
-    } for r in results]
+    out: list[dict] = []
+    for r in results:
+        # LanceDB returns a cosine distance (lower is better). Expose a
+        # higher-is-better similarity to keep the search API score direction
+        # consistent with keyword and graph scores.
+        distance = float(r.get("_distance", 1.0))
+        similarity = max(0.0, min(1.0, 1.0 - distance))
+        out.append({
+            "path": r["path"],
+            "title": r.get("title", ""),
+            "snippet": (r.get("content", "") or "")[:200],
+            "score": round(similarity, 3),
+            "title_match": False,
+            "vector_score": round(similarity, 3),
+        })
+    return out

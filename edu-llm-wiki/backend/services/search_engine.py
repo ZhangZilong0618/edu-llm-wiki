@@ -5,10 +5,12 @@ Phase 1.5: Vector semantic search (optional, LanceDB)
 Phase 2: Graph expansion (1-2 hop)
 """
 
+import asyncio
 import re
 from collections import defaultdict
 
 from config import settings
+from services.graph_store import get_edges, get_nodes, make_node_id, record_exposure
 from storage.wiki_store import list_wiki_pages, read_wiki_page
 
 # Stop words for Chinese and English
@@ -58,7 +60,9 @@ def keyword_search(query: str, top_k: int = 20, *, project_id: str = "default") 
     title_matches = set()
     snippets = {}
 
-    for page in list_wiki_pages(project_id=project_id):
+    pages = list_wiki_pages(project_id=project_id)
+    page_by_path = {p["path"]: p for p in pages}
+    for page in pages:
         path = page["path"]
         content = ""
         try:
@@ -84,15 +88,16 @@ def keyword_search(query: str, top_k: int = 20, *, project_id: str = "default") 
             if count > 0:
                 scores[path] += min(count, 5) * 1.0  # cap per-token contribution
 
-        # Generate snippet
-        if scores[path] > 0:
+        # Generate snippet. Use ``get`` so zero-score pages are not inserted
+        # into the defaultdict merely by being inspected.
+        if scores.get(path, 0.0) > 0:
             snippets[path] = _generate_snippet(content, tokens)
 
     # Sort by score
     ranked = sorted(scores.items(), key=lambda x: -x[1])
     results = []
     for path, score in ranked[:top_k]:
-        page = next((p for p in list_wiki_pages(project_id=project_id) if p["path"] == path), None)
+        page = page_by_path.get(path)
         if page:
             results.append({
                 "path": path,
@@ -132,23 +137,35 @@ def _generate_snippet(content: str, tokens: list[str]) -> str:
     return snippet
 
 
-async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str = "default") -> list[dict]:
+async def graph_expand(
+    results: list[dict],
+    depth: int = 1,
+    *,
+    project_id: str = "default",
+    user_id: str = "default",
+) -> list[dict]:
     """Phase 2: Expand search results using graph edge weights (4-signal relevance).
 
     Only expands to neighbors with edge weight >= RELEVANCE_THRESHOLD,
     matching the old Tauri system's behavior.
     """
-    from services.graph_engine import build_graph
-    from services import mastery as _mastery
+    RELEVANCE_THRESHOLD = 0.5
 
-    RELEVANCE_THRESHOLD = 2.0
-
-    graph = build_graph(project_id=project_id)
-    nodes_by_id = {n["id"]: n for n in graph["nodes"]}
+    nodes = get_nodes(project_id)
+    if not nodes:
+        from services.graph_engine import build_graph
+        built = build_graph(project_id=project_id)
+        nodes = built["nodes"]
+    nodes_by_id = {n["id"]: n for n in nodes}
+    path_to_node = {
+        n.get("page_path") or n.get("metadata", {}).get("path"): n["id"]
+        for n in nodes
+        if n.get("page_path") or n.get("metadata", {}).get("path")
+    }
 
     # Build weighted adjacency: node_id -> set of (neighbor_id, weight)
     adjacency: dict[str, set[tuple[str, float]]] = defaultdict(set)
-    for e in graph["edges"]:
+    for e in get_edges(project_id):
         adjacency[e["source"]].add((e["target"], e["weight"]))
         adjacency[e["target"]].add((e["source"], e["weight"]))
 
@@ -156,13 +173,18 @@ async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str =
     new_results = list(results)
 
     for r in results[:10]:  # expand from top 10 results
-        node_id = r["path"].replace(".md", "")
+        node_id = path_to_node.get(r["path"]) or make_node_id(project_id, r["path"])
         # Collect neighbors with relevance above threshold
         candidates: list[tuple[str, str, float]] = []
         for neighbor, weight in adjacency.get(node_id, set()):
             if weight < RELEVANCE_THRESHOLD:
                 continue
-            neighbor_path = neighbor + ".md"
+            neighbor_meta = nodes_by_id.get(neighbor, {})
+            neighbor_path = (
+                neighbor_meta.get("page_path")
+                or neighbor_meta.get("metadata", {}).get("path")
+                or f"{neighbor}.md"
+            )
             if neighbor_path not in seen_paths and neighbor in nodes_by_id:
                 candidates.append((neighbor, neighbor_path, weight))
         # Sort by edge weight descending, take top 3 (matching old system: getRelatedNodes limit 3)
@@ -175,33 +197,46 @@ async def graph_expand(results: list[dict], depth: int = 1, *, project_id: str =
             # Score combines original score + edge weight (normalized)
             new_results.append({
                 "path": neighbor_path,
-                "title": node["label"],
+                "title": node.get("label") or node.get("title") or neighbor,
                 "snippet": content[:200],
                 "score": round(r["score"] * 0.5 + weight, 2),
                 "title_match": False,
                 "vector_score": None,
             })
 
-    # v2: mark every node surfaced through search as "exposed" so the mastery
-    # store reflects what the user has actually seen in retrieval.
+    # Record graph-expanded impressions. The caller decides whether a search
+    # result is only an impression or an actual read; expanded hits are useful
+    # evidence that the learner was shown adjacent prerequisite material.
     seen: set[str] = set()
+    original_paths = {r["path"] for r in results}
     for r in new_results:
-        nid = r["path"].replace(".md", "")
+        if r["path"] in original_paths:
+            continue
+        nid = path_to_node.get(r["path"]) or make_node_id(project_id, r["path"])
         if nid in seen:
             continue
         seen.add(nid)
         try:
-            _mastery.record_exposure(node_id=nid, project_id=project_id)
+            record_exposure(project_id=project_id, user_id=user_id, node_id=nid)
         except Exception:
             pass
 
     return sorted(new_results, key=lambda x: -x["score"])
 
 
-async def search(query: str, include_vector: bool = False, top_k: int = 20, *, project_id: str = "default") -> dict:
+async def search(
+    query: str,
+    include_vector: bool = False,
+    top_k: int = 20,
+    *,
+    project_id: str = "default",
+    user_id: str = "default",
+) -> dict:
     """Full search pipeline: keyword + optional vector + graph expansion."""
     # Phase 1: Keyword search
-    results = keyword_search(query, top_k, project_id=project_id)
+    results = await asyncio.to_thread(
+        keyword_search, query, top_k, project_id=project_id
+    )
 
     # Phase 1.5: Vector search (if enabled)
     vector_hits = 0
@@ -213,9 +248,12 @@ async def search(query: str, include_vector: bool = False, top_k: int = 20, *, p
             # Merge: boost existing, add new
             result_map = {r["path"]: r for r in results}
             for vr in vector_results:
+                similarity = max(0.0, min(1.0, float(vr.get("score", 0.0))))
+                vr["score"] = round(similarity * 5.0, 3)
+                vr["vector_score"] = round(similarity, 3)
                 if vr["path"] in result_map:
-                    result_map[vr["path"]]["score"] += 2.0
-                    result_map[vr["path"]]["vector_score"] = vr["score"]
+                    result_map[vr["path"]]["score"] += vr["score"]
+                    result_map[vr["path"]]["vector_score"] = vr["vector_score"]
                 else:
                     results.append(vr)
             results = sorted(results, key=lambda x: -x["score"])
@@ -224,7 +262,9 @@ async def search(query: str, include_vector: bool = False, top_k: int = 20, *, p
 
     # Phase 2: Graph expansion (1-hop from top results)
     try:
-        results = await graph_expand(results, depth=1, project_id=project_id)
+        results = await graph_expand(
+            results, depth=1, project_id=project_id, user_id=user_id
+        )
     except Exception:
         pass
 
@@ -241,7 +281,8 @@ async def _vector_search(query: str, top_k: int = 20, *, project_id: str = "defa
     """Vector semantic search using local embeddings + LanceDB."""
     try:
         from services.vector_store import vector_search
-        results = vector_search(query, top_k=top_k, project_id=project_id)
-        return results
+        return await asyncio.to_thread(
+            vector_search, query, top_k=top_k, project_id=project_id
+        )
     except Exception:
         return []

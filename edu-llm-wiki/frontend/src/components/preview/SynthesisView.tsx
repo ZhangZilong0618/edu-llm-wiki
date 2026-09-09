@@ -12,17 +12,15 @@ import { extractWikilinks, firstParagraph } from "@/lib/page-sections"
 import { useAppStore } from "@/stores/app-store"
 import { displayWikiTitle, pathLabel } from "@/lib/wiki-title"
 import type { WikiPage } from "@/types/wiki"
-import type { WikiPage as WikiPageType } from "@/types/wiki"
 
 export function SynthesisView({ page }: { page: WikiPage }) {
   const thesis = firstParagraph(page.content)
   const evidence = extractWikilinks(page.content)
   const wikiPages = useAppStore((s) => s.wikiPages)
-  const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
   const selectPage = useAppStore((s) => s.selectPage)
 
-  const evidenceLookup = new Map(wikiPages.map((p: WikiPageType) => [p.path.replace(/\.md$/, ""), p]))
+  const evidenceLookup = new Map(wikiPages.map((p) => [p.path.replace(/\.md$/, ""), p]))
 
   return (
     <BodyShell
@@ -48,7 +46,7 @@ export function SynthesisView({ page }: { page: WikiPage }) {
                     key={path}
                     onClick={() => {
                       if (p) {
-                        setSelectedPage(p)
+                        selectPage(p.path)
                         setActiveView("wiki")
                       } else {
                         selectPage(path.endsWith(".md") ? path : `${path}.md`)

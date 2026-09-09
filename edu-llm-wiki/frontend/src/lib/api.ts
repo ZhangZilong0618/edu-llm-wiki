@@ -272,11 +272,19 @@ export const api = {
   createTest: (data: TestCreateRequest) =>
     request<TestSession>(`${BASE}/tests?${p()}`, { method: "POST", body: JSON.stringify(data) }),
   getTest: (id: string) => request<TestSession>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`),
-  submitTest: (id: string, answers: Record<string, string | string[]>) =>
-    request<TestSession>(`${BASE}/tests/${encodeURIComponent(id)}/submit?${p()}`, {
-      method: "POST",
-      body: JSON.stringify({ answers }),
-    }),
+  submitTest: (
+    id: string,
+    answers: Record<string, string | string[]>,
+    confidences: Record<string, number> = {},
+    userId = "default",
+  ) =>
+    request<TestSession>(
+      `${BASE}/tests/${encodeURIComponent(id)}/submit?${p()}&user_id=${encodeURIComponent(userId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ answers, confidences }),
+      },
+    ),
   deleteTest: (id: string) =>
     request<{ status: string; id: string }>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`, { method: "DELETE" }),
 
@@ -284,24 +292,19 @@ export const api = {
   listMastery: () =>
     request<MasterySnapshot[]>(`${BASE}/graph/mastery?${p()}`),
   recordMasteryAttempt: (input: { node_id: string; score: number; max_score?: number }) =>
-    request<MasterySnapshot>(`${BASE}/graph/mastery/attempt?${p()}`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+    request<MasterySnapshot>(
+      `${BASE}/graph/mastery/${encodeURIComponent(input.node_id)}/attempt?${p()}&score=${input.score / (input.max_score ?? 1)}`,
+      { method: "POST" },
+    ),
   recordMasteryExposure: (input: { node_id: string }) =>
-    request<MasterySnapshot>(`${BASE}/graph/mastery/exposure?${p()}`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+    request<MasterySnapshot>(
+      `${BASE}/graph/mastery/${encodeURIComponent(input.node_id)}/exposure?${p()}`,
+      { method: "POST" },
+    ),
   getLearningPath: (target: string, max_steps = 8) =>
     request<LearningPathResponse>(
       `${BASE}/graph/learning-path/${encodeURIComponent(target)}?${p()}&max_steps=${max_steps}`,
     ),
-  listGraphEvents: (sinceId = 0) =>
-    request<GraphEventEnvelope[]>(
-      `${BASE}/graph/events?${p()}&since_id=${sinceId}`,
-    ),
-
   // v3 learning endpoints
   getLearningState: (user_id: string) =>
     request<LearnerStateSummary>(
@@ -315,12 +318,22 @@ export const api = {
     kc_id: string,
     correct: boolean,
     confidence: number,
-    quality: number,
+    quality?: number,
+    userId = "default",
   ) =>
-    request<ReviewResult>(`${BASE}/graph/learning/review?${p()}`, {
-      method: "POST",
-      body: JSON.stringify({ kc_id, correct, confidence, quality }),
-    }),
+    request<ReviewResult>(
+      `${BASE}/graph/learning/review?${p()}&user_id=${encodeURIComponent(userId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          kc_id,
+          score: correct ? 1 : 0,
+          max_score: 1,
+          confidence,
+          quality,
+        }),
+      },
+    ),
   getLearningInsights: (user_id: string) =>
     request<LearnerInsight[]>(
       `${BASE}/graph/learning/insights?${p()}&user_id=${user_id}`,
@@ -399,6 +412,8 @@ export interface TestAttempt {
   level: "empty" | "weak" | "partial" | "good"
   feedback: string
   correct_answer: string | string[]
+  confidence?: number | null
+  misconception_ids?: string[] | null
 }
 
 export interface TestSession {
@@ -470,31 +485,46 @@ export interface GraphEventEnvelope {
 
 
 // ---- v3 learning endpoints ----
-interface LearnerStateSummary {
-  user_id: string
+export interface LearnerStateSummary {
   p_known_avg: number
-  weak_kcs: { kc_id: string; p_known: number }[]
-  misconception_clusters: { tag: string; count: number }[]
-  transfer_windows: { from: string; to: string; delta: number; p_value: number }[]
+  weak_kcs: { kc_id: string; title: string; path: string; p_known: number }[]
+  misconception_clusters: { tag: string; label: string; count: number }[]
+  transfer_windows: { from: string; to: string }[]
   overconfidence_gap: number
-  readiness: Record<string, number>
-  sr_due_today: { kc_id: string; title: string; due_at: number }[]
-  decay_risk: { kc_id: string; retention: number; next_due: number }[]
+  readiness: number
+  sr_due_today: number
+  decay_risk: number
+  n_kcs_tracked: number
 }
 
 export interface ScheduleItem {
   kc_id: string
-  title?: string
+  title: string
+  path: string
+  prompt: string
+  expected: string
   due_at: number
   ef: number
-  interval_days: number
+  interval_seconds: number
+  reps: number
 }
 
 export interface ReviewResult {
-  kc_id: string
-  new_p_known: number
-  new_due_at: number
-  level: string
+  bkt: {
+    p_known: number
+    p_t: number
+    p_g: number
+    p_s: number
+  }
+  sr: {
+    ef: number
+    interval_seconds: number
+    reps: number
+    due_at: number
+  }
+  tags: string[]
+  quality: number
+  correct: boolean
 }
 
 export interface LearnerInsight {
@@ -503,31 +533,3 @@ export interface LearnerInsight {
   description: string
   score: number
 }
-
-export interface LearningApi {
-  getLearningState(user_id: string): Promise<LearnerStateSummary>
-  getLearningSchedule(user_id: string, limit: number): Promise<ScheduleItem[]>
-  postLearningReview(
-    kc_id: string,
-    correct: boolean,
-    confidence: number,
-    quality: number,
-  ): Promise<ReviewResult>
-  getLearningInsights(user_id: string): Promise<LearnerInsight[]>
-}
-
-const learningApi: LearningApi = {
-  getLearningState: (user_id) =>
-    request(`${BASE}/graph/learning/state?${p()}&user_id=${user_id}`),
-  getLearningSchedule: (user_id, limit) =>
-    request(`${BASE}/graph/learning/schedule?${p()}&user_id=${user_id}&limit=${limit}`),
-  postLearningReview: (item, correct, confidence, quality) =>
-    request(`${BASE}/graph/learning/review?${p()}`, {
-      method: "POST",
-      body: JSON.stringify({ item, correct, confidence, quality }),
-    }),
-  getLearningInsights: (user_id) =>
-    request(`${BASE}/graph/learning/insights?${p()}&user_id=${user_id}`),
-}
-
-export { learningApi }

@@ -94,7 +94,7 @@ def compute_learning_path(
     # of the path and floats weak spots to the front of the queue.
     def sort_key(nid: str) -> tuple[int, float, str]:
         level = mastery_map.get(nid, "new")
-        return (ranks[nid], _mastery_rank(level), nid)
+        return (-ranks[nid], _mastery_rank(level), nid)
 
     candidate_ids.sort(key=sort_key)
     ordered = candidate_ids[:max_steps]
@@ -105,7 +105,7 @@ def compute_learning_path(
             "node_id": nid,
             "title": nodes_by_id[nid].get("label", nid),
             "node_type": nodes_by_id[nid].get("node_type", "unknown"),
-            "reason": _reason_text(nid, target, ranks),
+            "reason": _reason_text(nid, target, ranks, nodes_by_id),
             "mastery": mastery_map.get(nid, "new"),
             "score": mastery_scores.get(nid, 0.0),
             "estimated_minutes": _estimate_minutes(nid, nodes_by_id, edges),
@@ -116,7 +116,10 @@ def compute_learning_path(
         "target": target,
         "steps": steps,
         "remaining": [c.target for c in remaining],
-        "estimated_total_minutes": sum(s["estimated_minutes"] for s in steps),
+        "estimated_total_minutes": sum(
+            _estimate_minutes(nid, nodes_by_id, edges)
+            for nid in candidate_ids
+        ),
     }
 
 
@@ -130,11 +133,18 @@ def _mastery_rank(level: str) -> int:
     }.get(level, 0)
 
 
-def _reason_text(nid: str, target: str, ranks: dict[str, int]) -> str:
+def _reason_text(
+    nid: str,
+    target: str,
+    ranks: dict[str, int],
+    nodes_by_id: dict[str, dict],
+) -> str:
     hop = ranks.get(nid, 0)
+    nid_title = nodes_by_id.get(nid, {}).get("label", nid)
+    target_title = nodes_by_id.get(target, {}).get("label", target)
     if hop <= 1:
-        return f"前置知识：理解 {nid} 后才能继续 {target}"
-    return f"前置链第 {hop} 层：补齐 {nid} 以打通 {target} 的学习路径"
+        return f"前置知识：理解 {nid_title} 后才能继续 {target_title}"
+    return f"前置链第 {hop} 层：补齐 {nid_title} 以打通 {target_title} 的学习路径"
 
 
 def _estimate_minutes(nid: str, nodes_by_id: dict, edges: Iterable[dict]) -> int:

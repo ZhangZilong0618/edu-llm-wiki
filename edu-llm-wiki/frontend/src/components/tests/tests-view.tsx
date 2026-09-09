@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react"
 import { FileSearch } from "lucide-react"
 import { api, type TestCreateRequest, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
+import { ConfidenceSlider } from "@/components/learning/confidence-slider"
 import { toast } from "@/components/ui/toast"
 import { useAppStore } from "@/stores/app-store"
 import {
@@ -112,6 +113,7 @@ export function TestsView() {
   const [activeSession, setActiveSession] = useState<TestSession | null>(null)
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({})
+  const [confidences, setConfidences] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(false)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const operations = useAppStore((s) => s.operations)
@@ -178,6 +180,7 @@ export function TestsView() {
       setActiveSession(session)
       setCurrentIndex(0)
       setAnswers({})
+      setConfidences({})
       await loadData()
       toast({ type: "success", message: `已生成 ${session.questions.length} 道测试题` })
     } catch (e: any) {
@@ -211,6 +214,7 @@ export function TestsView() {
       if (activeSession?.id === id) {
         setActiveSession(null)
         setAnswers({})
+        setConfidences({})
       }
       await loadData()
     } catch (e: any) {
@@ -227,7 +231,7 @@ export function TestsView() {
     const key = `tests:submit:${activeSession.id}`
     beginOperation(key, "提交测试中")
     try {
-      const session = await api.submitTest(activeSession.id, answers)
+      const session = await api.submitTest(activeSession.id, answers, confidences)
       setActiveSession(session)
       await loadData()
       toast({ type: "success", message: `测试已提交：${scoreLabel(session)}` })
@@ -450,6 +454,8 @@ export function TestsView() {
               setCurrentIndex={setCurrentIndex}
               answers={answers}
               setAnswer={setAnswer}
+              confidences={confidences}
+              setConfidence={setConfidences}
               answeredCount={answeredCount}
               submitting={submitting}
               onSubmit={submit}
@@ -468,6 +474,8 @@ function TestWorkspace({
   setCurrentIndex,
   answers,
   setAnswer,
+  confidences,
+  setConfidence,
   answeredCount,
   submitting,
   onSubmit,
@@ -478,6 +486,8 @@ function TestWorkspace({
   setCurrentIndex: (index: number) => void
   answers: Record<string, string | string[]>
   setAnswer: (questionId: string, value: string | string[]) => void
+  confidences: Record<string, number>
+  setConfidence: Dispatch<SetStateAction<Record<string, number>>>
   answeredCount: number
   submitting: boolean
   onSubmit: () => void
@@ -553,6 +563,18 @@ function TestWorkspace({
             disabled={submitted}
             onChange={(value) => setAnswer(question.id, value)}
           />
+
+          {!submitted && (
+            <section className="rounded-lg border p-4">
+              <h3 className="mb-3 text-sm font-semibold">作答把握</h3>
+              <ConfidenceSlider
+                value={confidences[question.id] ?? 3}
+                onChange={(value) =>
+                  setConfidence((prev) => ({ ...prev, [question.id]: value }))
+                }
+              />
+            </section>
+          )}
 
           {attempt && (
             <section className={`rounded-lg border p-4 ${levelClass(attempt.level)}`}>

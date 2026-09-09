@@ -29,7 +29,12 @@ class SM2Result:
     repetitions: int
 
 
-def quality_from_score(score: float, *, max_score: float = 1.0) -> int:
+def quality_from_score(
+    score: float,
+    *,
+    max_score: float = 1.0,
+    hint_ladder: int = 0,
+) -> int:
     """Map a continuous score in [0, max_score] to SM-2 quality in 0..5.
 
     The mapping is intentionally coarse: 0..2 = lapse, 3 = correct-with-effort,
@@ -38,15 +43,19 @@ def quality_from_score(score: float, *, max_score: float = 1.0) -> int:
     if max_score <= 0:
         return 0
     pct = max(0.0, min(1.0, score / max_score))
+    # Hints are evidence that the answer was supported rather than
+    # independently retrieved. Cap the penalty so a heavily scaffolded correct
+    # answer cannot be scored below an outright lapse.
+    hint_penalty = min(2, max(0, int(hint_ladder)))
     if pct < 0.3:
         return 0
     if pct < 0.5:
         return 2
     if pct < 0.7:
-        return 3
+        return max(3, 3 - hint_penalty)
     if pct < 0.9:
-        return 4
-    return 5
+        return max(3, 4 - hint_penalty)
+    return max(4, 5 - hint_penalty)
 
 
 def sm2(quality: int, prev_ease: float, prev_interval: float, prev_reps: int) -> SM2Result:

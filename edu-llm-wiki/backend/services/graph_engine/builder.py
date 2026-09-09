@@ -80,7 +80,22 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
                 "weight": 1.0,
                 "origin": "frontmatter",
             })
-        # 2) Body wikilinks — for pages whose frontmatter is sparse
+        # 2) Frontmatter/body “related” titles. These are weaker than
+        # explicit prerequisites but are sufficient to connect synthesis,
+        # inquiry, and guide pages to their referenced knowledge.
+        for rel in getattr(p, "related", []):
+            src = title_to_id.get(rel, rel)
+            if src == nid:
+                continue
+            candidates.append({
+                "source": nid,
+                "target": src,
+                "edge_type": "related",
+                "weight": 0.8,
+                "origin": "related_field",
+            })
+
+        # 3) Body wikilinks — for pages whose frontmatter is sparse
         #    (the common case after the v3 ingest pipeline).  The link
         #    direction is *ambiguous* in body text: `数据挖掘` mentioning
         #    `[[机器学习]]` is "related", not necessarily "prerequisite".
@@ -101,7 +116,7 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
                 "weight": 0.7,
                 "origin": "wiki_link",
             })
-        # 3) Frontmatter `relationships` (LLM-emitted structural edges).
+        # 4) Frontmatter `relationships` (LLM-emitted structural edges).
         for r in getattr(p, "relationships", []):
             candidates.append({
                 "source": title_to_id.get(r.src, r.src),
@@ -125,8 +140,11 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
             "target": tgt,
             "edge_type": EDGE_TYPE_ALIASES.get(et, "related"),
             "weight": cand.get("weight", 1.0),
+            "origin": cand.get("origin", "inferred"),
+            "evidence": cand.get("evidence", ""),
         })
 
+    edges = _break_prerequisite_cycles(edges)
     edges = prune_edges(edges, max_degree=MAX_GRAPH_DEGREE)
 
     nodes = []
@@ -175,6 +193,50 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
     store_communities(project_id, communities)
     store_insights(project_id, insights)
     return _shape_response(nodes, edges, communities=communities, insights=insights)
+
+
+def _break_prerequisite_cycles(edges: list[dict]) -> list[dict]:
+    """Downgrade prerequisite edges that participate in a directed cycle.
+
+    A prerequisite graph must be acyclic. LLM-extracted and wikilink-derived
+    prerequisites can occasionally contain cycles; rather than dropping the
+    connection, keep it as an undirected ``related`` edge.
+    """
+    graph: dict[str, set[str]] = defaultdict(set)
+    for edge in edges:
+        if edge.get("edge_type") == "prerequisite":
+            graph[edge["source"]].add(edge["target"])
+
+    state: dict[str, int] = {}
+    cyclic_nodes: set[str] = set()
+
+    def visit(node: str) -> None:
+        if state.get(node) == 1:
+            cyclic_nodes.add(node)
+            return
+        if state.get(node) == 2:
+            return
+        state[node] = 1
+        for nxt in graph.get(node, set()):
+            visit(nxt)
+        state[node] = 2
+
+    for node in list(graph):
+        visit(node)
+
+    if not cyclic_nodes:
+        return edges
+
+    out: list[dict] = []
+    for edge in edges:
+        if (
+            edge.get("edge_type") == "prerequisite"
+            and edge["source"] in cyclic_nodes
+            and edge["target"] in cyclic_nodes
+        ):
+            edge = {**edge, "edge_type": "related", "weight": min(0.8, edge.get("weight", 1.0))}
+        out.append(edge)
+    return out
 
 
 def get_node_neighborhood(node_id: str, depth: int = 1, *, project_id: str = "default") -> dict:

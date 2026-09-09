@@ -140,7 +140,6 @@ export function GraphCanvas(props: GraphCanvasProps) {
               height={24}
             >
               <div
-                xmlns="http://www.w3.org/1999/xhtml"
                 style={{
                   fontSize: 12,
                   fontWeight: 700,
@@ -287,7 +286,6 @@ function GraphNodeCard({
         height={node.height - 10}
       >
         <div
-          xmlns="http://www.w3.org/1999/xhtml"
           style={{
             fontSize: 12,
             fontWeight: 700,

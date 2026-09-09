@@ -18,6 +18,9 @@ class TestCreateRequest(BaseModel):
 
 class TestAnswerRequest(BaseModel):
     answers: dict[str, str | list[str]]
+    # Optional per-question confidence ratings (1..5) used by the calibration
+    # observer. Missing questions are treated as no self-rating.
+    confidences: dict[str, int] = Field(default_factory=dict)
 
 
 class TestQuestion(BaseModel):

@@ -41,7 +41,7 @@ from storage.wiki_store import list_wiki_pages, read_wiki_page, validate_project
 # Schema & version
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -253,7 +253,14 @@ CREATE TABLE IF NOT EXISTS learning_state (
 # ---------------------------------------------------------------------------
 
 _lock = threading.Lock()
-_connections: dict[str, sqlite3.Connection] = {}
+_local = threading.local()
+
+
+def _thread_connections() -> dict[str, sqlite3.Connection]:
+    """Return the SQLite connection cache for the current thread."""
+    if not hasattr(_local, "connections"):
+        _local.connections = {}
+    return _local.connections
 
 
 def _db_path(project_id: str) -> Path:
@@ -267,32 +274,41 @@ def connect(project_id: str) -> Iterator[sqlite3.Connection]:
     path = _db_path(project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     key = project_id
+    connections = _thread_connections()
     with _lock:
-        conn = _connections.get(key)
+        conn = connections.get(key)
         if conn is None:
             conn = sqlite3.connect(
-                path, check_same_thread=False, isolation_level=None
+                path, check_same_thread=True, isolation_level=None
             )
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.row_factory = sqlite3.Row
             conn.executescript(_SCHEMA_SQL)
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
                 (str(SCHEMA_VERSION),),
             )
-            _connections[key] = conn
+            connections[key] = conn
         yield conn
 
 
 def close_all() -> None:
+    """Close this thread's cached connections.
+
+    Connections are thread-local, so a long-lived worker should close them on
+    shutdown. Uvicorn's main process normally does not need to close another
+    thread's connections.
+    """
     with _lock:
-        for conn in _connections.values():
+        connections = _thread_connections()
+        for conn in connections.values():
             try:
                 conn.close()
             except Exception:
                 pass
-        _connections.clear()
+        connections.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +642,10 @@ def get_all_nodes(project_id: str) -> list[dict]:
             "page_path": d.get("page_path", ""),
             "size": size,
             "community": d.get("community_id", -1) if d.get("community_id") is not None else -1,
-            "metadata": {"content_hash": d.get("content_hash", "")},
+            "metadata": {
+                "path": d.get("page_path", ""),
+                "content_hash": d.get("content_hash", ""),
+            },
             "bloom_level": d.get("bloom_level"),
             "difficulty": d.get("difficulty"),
             "estimated_minutes": d.get("estimated_minutes"),
@@ -638,11 +657,31 @@ def get_all_nodes(project_id: str) -> list[dict]:
 
 
 def get_all_edges(project_id: str) -> list[dict]:
+    """Read edges and expose provenance fields used by the API contract."""
     with connect(project_id) as conn:
         rows = conn.execute(
             "SELECT * FROM graph_edges WHERE project_id=?", (project_id,)
         ).fetchall()
-    return [dict(r) for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        origin = d.get("origin") or "inferred"
+        weight = float(d.get("weight") or 1.0)
+        out.append({
+            "source": d.get("source", ""),
+            "target": d.get("target", ""),
+            "edge_type": d.get("edge_type") or "related",
+            "weight": weight,
+            # Keep the legacy persistence key for internal callers, and expose
+            # the API-facing aliases expected by GraphEdge.
+            "origin": origin,
+            "source_kind": origin,
+            "evidence": d.get("evidence") or "",
+            "rationale": d.get("evidence") or "",
+            "confidence": min(1.0, max(0.0, weight / 3.0)) if weight else 0.5,
+            "signals": {"weight": weight},
+        })
+    return out
 
 
 def get_neighbors(project_id: str, node_id: str, depth: int = 1) -> list[dict]:
@@ -960,9 +999,13 @@ def record_event_alias(project_id: str, event_type: str, payload: dict) -> int:
 
 
 def record_exposure(project_id: str, user_id: str, node_id: str) -> dict:
+    existing = get_mastery(project_id, user_id, node_id) or {}
+    state = existing.get("state")
+    if state not in {"attempted", "partial", "mastered"}:
+        state = "exposed"
     fields = {
-        "exposures": 1,
-        "last_exposure_at": _now(),
+        "state": state,
+        "last_seen_at": _now(),
     }
     return upsert_mastery(project_id, user_id, node_id, fields)
 
@@ -987,13 +1030,16 @@ def record_attempt(
         pct = max(0.0, min(1.0, float(score) / float(max_score)))
     if correct is None:
         correct = pct >= 0.5
-    level = "proficient" if correct else "learning"
+    if correct:
+        state = "mastered" if pct >= 0.85 else "partial"
+    else:
+        state = "partial" if pct >= 0.5 else "attempted"
     fields = {
-        "level": level,
+        "state": state,
         "score": pct,
         "attempts": 1,
         "successes": 1 if correct else 0,
-        "last_attempt_at": _now(),
+        "last_seen_at": _now(),
     }
     return upsert_mastery(project_id, user_id, node_id, fields)
 

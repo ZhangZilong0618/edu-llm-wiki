@@ -1,5 +1,6 @@
 """API routes for chat Q&A with graph-enhanced RAG pipeline."""
 
+import asyncio
 import json
 import re
 import tempfile
@@ -38,7 +39,7 @@ def _is_greeting(text: str) -> bool:
     return False
 
 
-SYSTEM_PROMPT = """You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.
+SYSTEM_PROMPT = r"""You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.
 
 ## Interaction Mode
 {mode_instruction}
@@ -54,6 +55,9 @@ SYSTEM_PROMPT = """You are a knowledgeable wiki assistant. Answer questions base
 - Use LaTeX for mathematical formulas: inline $...$ and block $$...$$. Never write bare LaTeX commands like \sigma or \varepsilon without $...$ delimiters.
 - At the VERY END of your response, add a hidden comment listing which page numbers you used:
   <!-- cited: 1, 3, 5 -->
+
+## Learner Profile
+{learner_profile}
 
 ## Wiki Purpose
 {purpose}
@@ -185,13 +189,46 @@ def _scope_seed_results(scope: ChatScope, *, project_id: str = "default") -> lis
     return []
 
 
+def _format_learner_profile(project_id: str, user_id: str) -> str:
+    """Format a compact, privacy-safe learner profile for the tutor prompt."""
+    try:
+        from services.mastery import learner_state_summary
+        state = learner_state_summary(project_id=project_id, user_id=user_id)
+    except Exception:
+        return "No learner state available yet."
+
+    weak = ", ".join(
+        f"{item.get('title', item.get('kc_id'))} ({float(item.get('p_known', 0)):.2f})"
+        for item in (state.get("weak_kcs") or [])[:5]
+    ) or "none recorded"
+    misconceptions = ", ".join(
+        f"{item.get('label', item.get('tag'))} x{item.get('count', 0)}"
+        for item in (state.get("misconception_clusters") or [])[:3]
+    ) or "none recorded"
+    due = int(state.get("sr_due_today", 0) or 0)
+    overconfidence = float(state.get("overconfidence_gap", 0) or 0)
+    readiness = float(state.get("readiness", 0) or 0)
+
+    return (
+        f"- average mastery: {float(state.get('p_known_avg', 0) or 0):.2f}\n"
+        f"- weak knowledge components: {weak}\n"
+        f"- recurring misconception patterns: {misconceptions}\n"
+        f"- due review items: {due}\n"
+        f"- overconfidence gap: {overconfidence:.2f}\n"
+        f"- prerequisite readiness: {readiness:.2f}\n"
+        "Use this profile to choose explanation depth and targeted feedback, but do not "
+        "invent additional learner data."
+    )
+
+
 async def _run_rag_pipeline(
     query: str,
     budget: dict,
     *,
     project_id: str = "default",
+    user_id: str = "default",
     scope: ChatScope | None = None,
-) -> tuple[str, list[dict], str, str, str]:
+) -> tuple[str, list[dict], str, str, str, str]:
     """Full RAG pipeline: search → vector → graph expand → budget fill → context assembly.
 
     Returns: (pages_context, cited, page_list, index)
@@ -219,7 +256,9 @@ async def _run_rag_pipeline(
     # ── Phase 1: Vector semantic search (primary) ──
     try:
         from services.vector_store import vector_search
-        vector_results = vector_search(query, top_k=20, project_id=project_id)
+        vector_results = await asyncio.to_thread(
+            vector_search, query, top_k=20, project_id=project_id
+        )
         for i, vr in enumerate(vector_results):
             if vr["path"] in seeded_paths:
                 continue
@@ -251,7 +290,9 @@ async def _run_rag_pipeline(
 
     # ── Phase 2: Graph 1-hop expansion with relevance threshold ──
     try:
-        expanded = await graph_expand(top_results, depth=1, project_id=project_id)
+        expanded = await graph_expand(
+            top_results, depth=1, project_id=project_id, user_id=user_id
+        )
         # expanded already merged and sorted by score
         top_results = expanded[:20]
     except Exception:
@@ -343,7 +384,24 @@ async def _run_rag_pipeline(
         pages_context = "(No relevant wiki pages found)"
         page_list = "(No pages matched)"
 
-    return pages_context, cited, page_list, index, purpose
+    # Record actual page exposures after the budget filter. This is stronger
+    # evidence than a search impression: these pages were placed in the LLM
+    # context for this learner.
+    try:
+        from services.graph_store import make_node_id, record_exposure
+        for p in relevant_pages:
+            record_exposure(
+                project_id=project_id,
+                user_id=user_id,
+                node_id=make_node_id(project_id, p["path"]),
+            )
+    except Exception:
+        pass
+
+    learner_profile = await asyncio.to_thread(
+        _format_learner_profile, project_id, user_id
+    )
+    return pages_context, cited, page_list, index, purpose, learner_profile
 
 
 @router.post("", response_model=ChatResponse)
@@ -367,13 +425,18 @@ async def chat(req: ChatRequest, project_id: str = Query("default")):
 
     # Full RAG pipeline
     budget = compute_budget(req.context_budget)
-    pages_context, cited, page_list, index, purpose = await _run_rag_pipeline(
-        last_user_msg, budget, project_id=project_id, scope=req.scope,
+    pages_context, cited, page_list, index, purpose, learner_profile = await _run_rag_pipeline(
+        last_user_msg,
+        budget,
+        project_id=project_id,
+        user_id=req.user_id,
+        scope=req.scope,
     )
 
     system = SYSTEM_PROMPT.format(
         mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
         language_instruction=language_instruction(),
+        learner_profile=learner_profile,
         purpose=purpose or "Not defined",
         index=index or "(No index)",
         page_list=page_list,
@@ -415,13 +478,18 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
 
     # Full RAG pipeline
     budget = compute_budget(req.context_budget)
-    pages_context, cited, page_list, index, purpose = await _run_rag_pipeline(
-        last_user_msg, budget, project_id=project_id, scope=req.scope,
+    pages_context, cited, page_list, index, purpose, learner_profile = await _run_rag_pipeline(
+        last_user_msg,
+        budget,
+        project_id=project_id,
+        user_id=req.user_id,
+        scope=req.scope,
     )
 
     system = SYSTEM_PROMPT.format(
         mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
         language_instruction=language_instruction(),
+        learner_profile=learner_profile,
         purpose=purpose or "Not defined",
         index=index or "(No index)",
         page_list=page_list,

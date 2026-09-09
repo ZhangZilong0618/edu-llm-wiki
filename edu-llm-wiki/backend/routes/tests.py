@@ -1,5 +1,6 @@
 """Standalone test sessions for staged learning assessment."""
 
+import asyncio
 import json
 import re
 import uuid
@@ -10,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from config import settings
 from models.tests import TestAnswerRequest, TestAttempt, TestCreateRequest, TestQuestion, TestSession, TestSummary
-from services import mastery
+from services.graph_store import get_nodes, make_node_id
 from services.language import language_instruction
 from services.llm_client import chat_complete
 from storage.wiki_store import list_wiki_pages, read_wiki_page, validate_project_id
@@ -87,6 +88,27 @@ def _session_path(session_id: str, project_id: str) -> Path:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _resolve_kc_id(project_id: str, related: str) -> str:
+    """Resolve a page path or title to the stable graph node id."""
+    if related.endswith(".md"):
+        return make_node_id(project_id, related)
+    for node in get_nodes(project_id):
+        if related in {
+            node.get("page_path"),
+            node.get("label"),
+            node.get("title"),
+            node.get("metadata", {}).get("path"),
+        }:
+            return node["id"]
+    return make_node_id(project_id, f"{related}.md")
+
+
+def _answer_text(value: str | list[str]) -> str:
+    if isinstance(value, list):
+        return "；".join(str(v) for v in value if v)
+    return str(value or "")
 
 
 def _read_session(session_id: str, project_id: str) -> TestSession:
@@ -545,12 +567,22 @@ async def get_test(session_id: str, project_id: str = Query("default")) -> TestS
 
 
 @router.post("/{session_id}/submit", response_model=TestSession)
-async def submit_test(session_id: str, req: TestAnswerRequest, project_id: str = Query("default")) -> TestSession:
+async def submit_test(
+    session_id: str,
+    req: TestAnswerRequest,
+    project_id: str = Query("default"),
+    user_id: str = Query("default"),
+) -> TestSession:
     session = _read_session(session_id, project_id)
     attempts: list[TestAttempt] = []
+
     for question in session.questions:
         answer = req.answers.get(question.id, "")
-        attempts.append(_score_objective(question, answer))
+        attempt = _score_objective(question, answer)
+        confidence = req.confidences.get(question.id)
+        if confidence is not None:
+            attempt.confidence = max(1, min(5, int(confidence)))
+        attempts.append(attempt)
 
     await _score_short_answers(session, attempts, req.answers)
 
@@ -563,66 +595,28 @@ async def submit_test(session_id: str, req: TestAnswerRequest, project_id: str =
     session.submitted_at = _now()
     _write_session(session, project_id)
 
-    # Feed each graded question into the mastery state machine so the
-    # learning graph can promote / demote related concepts and publish
-    # ``mastery_changed`` events.
+    # Feed every graded question into the v3 mastery observer. BKT, SM-2,
+    # confidence calibration, and misconception classification are updated in
+    # one transaction per attempt.
+    from services.mastery import record_attempt as record_v3_attempt
+
     for question, attempt in zip(session.questions, attempts):
-        related = question.related_page or question.concepts[0] if question.concepts else None
+        related = question.related_page or (
+            question.concepts[0] if question.concepts else None
+        )
         if not related:
             continue
-        mastery.record_attempt(
-            node_id=related,
+        await asyncio.to_thread(
+            record_v3_attempt,
             project_id=project_id,
+            user_id=user_id,
+            kc_id=_resolve_kc_id(project_id, related),
             score=attempt.score,
             max_score=attempt.max_score or 1.0,
-        )
-
-    # v3: also write the confidence log so the overconfidence_gap is
-    # computable for the next learner-state summary.
-    if getattr(attempt, "confidence", None) is not None:
-        mastery.record_confidence(
-            node_id=related,
-            project_id=project_id,
-            user_id="default",
+            response=_answer_text(attempt.user_answer),
+            expected=_answer_text(attempt.correct_answer),
             confidence=attempt.confidence,
-            correct=(attempt.score >= 0.5),
-        )
-
-    # v3: BKT/SR observers + optional confidence + misconception tagging.
-    # Each attempt is one observation against the related KC (the page the
-    # question belongs to). The store layers keep raw history in
-    # ``attempts_raw``; ``bkt_params`` and ``sr_schedule`` are updated
-    # transactionally.
-    from services.mastery import record_attempt as v3_record_attempt
-    from services.mastery import record_confidence as v3_record_confidence
-    from services import graph_store as gs
-    v3_record_attempt(
-        project_id=project_id,
-        user_id="default",
-        kc_id=related,
-        score=attempt.score,
-        max_score=attempt.max_score or 1.0,
-    )
-    if attempt.confidence is not None:
-        correct = (attempt.score or 0.0) >= 0.5
-        v3_record_confidence(
-            project_id=project_id,
-            user_id="default",
-            kc_id=related,
-            confidence=int(attempt.confidence),
-            correct=bool(correct),
-        )
-    for tag in (attempt.misconception_ids or []):
-        gs.execute(
-            project_id,
-            "INSERT INTO misconception_traces(project_id,user_id,kc_id,tag,response,expected,ts) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (
-                project_id, "default", related, tag,
-                str(attempt.user_answer)[:200],
-                str(attempt.correct_answer)[:200],
-                mastery.__dict__.get("_now", lambda: 0)() or 0,
-            ),
+            attempt_id=question.id,
         )
 
     return session

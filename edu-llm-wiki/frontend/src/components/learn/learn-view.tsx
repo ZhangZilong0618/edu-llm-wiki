@@ -22,6 +22,7 @@ import { api, setProjectId } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { PAGE_TYPE_CONFIG, type PageType } from "@/lib/page-type";
 import { Markdown } from "@/components/markdown";
+import { LearningPanel } from "@/components/learning/learning-panel";
 import type { GraphData, GraphNode } from "@/types/wiki";
 
 type ItemStatus = "not_started" | "done" | "needs_review";
@@ -500,6 +501,10 @@ export function LearnView() {
                   : "Review Gaps"}
           </span>
         </div>
+      </div>
+
+      <div className="shrink-0 px-4 pb-3">
+        <LearningPanel projectId={currentProject} />
       </div>
 
       <div ref={splitContainerRef} className="flex min-h-0 flex-1 flex-col">

@@ -21,6 +21,7 @@ class ChatOptions(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     conversation_id: str = "default"
+    user_id: str = "default"
     context_budget: int = 32000  # max context in chars
     mode: str = "ask"  # ask | practice
     scope: ChatScope = Field(default_factory=ChatScope)
