@@ -431,18 +431,21 @@ async def start_parse(filename: str, project_id: str = Query("default")):
     asynchronously; poll /api/ingest/sources/{filename}/parse-status
     for progress.
     """
-    from services.paddleocr import parse_source_async
+    from services.paddleocr import get_parse_status, parse_source_async
 
     _safe_parsed_filename(filename)
     sp = sources_path(project_id)
     if not (sp / filename).exists():
         raise HTTPException(status_code=404, detail="File not found")
 
+    current_status = get_parse_status(filename, project_id=project_id)
+    if current_status.get("status") in {"pending", "running"}:
+        return current_status
+
     import asyncio
     asyncio.create_task(parse_source_async(filename, project_id=project_id))
 
-    from services.paddleocr import get_parse_status
-    return get_parse_status(filename, project_id=project_id)
+    return current_status
 
 
 @router.get("/sources/{filename}/parse-status")

@@ -18,6 +18,14 @@ import requests
 
 JobStatus = Literal["pending", "running", "done", "failed", "not_started"]
 
+# PaddleOCR's public queue can reject concurrent submissions. Run source
+# parsing serially per project so clicking several files cannot flood it.
+_source_parse_locks: dict[str, asyncio.Lock] = {}
+
+
+def _source_parse_lock(project_id: str) -> asyncio.Lock:
+    return _source_parse_locks.setdefault(project_id, asyncio.Lock())
+
 
 def _get_settings():
     """Load PaddleOCR settings from .env."""
@@ -253,8 +261,26 @@ async def _run_parse(source_filename: str, *, project_id: str = "default") -> di
 
     try:
         _write_status(pd, "pending")
-        job_id = await asyncio.to_thread(_submit_job, src)
-        _write_status(pd, "running", job_id=job_id)
+        async with _source_parse_lock(project_id):
+            job_id = None
+            for attempt in range(1, 7):
+                try:
+                    job_id = await asyncio.to_thread(_submit_job, src)
+                    break
+                except RuntimeError as submit_err:
+                    text = str(submit_err)
+                    if "任务提交队列已满" not in text and "10010" not in text:
+                        raise
+                    if attempt == 6:
+                        raise
+                    _write_status(
+                        pd,
+                        "pending",
+                        queue_retry=attempt,
+                        message=f"PaddleOCR 队列已满，第 {attempt}/6 次等待后自动重试",
+                    )
+                    await asyncio.sleep(18 * attempt)
+            _write_status(pd, "running", job_id=job_id)
         result = await asyncio.to_thread(_poll_job, job_id)
         json_url = result.get("resultUrl", {}).get("jsonUrl")
         if not json_url:
@@ -311,9 +337,8 @@ async def _run_parse(source_filename: str, *, project_id: str = "default") -> di
         try:
             from services.parsed_index import build_parsed_index
             build_parsed_index(
-                sources_path=sp,
+                sources_root=sp,
                 source_filename=source_filename,
-                project_id=project_id,
                 force=True,
             )
         except Exception as index_err:
