@@ -12,9 +12,10 @@ from fastapi.responses import StreamingResponse
 from models.chat import ChatRequest, ChatResponse, ChatScope, CitedPage
 from services.context_budget import compute_budget
 from services.ingest_engine import _strip_images
+from services.graph_qa import collect_graph_evidence
 from services.language import language_instruction
 from services.llm_client import chat_complete, stream_chat
-from services.search_engine import graph_expand, keyword_search
+from services.search_engine import keyword_search
 from storage.wiki_store import list_wiki_pages, read_wiki_page, wiki_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -189,6 +190,34 @@ def _scope_seed_results(scope: ChatScope, *, project_id: str = "default") -> lis
     return []
 
 
+def _relation_context_for_pages(pages: list[dict], relations: list[dict]) -> str:
+    """Render followed graph edges as numbered relation evidence for the LLM."""
+    if not pages or not relations:
+        return ""
+
+    page_number = {p["path"]: i for i, p in enumerate(pages, 1)}
+    node_to_path = {p.get("node_id", ""): p["path"] for p in pages if p.get("node_id")}
+    lines: list[str] = []
+    for edge in relations:
+        source_path = node_to_path.get(edge.get("source", ""), edge.get("source", ""))
+        target_path = node_to_path.get(edge.get("target", ""), edge.get("target", ""))
+        if source_path not in page_number or target_path not in page_number:
+            continue
+        evidence = edge.get("evidence") or edge.get("rationale") or ""
+        line = (
+            f"[{page_number[source_path]}] --{edge.get('edge_type', 'related')}--> "
+            f"[{page_number[target_path]}]"
+        )
+        if evidence:
+            compact = re.sub(r"\s+", " ", evidence).strip()
+            line += f": {compact[:300]}"
+        lines.append(line)
+
+    if not lines:
+        return ""
+    return "\n\n## Followed graph relations\n" + "\n".join(lines[:40])
+
+
 def _format_learner_profile(project_id: str, user_id: str) -> str:
     """Format a compact, privacy-safe learner profile for the tutor prompt."""
     try:
@@ -229,14 +258,13 @@ async def _run_rag_pipeline(
     user_id: str = "default",
     scope: ChatScope | None = None,
 ) -> tuple[str, list[dict], str, str, str, str]:
-    """Full RAG pipeline: search → vector → graph expand → budget fill → context assembly.
+    """Full RAG pipeline: scope/vector/keyword seeds → iterative graph evidence → context assembly.
 
-    Returns: (pages_context, cited, page_list, index)
+    Returns: (pages_context, cited, page_list, index, purpose, learner_profile)
     """
     wp = wiki_path(project_id)
-    PAGE_BUDGET = budget["page_budget"]
-    MAX_PAGE_SIZE = budget["max_page_size"]
     INDEX_BUDGET = budget["index_budget"]
+    index = ""
 
     # ── Read purpose and index ──
     purpose = ""
@@ -288,77 +316,19 @@ async def _run_rag_pipeline(
     top_results.sort(key=lambda x: -x["score"])
     top_results = top_results[:20]
 
-    # ── Phase 2: Graph 1-hop expansion with relevance threshold ──
-    try:
-        expanded = await graph_expand(
-            top_results, depth=1, project_id=project_id, user_id=user_id
-        )
-        # expanded already merged and sorted by score
-        top_results = expanded[:20]
-    except Exception:
-        pass
-
-    # ── Trim index to relevant entries ──
-    index = raw_index
-    if len(raw_index) > INDEX_BUDGET:
-        from services.search_engine import tokenize_query
-        tokens = set(tokenize_query(query))
-        lines = raw_index.split("\n")
-        kept_lines: list[str] = []
-        kept_size = 0
-        for line in lines:
-            is_header = line.startswith("##")
-            lower = line.lower()
-            is_relevant = any(t in lower for t in tokens)
-            if (is_header or is_relevant) and kept_size + len(line) + 1 <= INDEX_BUDGET:
-                kept_lines.append(line)
-                kept_size += len(line) + 1
-        index = "\n".join(kept_lines)
-        if len(index) < len(raw_index):
-            index += "\n\n[...index trimmed to relevant entries...]"
-
-    # ── Phase 3: Priority-based page filling ──
-    used_chars = 0
-    relevant_pages: list[dict] = []
-
-    async def try_add_page(title: str, file_path: str, priority: int) -> bool:
-        nonlocal used_chars
-        if used_chars >= PAGE_BUDGET:
-            return False
-        try:
-            page = read_wiki_page(file_path, project_id=project_id)
-            if not page:
-                return False
-            content = _strip_images(page.get("content", ""))
-            if len(content) > MAX_PAGE_SIZE:
-                content = content[:MAX_PAGE_SIZE] + "\n\n[...truncated...]"
-            if used_chars + len(content) > PAGE_BUDGET:
-                return False
-            used_chars += len(content)
-            relevant_pages.append({
-                "title": title,
-                "path": file_path,
-                "content": content,
-                "priority": priority,
-            })
-            return True
-        except Exception:
-            return False
-
-    # P0: Title matches (highest priority)
-    for r in top_results:
-        if r.get("title_match"):
-            await try_add_page(r["title"], r["path"], 0)
-
-    # P1: Content matches (medium priority)
-    for r in top_results:
-        if not r.get("title_match"):
-            await try_add_page(r["title"], r["path"], 1)
-
-    # P2: Graph-expanded nodes (lower priority)
-    for r in top_results:
-        if r.get("score", 0) < 3.0 and not r.get("title_match"):
-            await try_add_page(r["title"], r["path"], 2)
+    # ── Phase 2: Iterative graph-guided evidence collection ──
+    # Search provides seed nodes; the controller traverses typed graph edges,
+    # reads adjacent page content, and asks the LLM whether evidence covers the
+    # question. It can therefore add prerequisite/mechanism pages that lexical
+    # search alone would miss.
+    graph_evidence = await collect_graph_evidence(
+        query,
+        top_results,
+        budget,
+        project_id=project_id,
+        user_id=user_id,
+    )
+    relevant_pages = graph_evidence.pages
 
     # ── Assemble context ──
     pages_context = ""
@@ -370,6 +340,9 @@ async def _run_rag_pipeline(
             f"### [{i + 1}] {p['title']}\nPath: {p['path']}\n\n{p['content']}"
             for i, p in enumerate(relevant_pages)
         )
+        relation_context = _relation_context_for_pages(relevant_pages, graph_evidence.relations)
+        if relation_context:
+            pages_context += relation_context
         page_list = "\n".join(
             f"[{i + 1}] {p['title']} ({p['path']})"
             for i, p in enumerate(relevant_pages)
