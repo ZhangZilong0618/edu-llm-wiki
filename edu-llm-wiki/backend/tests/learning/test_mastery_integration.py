@@ -108,3 +108,41 @@ def test_generated_related_sections_become_graph_edges(tmp_path, monkeypatch):
     assert len(get_edges(project_id)) >= 1
     assert all(edge["edge_type"] in {"related", "prerequisite"} for edge in graph["edges"])
 
+
+
+def test_record_attempt_handles_missing_node(monkeypatch, tmp_path):
+    """Recording an attempt for a KC that doesn't exist in the graph should
+    still succeed and persist BKT/SR rows. Useful when ingest produced a
+    question that references a concept not yet in the wiki."""
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+    ensure_schema("audit-missing")
+
+    result = record_attempt(
+        project_id="audit-missing",
+        user_id="learner-1",
+        kc_id="kc-not-in-graph",
+        score=0.8,
+        max_score=1.0,
+        confidence=4,
+        response="answered",
+        expected="correct",
+        attempt_id="q42",
+    )
+    assert result["bkt"]["p_known"] > 0.1
+    assert result["sr"]["interval_seconds"] > 0
+
+    with connect("audit-missing") as conn:
+        row = conn.execute(
+            "SELECT question_id, correct, score, max_score, confidence, hint_ladder "
+            "FROM attempts_raw WHERE kc_id=?",
+            ("kc-not-in-graph",),
+        ).fetchone()
+        assert row is not None
+        # correct=1 (since pct >= MASTERY_THRESHOLD 0.7), question_id set.
+        assert row[0] == "q42"
+        assert row[1] == 1
+        assert row[2] == 0.8
+        assert row[3] == 1.0
+        assert row[4] == 4
+        # hint_ladder defaults to 0.
+        assert row[5] == 0
