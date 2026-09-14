@@ -912,7 +912,12 @@ function TestWorkspace({
               return (
                 <section className="rounded-lg border border-emerald-200 bg-emerald-50/30 p-4">
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-emerald-800">本场已掌握</h3>
+                    <h3
+                      className="text-sm font-semibold text-emerald-800"
+                      title="本场模拟中得分 ≥ 70% 的题，表示已能稳定答对"
+                    >
+                      本场已掌握
+                    </h3>
                     <span className="text-[10px] text-emerald-600">{masteredQuestions.length} 题已掌握</span>
                   </div>
                   <ul className="space-y-1.5">
