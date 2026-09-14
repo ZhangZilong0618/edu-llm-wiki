@@ -66,6 +66,15 @@ export function ChatPanel() {
   convIdRef.current = convId
   const convTitleRef = useRef(convTitle)
   convTitleRef.current = convTitle
+
+  // Set to true once a conversation's row has been refreshed into the
+  // sidebar at least once. When the *first* message of a brand-new
+  // conversation is sent, wasRefreshedRef is false, so the autoSave
+  // refreshes the list immediately. Subsequent saves skip the refresh
+  // (the per-title-refresh guard in autoSave still applies) to avoid
+  // flicker and round-trips.
+  const wasRefreshedRef = useRef(false)
+
   const userId = useUserStore((s) => s.userId)
   const [llmModel, setLlmModel] = useState<string>("")
   useEffect(() => {
@@ -113,6 +122,7 @@ export function ChatPanel() {
     api.getConversation(convId).then((c) => {
       setMessages(c.messages || [])
       setConvTitle(c.title || "")
+      wasRefreshedRef.current = true // already in the list (or will be on first save)
       setStoppedMessageIds(new Set())
       setUnreadCount(0)
       lastSeenIndex.current = (c.messages || []).length
@@ -196,8 +206,13 @@ export function ChatPanel() {
         title: nextTitle,
         messages: msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, cited: m.cited })),
       }).then(() => {
+        const wasFirstSave = !wasRefreshedRef.current
         if (nextTitle !== convTitleRef.current) {
           convTitleRef.current = nextTitle
+          wasRefreshedRef.current = true
+          api.listConversations().then(setConversations).catch(() => {})
+        } else if (wasFirstSave) {
+          wasRefreshedRef.current = true
           api.listConversations().then(setConversations).catch(() => {})
         }
       }).catch(() => {})
