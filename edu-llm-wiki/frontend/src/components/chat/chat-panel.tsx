@@ -34,6 +34,7 @@ export function ChatPanel() {
   const [streaming, setStreaming] = useState<string | null>(null)
   const [stoppedMessageIds, setStoppedMessageIds] = useState<Set<string>>(() => new Set())
   const [convTitle, setConvTitle] = useState("")
+  const [loadingConversations, setLoadingConversations] = useState(true)
   const [scopeType, setScopeType] = useState<ScopeType>("whole_wiki")
   const [chatStatus, setChatStatus] = useState<string | null>(null)
   const [recognizingImage, setRecognizingImage] = useState(false)
@@ -55,7 +56,11 @@ export function ChatPanel() {
 
   // Load conversation list on mount / project change
   useEffect(() => {
-    api.listConversations().then(setConversations).catch(() => {})
+    setLoadingConversations(true)
+    api.listConversations()
+      .then(setConversations)
+      .catch(() => {})
+      .finally(() => setLoadingConversations(false))
   }, [setConversations])
 
   // Load conversation when switching
@@ -435,11 +440,16 @@ export function ChatPanel() {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {conversations.length === 0 && (
+          {loadingConversations ? (
+            <div className="flex items-center justify-center gap-1 px-3 py-6 text-xs text-[var(--muted-foreground)]">
+              <Loader2 size={12} className="animate-spin" /> 加载对话…
+            </div>
+          ) : null}
+          {!loadingConversations && conversations.length === 0 ? (
             <p className="px-3 py-6 text-xs text-[var(--muted-foreground)] text-center">
               No saved conversations
             </p>
-          )}
+          ) : null}
           {conversations.map((c) => (
             <div
               key={c.id}
