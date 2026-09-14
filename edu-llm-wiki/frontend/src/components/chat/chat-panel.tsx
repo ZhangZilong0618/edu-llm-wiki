@@ -192,10 +192,10 @@ export function ChatPanel() {
     const assistantId = nextId()
     let baseMsgs = messages
     if (regenerateNextRef.current) {
-      // Drop the most recent user message; it will be re-sent as part of the
-      // chat history to the model, but we do not want to append a duplicate
-      // "user" bubble in the UI.
-      baseMsgs = messages.slice(0, -1)
+      // The user message we are regenerating from is already the last item
+      // in `messages` (the errored / stopped assistant was filtered out
+      // before handleSend was invoked). Keep it in the chat history so the
+      // LLM still sees the question; just don't append a duplicate UI bubble.
       regenerateNextRef.current = false
     } else {
       const userMsg: Message = { id: nextId(), role: "user", content: input }
