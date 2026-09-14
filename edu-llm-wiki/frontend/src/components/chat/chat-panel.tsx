@@ -50,6 +50,14 @@ export function ChatPanel() {
   const [recognizingImage, setRecognizingImage] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const autoResizeTextarea = useCallback(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    ta.style.height = "auto"
+    const maxHeight = 8 * 24 // ~8 lines at 1.5 line-height
+    ta.style.height = `${Math.min(ta.scrollHeight, maxHeight)}px`
+    ta.style.overflowY = ta.scrollHeight > maxHeight ? "auto" : "hidden"
+  }, [])
   const imageInputRef = useRef<HTMLInputElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -146,6 +154,12 @@ export function ChatPanel() {
       if (abortRef.current) abortRef.current.abort()
     }
   }, [])
+
+  // Re-measure the textarea height whenever the conversation switches or
+  // the input length changes meaningfully.
+  useEffect(() => {
+    autoResizeTextarea()
+  }, [autoResizeTextarea, input.length])
 
   // Auto-save with debounce
   const autoSave = useCallback((msgs: Message[], title?: string) => {
@@ -766,7 +780,10 @@ export function ChatPanel() {
               <textarea
                 ref={textareaRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  autoResizeTextarea()
+                }}
                 maxLength={4000}
                 onKeyDown={handleKeyDown}
                 placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
