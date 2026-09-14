@@ -45,6 +45,7 @@ export function SourcesView() {
   const beginOperation = useAppStore((s) => s.beginOperation)
   const endOperation = useAppStore((s) => s.endOperation)
   const uploading = Boolean(operations["sources:upload"])
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
   const [taskQueue, setTaskQueue] = useState<string[]>([])
   const [activeTask, setActiveTask] = useState<string | null>(null)
   const [taskStates, setTaskStates] = useState<Record<string, IngestTaskState>>({})
@@ -133,11 +134,13 @@ export function SourcesView() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
+    const total = files.length
     beginOperation("sources:upload", "上传文件中")
+    setUploadProgress({ done: 0, total })
     let ok = 0
     let fail = 0
     const uploaded: string[] = []
-    for (const file of files) {
+    for (const file of Array.from(files)) {
       try {
         const res = await api.uploadFile(file)
         uploaded.push(res.filename)
@@ -146,6 +149,7 @@ export function SourcesView() {
         fail++
         console.error(err)
       }
+      setUploadProgress({ done: ok + fail, total })
     }
     try {
       const list = await api.listSources()
@@ -160,6 +164,7 @@ export function SourcesView() {
     } else if (ok > 0) {
       toast({ type: "success", message: `${ok} file(s) uploaded` })
     }
+    setTimeout(() => setUploadProgress(null), 1500)
 
     // Auto-trigger PaddleOCR parse for newly uploaded parseable files
     const toParse = uploaded.filter((n) => PARSEABLE_EXTS.includes(n.slice(n.lastIndexOf(".")).toLowerCase()))
@@ -436,6 +441,19 @@ export function SourcesView() {
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
           {uploading ? "Uploading..." : "Upload Documents"}
         </button>
+        {uploadProgress ? (
+          <div className="mt-1.5">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--muted)]">
+              <div
+                className="h-full bg-[var(--primary)] transition-all"
+                style={{ width: `${Math.round((uploadProgress.done / Math.max(1, uploadProgress.total)) * 100)}%` }}
+              />
+            </div>
+            <p className="mt-1 text-center text-[10px] text-[var(--muted-foreground)]">
+              {uploadProgress.done} / {uploadProgress.total}
+            </p>
+          </div>
+        ) : null}
 
         {sourceFiles.length > 1 && (
           <button
