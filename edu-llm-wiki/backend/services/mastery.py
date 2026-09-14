@@ -529,6 +529,7 @@ def learner_state_summary(project_id: str, user_id: str = "default") -> dict:
         "decay_risk": _decay_risk(sr),
         "n_kcs_tracked": len(bkt),
         "n_kcs_mastered": sum(1 for r in bkt if r["p_known"] >= 0.85),
+        "n_attempts": sum(int(r.get("attempts") or 0) for r in bkt),
     }
 
 
