@@ -578,7 +578,12 @@ export function TestsView() {
                   >
                     <div className="flex items-start gap-2">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{session.title}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-sm font-medium">{session.title}</p>
+                          {session.title?.includes("重做") ? (
+                            <span className="shrink-0 rounded bg-blue-100 px-1 py-0.5 text-[9px] font-medium text-blue-700">重做</span>
+                          ) : null}
+                        </div>
                         <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                           {session.question_count} 题 · {session.status === "submitted" ? scoreLabel(session) : "进行中"}
                         </p>
