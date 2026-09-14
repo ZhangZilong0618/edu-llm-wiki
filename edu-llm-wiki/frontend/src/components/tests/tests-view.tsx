@@ -867,6 +867,37 @@ function TestWorkspace({
               </div>
             </section>
           )}
+
+          {submitted && wrongQuestions.length > 0 ? (
+            <section className="rounded-lg border border-rose-200 bg-rose-50/30 p-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-rose-800">本次错题回顾</h3>
+                <span className="text-[10px] text-rose-600">{wrongQuestions.length} 道待巩固</span>
+              </div>
+              <ul className="space-y-1.5">
+                {wrongQuestions.map((q, idx) => {
+                  const a = attemptsById.get(q.id)
+                  return (
+                    <li key={q.id}>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentIndex(session.questions.findIndex((x) => x.id === q.id))}
+                        className="w-full rounded border border-rose-200 bg-white px-2 py-1.5 text-left text-[12px] text-rose-700 hover:bg-rose-50"
+                      >
+                        <span className="font-medium">第 {session.questions.findIndex((x) => x.id === q.id) + 1} 题</span>
+                        <span className="ml-2 line-clamp-1 text-foreground">{q.prompt.replace(/\n+/g, " ")}</span>
+                        {a ? (
+                          <span className="ml-2 text-[10px] text-rose-500">
+                            · {a.score}/{a.max_score}
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          ) : null}
         </div>
       </div>
 
