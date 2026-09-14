@@ -459,6 +459,13 @@ export function ChatPanel() {
     if (!next || next === currentTitle) return
     try {
       const conv = await api.getConversation(id)
+      // Cancel any pending content autoSave first — otherwise the stale
+      // timer can fire a few hundred ms later and overwrite the new title
+      // with the OLD title captured in its closure.
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current)
+        saveTimer.current = null
+      }
       await api.saveConversation({ id, title: next, messages: conv.messages || [] })
       const list = await api.listConversations()
       setConversations(list)
