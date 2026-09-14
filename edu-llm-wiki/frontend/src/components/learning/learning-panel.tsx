@@ -4,7 +4,7 @@
 // clusters, readiness progress and SR queue.
 import { useEffect, useState } from "react"
 import { toast } from "@/components/ui/toast"
-import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw, CheckCircle2 } from "lucide-react"
+import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw, CheckCircle2, ListChecks } from "lucide-react"
 import { api } from "@/lib/api"
 import { useUserStore } from "@/stores/user-store"
 import { PosteriorBar } from "./posterior-bar"
@@ -118,6 +118,7 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
           icon={CheckCircle2}
           warn={(state.n_kcs_mastered ?? 0) > 0}
         />
+        <Tile label="总答题数" value={state.n_attempts ?? 0} icon={ListChecks} />
         <Tile label="遗忘风险" value={(state.decay_risk * 100).toFixed(0) + "%"} warn={state.decay_risk > 0.5} />
       </div>
       <div className="space-y-1">

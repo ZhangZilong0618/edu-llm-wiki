@@ -571,6 +571,7 @@ export interface LearnerStateSummary {
   decay_risk: number
   n_kcs_tracked: number
   n_kcs_mastered: number
+  n_attempts: number
 }
 
 export interface ScheduleItem {
