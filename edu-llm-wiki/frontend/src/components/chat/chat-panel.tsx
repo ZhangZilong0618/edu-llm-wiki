@@ -136,13 +136,18 @@ export function ChatPanel() {
     setStreaming(null)
     setChatStatus(null)
     // Persist whatever we already streamed so the partial response is
-    // not lost on reload.
+    // not lost on reload. Use messagesRef so the call sees the most
+    // recent streamed chunks.
     if (convIdRef.current) {
-      autoSave(messages, convTitle)
+      autoSave(messagesRef.current, convTitle)
     }
   }
 
   const handleSendRef = useRef<(() => void) | null>(null)
+  // Mirror of `messages` so non-React callbacks (handleStop, handleNewConv)
+  // always see the latest streamed content.
+  const messagesRef = useRef<Message[]>([])
+  useEffect(() => { messagesRef.current = messages }, [messages])
   // When true, the next handleSend call will stream a new assistant response
   // without re-appending the last user message (used by "regenerate").
   const regenerateNextRef = useRef(false)
@@ -258,8 +263,8 @@ export function ChatPanel() {
       abortRef.current = null
     }
     regenerateNextRef.current = false
-    if (convIdRef.current && messages.length > 0) {
-      autoSave(messages, convTitle)
+    if (convIdRef.current && messagesRef.current.length > 0) {
+      autoSave(messagesRef.current, convTitle)
     }
     setStreaming(null)
     setChatStatus(null)
