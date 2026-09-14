@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X, Bot } from "lucide-react"
 
 interface Message {
   id: string
@@ -47,6 +47,10 @@ export function ChatPanel() {
   const convIdRef = useRef(convId)
   convIdRef.current = convId
   const userId = useUserStore((s) => s.userId)
+  const [llmModel, setLlmModel] = useState<string>("")
+  useEffect(() => {
+    api.getLlmSettings().then((s) => setLlmModel(s.llm_model)).catch(() => {})
+  }, [])
 
   const selectedSourceName = selectedSource?.filename || importSelectedSource || null
   const chatScope = {
@@ -519,8 +523,15 @@ export function ChatPanel() {
             {scopeType === "selected_source" && selectedSourceName ? selectedSourceName : null}
             {scopeType === "whole_wiki" ? "Using all wiki pages" : null}
           </span>
-          <span className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)]" title="当前学习者 ID">
-            <User size={10} /> {userId}
+          <span className="ml-auto flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
+            {llmModel ? (
+              <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title={`当前 LLM 模型: ${llmModel}`}>
+                <Bot size={10} /> {llmModel}
+              </span>
+            ) : null}
+            <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title="当前学习者 ID">
+              <User size={10} /> {userId}
+            </span>
           </span>
         </div>
 
