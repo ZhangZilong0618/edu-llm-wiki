@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react"
+import { useAppStore } from "@/stores/app-store"
+import { useUserStore } from "@/stores/user-store"
 import {
   BookOpen,
   Check,
@@ -87,6 +89,9 @@ export function SettingsView() {
     paddleocr_unwarping: false,
     paddleocr_chart: false,
   })
+  const userId = useUserStore((s) => s.userId)
+  const currentProject = useAppStore((s) => s.currentProject)
+  const projectId = currentProject || "default"
   const [paddleSaved, setPaddleSaved] = useState(false)
   const [showPaddleToken, setShowPaddleToken] = useState(false)
   const [refitting, setRefitting] = useState(false)
@@ -96,7 +101,7 @@ export function SettingsView() {
     const tok = (typeof window === "undefined" ? "" : window.localStorage.getItem("edu-llm-wiki.adminToken") || "")
     setRefitting(true)
     try {
-      const res = await api.refitBkt("default", "default", tok || undefined)
+      const res = await api.refitBkt(userId, projectId, tok || undefined)
       if (res.status === "ok") {
         setLastRefitAt(Math.floor(Date.now() / 1000))
         const p = res.params || {}
