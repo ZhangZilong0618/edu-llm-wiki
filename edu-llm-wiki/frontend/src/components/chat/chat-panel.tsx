@@ -270,12 +270,12 @@ export function ChatPanel() {
     setStoppedMessageIds(new Set())
   }
 
-  const copyMessage = async (text: string) => {
+  const copyMessage = async (text: string, label = "已复制") => {
     if (!text) return
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text)
-        toast({ type: "success", message: "已复制" })
+        toast({ type: "success", message: label })
         return
       }
     } catch {
@@ -290,7 +290,7 @@ export function ChatPanel() {
     ta.select()
     try {
       document.execCommand("copy")
-      toast({ type: "success", message: "已复制" })
+      toast({ type: "success", message: label })
     } catch {
       toast({ type: "error", message: "复制失败，请手动复制" })
     } finally {
@@ -576,7 +576,7 @@ export function ChatPanel() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => copyMessage(c.path)}
+                            onClick={() => copyMessage(c.path, "已复制路径")}
                             className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 hover:bg-[var(--background)] hover:text-[var(--foreground)] group-hover:opacity-100"
                             title="复制引用路径"
                           >
