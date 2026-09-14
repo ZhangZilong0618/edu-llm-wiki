@@ -79,6 +79,8 @@ export function ChatPanel() {
       setMessages(c.messages || [])
       setConvTitle(c.title || "")
       setStoppedMessageIds(new Set())
+      setUnreadCount(0)
+      lastSeenIndex.current = (c.messages || []).length
     }).catch(() => {})
   }, [convId])
 
@@ -288,6 +290,8 @@ export function ChatPanel() {
     setConvTitle("")
     setInput("")
     setStoppedMessageIds(new Set())
+    setUnreadCount(0)
+    lastSeenIndex.current = 0
   }
 
   const copyMessage = async (text: string, label = "已复制") => {
