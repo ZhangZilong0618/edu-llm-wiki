@@ -779,7 +779,10 @@ function computeWrongQuestions(session: TestSession): TestQuestion[] {
   return session.questions.filter((q, i) => {
     const a = session.attempts[i]
     if (!a) return false
-    return a.score / Math.max(1, a.max_score) < 0.5
+    // Clamp to a non-NaN ratio so ungraded questions (score / max_score
+    // both 0) are not silently treated as wrong.
+    const ratio = ((a.score || 0) / Math.max(1, a.max_score || 1))
+    return ratio < 0.5
   })
 }
 
