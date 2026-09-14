@@ -568,6 +568,45 @@ async def get_test(session_id: str, project_id: str = Query("default")) -> TestS
     return _read_session(session_id, project_id)
 
 
+@router.post("/{session_id}/regenerate-from-wrong", response_model=TestSession)
+async def regenerate_from_wrong(
+    session_id: str,
+    project_id: str = Query("default"),
+    user_id: str = Query("default"),
+) -> TestSession:
+    """Create a new test session that contains only the questions the learner
+    got wrong (score/max_score < 0.5). Useful for targeted re-practice.
+    """
+    old = _read_session(session_id, project_id)
+    if not old.attempts:
+        raise HTTPException(status_code=400, detail="本场测试还没有提交结果，无法筛选错题")
+    wrong = []
+    for question, attempt in zip(old.questions, old.attempts):
+        ratio = (attempt.score or 0) / max(1, (attempt.max_score or 1))
+        if ratio < 0.5:
+            wrong.append(question)
+    if not wrong:
+        raise HTTPException(status_code=400, detail="没有错题，直接挑战新题吧")
+    new_id = uuid.uuid4().hex[:12]
+    new_session = TestSession(
+        id=new_id,
+        title=f"{old.title} · 重做错题",
+        scope=old.scope,
+        source=old.source,
+        mode=old.mode,
+        difficulty=old.difficulty,
+        status="active",
+        questions=wrong,
+        attempts=[],
+        score=None,
+        max_score=None,
+        created_at=_now(),
+        submitted_at=None,
+    )
+    _write_session(new_session, project_id)
+    return new_session
+
+
 @router.post("/{session_id}/submit", response_model=TestSession)
 async def submit_test(
     session_id: str,

@@ -268,6 +268,31 @@ export function TestsView() {
     setAnswers((prev) => ({ ...prev, [questionId]: value }))
     setLastAnswerAt((prev) => ({ ...prev, [questionId]: Date.now() }))
   }
+  const regenerateFromWrong = async () => {
+    if (!activeSession) return
+    if (typeof window === "undefined") return
+    const confirmed = window.confirm("根据本场测试的错题，生成一份只含错题的新测试？")
+    if (!confirmed) return
+    beginOperation(`tests:regen:${activeSession.id}`, "生成错题测试")
+    try {
+      const session = await api.regenerateFromWrong(activeSession.id, userId)
+      setActiveSession(session)
+      setCurrentIndex(0)
+      setAnswers({})
+      setConfidences({})
+      setStartedAt(Date.now())
+      setLastAnswerAt({})
+      setSubmitSummary(null)
+      setPendingTestPagePath(null)
+      await loadData()
+      toast({ type: "success", message: `已生成错题测试：${session.questions.length} 题` })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "生成错题测试失败" })
+    } finally {
+      endOperation(`tests:regen:${activeSession.id}`)
+    }
+  }
+
   const resetAnswers = () => {
     if (typeof window === "undefined") return
     const confirmed = window.confirm("清空本场测试的所有答案和把握，重新开始作答？已提交的成绩不会变。")
@@ -580,6 +605,7 @@ export function TestsView() {
               submitSummary={submitSummary}
               onExport={exportTest}
               onResetAnswers={resetAnswers}
+              onRegenerateFromWrong={regenerateFromWrong}
             />
           )}
         </main>
@@ -604,6 +630,7 @@ function TestWorkspace({
   submitSummary,
   onExport,
   onResetAnswers,
+  onRegenerateFromWrong,
 }: {
   session: TestSession
   currentIndex: number
@@ -620,6 +647,7 @@ function TestWorkspace({
   submitSummary: { total: number; perQuestion: { id: string; ms: number }[] } | null
   onExport: () => void
   onResetAnswers: () => void
+  onRegenerateFromWrong: () => void
 }) {
   const question = session.questions[currentIndex]
   const attempt = attemptsById.get(question.id)
@@ -653,6 +681,16 @@ function TestWorkspace({
                 title="清空答案和把握，重新作答。已提交的成绩会保留在对话里。"
               >
                 <RotateCcw size={10} /> 重新作答
+              </button>
+            ) : null}
+            {submitted ? (
+              <button
+                type="button"
+                onClick={onRegenerateFromWrong}
+                className="ml-2 inline-flex items-center gap-1 rounded border border-blue-300 bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700 hover:bg-blue-100"
+                title="把本场错题自动组成新一场测试，专注突破薄弱点。"
+              >
+                <RefreshCw size={10} /> 只做错题
               </button>
             ) : null}
             </p>

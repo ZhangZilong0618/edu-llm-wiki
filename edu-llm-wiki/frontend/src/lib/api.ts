@@ -331,6 +331,9 @@ export const api = {
   deleteTest: (id: string) =>
     request<{ status: string; id: string }>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`, { method: "DELETE" }),
 
+  regenerateFromWrong: (id: string, userId = "default") =>
+    request<TestSession>(`${BASE}/tests/${encodeURIComponent(id)}/regenerate-from-wrong?${p()}&user_id=${encodeURIComponent(userId)}`, { method: "POST" }),
+
   // v2 learning graph: mastery + learning path + event stream
   listMastery: () =>
     request<MasterySnapshot[]>(`${BASE}/graph/mastery?${p()}`),
