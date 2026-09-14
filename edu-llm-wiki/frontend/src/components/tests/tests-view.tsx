@@ -898,12 +898,20 @@ function TestWorkspace({
                         onClick={() => setCurrentIndex(session.questions.findIndex((x) => x.id === q.id))}
                         className="w-full rounded border border-rose-200 bg-white px-2 py-1.5 text-left text-[12px] text-rose-700 hover:bg-rose-50"
                       >
-                        <span className="font-medium">第 {session.questions.findIndex((x) => x.id === q.id) + 1} 题</span>
-                        <span className="ml-2 line-clamp-1 text-foreground">{q.prompt.replace(/\n+/g, " ")}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 font-medium">第 {session.questions.findIndex((x) => x.id === q.id) + 1} 题</span>
+                          {a ? (
+                            <span className="shrink-0 text-[10px] text-rose-500">
+                              · {a.score}/{a.max_score}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="line-clamp-2 text-foreground">{q.prompt.replace(/\n+/g, " ")}</p>
                         {a ? (
-                          <span className="ml-2 text-[10px] text-rose-500">
-                            · {a.score}/{a.max_score}
-                          </span>
+                          <p className="line-clamp-1 mt-0.5 text-[11px] text-rose-500">
+                            <span className="text-rose-700">你答: </span>{answerToText(a.user_answer) || "(未作答)"}
+                            <span className="ml-2 text-rose-700">正确: </span>{answerToText(a.correct_answer) || "(无)"}
+                          </p>
                         ) : null}
                       </button>
                     </li>
