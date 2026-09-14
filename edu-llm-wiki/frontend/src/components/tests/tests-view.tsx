@@ -466,6 +466,7 @@ export function TestsView() {
               submitting={submitting}
               onSubmit={submit}
               attemptsById={attemptsById}
+              userId={userId}
             />
           )}
         </main>
@@ -486,6 +487,7 @@ function TestWorkspace({
   submitting,
   onSubmit,
   attemptsById,
+  userId,
 }: {
   session: TestSession
   currentIndex: number
@@ -498,6 +500,7 @@ function TestWorkspace({
   submitting: boolean
   onSubmit: () => void
   attemptsById: Map<string, TestSession["attempts"][number]>
+  userId: string
 }) {
   const question = session.questions[currentIndex]
   const attempt = attemptsById.get(question.id)
@@ -511,7 +514,7 @@ function TestWorkspace({
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-semibold">{session.title}</h2>
             <p className="text-sm text-[var(--muted-foreground)]">
-              {session.questions.length} 题 · 已答 {answeredCount} 题
+              {session.questions.length} 题 · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
               {submitted && resultPercent != null ? ` · 得分 ${scoreLabel(session)} (${resultPercent}%)` : ""}
             </p>
           </div>
