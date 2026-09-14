@@ -692,6 +692,9 @@ function TestWorkspace({
             <ChevronRight size={16} />
           </button>
         </div>
+        <p className="mt-2 text-center text-[10px] text-[var(--muted-foreground)]">
+          快捷键：1-9 / A-D 选择 · ← → 切题 · ⌘/Ctrl + Enter 提交
+        </p>
       </div>
     </div>
   )
