@@ -8,11 +8,13 @@ import { useEffect, useState } from "react"
 import { Check, X, ChevronRight } from "lucide-react"
 
 import { api } from "@/lib/api"
+import { toast } from "@/components/ui/toast"
+import { useUserStore } from "@/stores/user-store"
 
 import { ConfidenceSlider } from "./confidence-slider"
 
 export function ReviewSession({
-  userId = "default",
+  userId,
   projectId,
   limit = 8,
   onComplete,
@@ -22,6 +24,8 @@ export function ReviewSession({
   limit?: number
   onComplete?: () => void
 }) {
+  const activeUser = useUserStore((s) => s.userId)
+  const effectiveUserId = userId ?? activeUser
   const [items, setItems] = useState<any[]>([])
   const [idx, setIdx] = useState(0)
   const [revealed, setRevealed] = useState(false)
@@ -33,7 +37,7 @@ export function ReviewSession({
     let cancelled = false
     ;(async () => {
       try {
-        const data = await api.getLearningSchedule(userId, limit)
+        const data = await api.getLearningSchedule(effectiveUserId, limit)
         if (!cancelled) setItems(Array.isArray(data) ? data : [])
       } catch {
         if (!cancelled) setItems([])
@@ -42,7 +46,7 @@ export function ReviewSession({
     return () => {
       cancelled = true
     }
-  }, [userId, projectId, limit])
+  }, [userId, projectId, limit, effectiveUserId])
 
   if (!items.length) {
     return (
@@ -58,16 +62,17 @@ export function ReviewSession({
   const submit = async (correct: boolean) => {
     setBusy(true)
     try {
+    void 0;
       await api.postLearningReview(
         item.kc_id,
         correct,
         confidence,
         correct ? Math.min(5, confidence + 1) : Math.max(0, confidence - 2),
-        userId,
+        effectiveUserId,
       )
       setStats((s) => ({ correct: s.correct + (correct ? 1 : 0), total: s.total + 1 }))
-    } catch {
-      // swallow — the schedule is best-effort
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "提交复习失败" })
     }
     setBusy(false)
     setRevealed(false)

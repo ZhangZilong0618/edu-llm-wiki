@@ -1,6 +1,7 @@
 import { cn } from "@/lib/cn"
 import { useAppStore, type ActiveView } from "@/stores/app-store"
 import { ProjectSelector } from "./project-selector"
+import { UserSelector } from "./user-selector"
 import {
   Upload, BookOpen, GitGraph, Settings, GraduationCap, ClipboardCheck, Loader2
 } from "lucide-react"
@@ -23,6 +24,7 @@ export function IconSidebar() {
 
   return (
     <div className="flex flex-col gap-0.5 py-3 px-2 w-48 border-r bg-[var(--sidebar)] shrink-0">
+      <UserSelector />
       <ProjectSelector />
       <div className="border-t border-[var(--border)] my-1" />
       {items.map((item) => (

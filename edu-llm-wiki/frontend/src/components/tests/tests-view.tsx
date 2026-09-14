@@ -5,6 +5,7 @@ import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { ConfidenceSlider } from "@/components/learning/confidence-slider"
 import { toast } from "@/components/ui/toast"
 import { useAppStore } from "@/stores/app-store"
+import { useUserStore } from "@/stores/user-store"
 import {
   AlertCircle,
   CheckCircle2,
@@ -133,6 +134,7 @@ export function TestsView() {
 
   // Consume a page-scoped request from PreviewPanel's footer button.
   const pendingTestPagePath = useAppStore((s) => s.pendingTestPagePath)
+  const userId = useUserStore((s) => s.userId)
   const setPendingTestPagePath = useAppStore((s) => s.setPendingTestPagePath)
   useEffect(() => {
     if (!pendingTestPagePath) return
@@ -209,6 +211,9 @@ export function TestsView() {
   }
 
   const deleteSession = async (id: string) => {
+    const confirmed = typeof window === "undefined"
+      || window.confirm("删除该测试会话将同时清除历史答题记录，确定继续吗？")
+    if (!confirmed) return
     try {
       await api.deleteTest(id)
       if (activeSession?.id === id) {
@@ -217,6 +222,7 @@ export function TestsView() {
         setConfidences({})
       }
       await loadData()
+      toast({ type: "success", message: "测试已删除" })
     } catch (e: any) {
       toast({ type: "error", message: `删除测试失败: ${e?.message || e}` })
     }
@@ -231,7 +237,7 @@ export function TestsView() {
     const key = `tests:submit:${activeSession.id}`
     beginOperation(key, "提交测试中")
     try {
-      const session = await api.submitTest(activeSession.id, answers, confidences)
+      const session = await api.submitTest(activeSession.id, answers, confidences, userId)
       setActiveSession(session)
       await loadData()
       toast({ type: "success", message: `测试已提交：${scoreLabel(session)}` })

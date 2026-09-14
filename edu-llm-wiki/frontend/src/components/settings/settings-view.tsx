@@ -107,7 +107,16 @@ export function SettingsView() {
     api.getSchema().then((r) => setSchema(r.content)).catch(console.error)
   }, [])
 
+  const needsApiKey = !["ollama"].includes(llm.llm_provider)
   const saveLlm = async () => {
+    if (needsApiKey && !llm.llm_api_key.trim()) {
+      toast({ type: "error", message: "请先填写 API Key，再保存 LLM 设置。" })
+      return
+    }
+    if (!llm.llm_model.trim()) {
+      toast({ type: "error", message: "请填写模型名称，例如 gpt-4o-mini。" })
+      return
+    }
     setLlmTesting(true)
     try {
       await api.saveLlmSettings(llm)
@@ -126,6 +135,10 @@ export function SettingsView() {
   }
 
   const saveEmb = async () => {
+    if (emb.embedding_enabled && !emb.embedding_endpoint.trim()) {
+      toast({ type: "error", message: "请填写 Embedding 接口地址。" })
+      return
+    }
     try {
       await api.saveEmbeddingSettings(emb)
       setEmbSaved(true)

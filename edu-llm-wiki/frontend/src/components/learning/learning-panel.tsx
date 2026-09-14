@@ -3,22 +3,33 @@
 // Fetches /api/learning/state and renders the weak KCs, misconception
 // clusters, readiness progress and SR queue.
 import { useEffect, useState } from "react"
+import { toast } from "@/components/ui/toast"
 import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw } from "lucide-react"
 import { api } from "@/lib/api"
+import { useUserStore } from "@/stores/user-store"
 import { PosteriorBar } from "./posterior-bar"
 import { ReviewSession } from "./review-session"
-export function LearningPanel({ userId = "default", projectId }: { userId?: string; projectId?: string }) {
+export function LearningPanel({ userId, projectId }: { userId?: string; projectId?: string }) {
+  const activeUser = useUserStore((s) => s.userId)
+  const effectiveUser = userId ?? activeUser
   const [state, setState] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [reviewOpen, setReviewOpen] = useState(false)
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api.getLearningState(userId).then((s) => { if (!cancelled) setState(s) }).finally(() => { if (!cancelled) setLoading(false) })
+    api.getLearningState(effectiveUser)
+      .then((s) => { if (!cancelled) setState(s) })
+      .catch((e) => toast({ type: "error", message: e?.message || "加载学习画像失败" }))
+      .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [userId, projectId])
+  }, [userId, projectId, effectiveUser])
   if (loading) return <div className="text-[11px] text-[var(--muted-foreground)]">载入画像…</div>
-  if (!state) return null
+  if (!state) return (
+    <div className="rounded-lg border bg-[var(--card)] p-3 text-[11px] text-[var(--muted-foreground)]">
+      暂无可用的学习画像，提交一次测试或复习后再来查看。
+    </div>
+  )
   return (
     <section className="space-y-3 rounded-lg border bg-[var(--card)] p-3">
       <h3 className="flex items-center gap-1 text-xs font-semibold"><Brain size={12} /> 学习画像</h3>
@@ -60,7 +71,7 @@ export function LearningPanel({ userId = "default", projectId }: { userId?: stri
       {reviewOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setReviewOpen(false)}>
           <div className="max-h-[80vh] w-[28rem] overflow-auto rounded-lg bg-[var(--background)] p-4" onClick={(e) => e.stopPropagation()}>
-            <ReviewSession userId={userId} projectId={projectId} onComplete={() => setReviewOpen(false)} />
+            <ReviewSession userId={effectiveUser} projectId={projectId} onComplete={() => setReviewOpen(false)} />
           </div>
         </div>
       )}

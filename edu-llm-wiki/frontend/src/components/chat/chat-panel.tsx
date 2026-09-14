@@ -3,6 +3,7 @@ import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
+import { useUserStore } from "@/stores/user-store"
 import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus } from "lucide-react"
 
 interface Message {
@@ -40,6 +41,7 @@ export function ChatPanel() {
   const skipLoadRef = useRef(false)
   const convIdRef = useRef(convId)
   convIdRef.current = convId
+  const userId = useUserStore((s) => s.userId)
 
   const selectedSourceName = selectedSource?.filename || importSelectedSource || null
   const chatScope = {
@@ -152,6 +154,8 @@ export function ChatPanel() {
       for await (const event of api.chatStream(apiMessages, controller.signal, {
         mode: "ask",
         scope: effectiveScope,
+        user_id: userId,
+        conversation_id: currentConvId ?? "default",
         options: {
           citation_required: true,
           answer_style: "concise",
@@ -176,13 +180,15 @@ export function ChatPanel() {
       })
     } catch (e: any) {
       if (e?.name === "AbortError") { setStreaming(null); return }
+      const message = e?.message || "请求失败，请稍后再试"
+      toast({ type: "error", message })
       setMessages((prev) => prev.map((m) =>
-        m.id === assistantId && !m.content ? { ...m, content: `Error: ${e.message || e}` } : m
+        m.id === assistantId && !m.content ? { ...m, content: `Error: ${message}` } : m
       ))
     }
     setStreaming(null)
     setChatStatus(null)
-  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope])
+  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope, userId])
 
   const handleNewConv = () => {
     setConvId(null)
@@ -191,13 +197,21 @@ export function ChatPanel() {
   }
 
   const handleDeleteConv = async (id: string) => {
-    await api.deleteConversation(id).catch(() => {})
-    if (convId === id) {
-      setConvId(null)
-      setMessages([])
-      setConvTitle("")
+    const confirmed = typeof window === "undefined"
+      || window.confirm("删除该对话？该操作无法撤销。")
+    if (!confirmed) return
+    try {
+      await api.deleteConversation(id)
+      if (convId === id) {
+        setConvId(null)
+        setMessages([])
+        setConvTitle("")
+      }
+      await api.listConversations().then(setConversations).catch(() => {})
+      toast({ type: "success", message: "对话已删除" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "删除对话失败" })
     }
-    api.listConversations().then(setConversations).catch(() => {})
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

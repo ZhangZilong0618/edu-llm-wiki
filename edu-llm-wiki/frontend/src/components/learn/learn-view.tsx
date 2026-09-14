@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LearningPanel } from "@/components/learning/learning-panel";
 import {
   AlertTriangle,
   BookOpen,
@@ -19,10 +20,12 @@ import {
   X,
 } from "lucide-react";
 import { api, setProjectId } from "@/lib/api";
-import { useAppStore } from "@/stores/app-store";
+import { useAppStore } from "@/stores/app-store"
+import { useUserStore } from "@/stores/user-store";
 import { PAGE_TYPE_CONFIG, type PageType } from "@/lib/page-type";
 import { Markdown } from "@/components/markdown";
-import { LearningPanel } from "@/components/learning/learning-panel";
+import { toast } from "@/components/ui/toast";
+
 import type { GraphData, GraphNode } from "@/types/wiki";
 
 type ItemStatus = "not_started" | "done" | "needs_review";
@@ -242,6 +245,7 @@ export function LearnView() {
   const currentProject = useAppStore((s) => s.currentProject);
   const selectPage = useAppStore((s) => s.selectPage);
   const setActiveView = useAppStore((s) => s.setActiveView);
+  const userId = useUserStore((s) => s.userId)
   const [statuses, setStatuses] = useState<Record<string, ItemStatus>>(() => {
     try {
       return JSON.parse(localStorage.getItem("edu-llm-wiki.learning.default") || "{}");
@@ -272,7 +276,11 @@ export function LearnView() {
         if (!cancelled) setData(graph);
       })
       .catch((e) => {
-        if (!cancelled) setError(e?.message || "Failed to load");
+        const message = e?.message || "加载图谱失败"
+        if (!cancelled) {
+          setError(message)
+          toast({ type: "error", message })
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -451,7 +459,14 @@ export function LearnView() {
         <div>
           <GraduationCap className="h-12 w-12 mx-auto mb-3 opacity-20" />
           <p className="text-sm font-medium">No learning path available</p>
-          <p className="text-xs mt-1">Import documents and run ingest to generate knowledge.</p>
+          <p className="text-xs mt-1">导入资料并完成 ingest，系统会为你构建专属学习路径。</p>
+          <button
+            type="button"
+            onClick={() => setActiveView("sources")}
+            className="mt-3 inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)]"
+          >
+            去导入资料 →
+          </button>
         </div>
       </div>
     );
@@ -504,7 +519,7 @@ export function LearnView() {
       </div>
 
       <div className="shrink-0 px-4 pb-3">
-        <LearningPanel projectId={currentProject} />
+        <LearningPanel userId={userId} projectId={currentProject} />
       </div>
 
       <div ref={splitContainerRef} className="flex min-h-0 flex-1 flex-col">
