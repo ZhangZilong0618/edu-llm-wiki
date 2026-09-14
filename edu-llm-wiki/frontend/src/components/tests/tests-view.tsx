@@ -886,6 +886,18 @@ function TestWorkspace({
             <section className="rounded-lg border border-rose-200 bg-rose-50/30 p-4">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-rose-800">本次错题回顾</h3>
+                {(() => {
+                  const masteredCount = session.questions.filter((_, i) => {
+                    const a = (session.attempts || [])[i]
+                    return a && a.score / Math.max(1, a.max_score) >= 0.7
+                  }).length
+                  if (masteredCount === 0) return null
+                  return (
+                    <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                      本场已掌握 {masteredCount} 题
+                    </span>
+                  )
+                })()}
                 <span className="text-[10px] text-rose-600">{wrongQuestions.length} 道待巩固</span>
               </div>
               <ul className="space-y-1.5">
