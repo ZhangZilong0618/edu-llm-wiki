@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Target,
   Trash2,
 } from "lucide-react"
 
@@ -774,6 +775,13 @@ export function TestsView() {
   )
 }
 
+const DIFFICULTY_ORDER: Record<string, number> = {
+  basic: 0,
+  understanding: 1,
+  application: 2,
+  mixed: 3,
+}
+
 function computeWrongQuestions(session: TestSession): TestQuestion[] {
   if (!session.attempts) return []
   return session.questions.filter((q, i) => {
@@ -784,6 +792,39 @@ function computeWrongQuestions(session: TestSession): TestQuestion[] {
     const ratio = ((a.score || 0) / Math.max(1, a.max_score || 1))
     return ratio < 0.5
   })
+}
+
+function groupWrongQuestions(
+  wrong: TestQuestion[],
+): Array<{ key: string; title: string; questions: TestQuestion[] }> {
+  /** Group by related_page (KC), largest first, ordered by pedagogical
+   *  difficulty within each group. Questions without a related_page
+   *  fall into a synthetic "其他" bucket so they still surface. */
+  const groups = new Map<string, { title: string; questions: TestQuestion[] }>()
+  for (const q of wrong) {
+    const key = q.related_page || "__no_kc__"
+    const title = q.related_page ? q.related_page.replace(/\.md$/, "") : "其他"
+    if (!groups.has(key)) groups.set(key, { title, questions: [] })
+    groups.get(key)!.questions.push(q)
+  }
+  const sorted = Array.from(groups.entries())
+    .map(([key, value]) => ({ key, ...value }))
+    .sort((a, b) => {
+      // Largest group first; ties broken by alphabetical title.
+      if (b.questions.length !== a.questions.length) {
+        return b.questions.length - a.questions.length
+      }
+      return a.title.localeCompare(b.title)
+    })
+  for (const group of sorted) {
+    group.questions.sort((a, b) => {
+      const da = DIFFICULTY_ORDER[a.difficulty] ?? 3
+      const db = DIFFICULTY_ORDER[b.difficulty] ?? 3
+      if (da !== db) return da - db
+      return a.prompt.localeCompare(b.prompt)
+    })
+  }
+  return sorted
 }
 
 function TestWorkspace({
@@ -1043,56 +1084,79 @@ function TestWorkspace({
             return null
           })()}
 
-          {submitted && wrongQuestions.length > 0 ? (
-            <section className="rounded-lg border border-rose-200 bg-rose-50/30 p-4">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-rose-800">本次错题回顾</h3>
-                {(() => {
-                  const masteredCount = session.questions.filter((_, i) => {
-                    const a = (session.attempts || [])[i]
-                    return a && a.score / Math.max(1, a.max_score) >= 0.7
-                  }).length
-                  if (masteredCount === 0) return null
-                  return (
-                    <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                      本场已掌握 {masteredCount} 题
-                    </span>
-                  )
-                })()}
-                <span className="text-[10px] text-rose-600">{wrongQuestions.length} 道待巩固</span>
-              </div>
-              <ul className="space-y-1.5">
-                {wrongQuestions.map((q, idx) => {
-                  const a = attemptsById.get(q.id)
-                  return (
-                    <li key={q.id}>
-                      <button
-                        type="button"
-                        onClick={() => setCurrentIndex(session.questions.findIndex((x) => x.id === q.id))}
-                        className="w-full rounded border border-rose-200 bg-white px-2 py-1.5 text-left text-[12px] text-rose-700 hover:bg-rose-50"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0 font-medium">第 {session.questions.findIndex((x) => x.id === q.id) + 1} 题</span>
-                          {a ? (
-                            <span className="shrink-0 text-[10px] text-rose-500">
-                              · {a.score}/{a.max_score}
-                            </span>
-                          ) : null}
+          {submitted && wrongQuestions.length > 0
+            ? (() => {
+                const groups = groupWrongQuestions(wrongQuestions)
+                return (
+                  <section className="rounded-lg border border-rose-200 bg-rose-50/30 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-rose-800">本次错题回顾</h3>
+                      {(() => {
+                        const masteredCount = session.questions.filter((_, i) => {
+                          const a = (session.attempts || [])[i]
+                          return a && (a.score || 0) / Math.max(1, a.max_score || 1) >= 0.7
+                        }).length
+                        if (masteredCount === 0) return null
+                        return (
+                          <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                            本场已掌握 {masteredCount} 题
+                          </span>
+                        )
+                      })()}
+                      <span className="text-[10px] text-rose-600">{wrongQuestions.length} 道待巩固 · {groups.length} 个知识组件</span>
+                    </div>
+                    <div className="space-y-3">
+                      {groups.map((group) => (
+                        <div key={group.key} className="rounded-md border border-rose-100 bg-white/60 p-2">
+                          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-rose-700">
+                            <Target size={11} />
+                            <span className="truncate">{group.title}</span>
+                            <span className="ml-auto text-[10px] text-rose-500">{group.questions.length} 道</span>
+                          </div>
+                          <ul className="space-y-1">
+                            {group.questions.map((q) => {
+                              const a = attemptsById.get(q.id)
+                              const origIdx = session.questions.findIndex((x) => x.id === q.id)
+                              const difficultyLabel =
+                                q.difficulty === "basic" ? "基础"
+                                  : q.difficulty === "understanding" ? "理解"
+                                  : q.difficulty === "application" ? "应用"
+                                  : "混合"
+                              return (
+                                <li key={q.id}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCurrentIndex(origIdx)}
+                                    className="w-full rounded border border-rose-200 bg-white px-2 py-1.5 text-left text-[12px] text-rose-700 hover:bg-rose-50"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="shrink-0 font-medium">第 {origIdx + 1} 题</span>
+                                      <span className="shrink-0 rounded bg-rose-50 px-1 py-0.5 text-[10px] text-rose-600">{difficultyLabel}</span>
+                                      {a ? (
+                                        <span className="shrink-0 text-[10px] text-rose-500">
+                                          · {a.score}/{a.max_score}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <p className="line-clamp-2 text-foreground">{q.prompt.replace(/\n+/g, " ")}</p>
+                                    {a ? (
+                                      <p className="line-clamp-1 mt-0.5 text-[11px] text-rose-500">
+                                        <span className="text-rose-700">你答: </span>{answerToText(a.user_answer) || "(未作答)"}
+                                        <span className="ml-2 text-rose-700">正确: </span>{answerToText(a.correct_answer) || "(无)"}
+                                      </p>
+                                    ) : null}
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
                         </div>
-                        <p className="line-clamp-2 text-foreground">{q.prompt.replace(/\n+/g, " ")}</p>
-                        {a ? (
-                          <p className="line-clamp-1 mt-0.5 text-[11px] text-rose-500">
-                            <span className="text-rose-700">你答: </span>{answerToText(a.user_answer) || "(未作答)"}
-                            <span className="ml-2 text-rose-700">正确: </span>{answerToText(a.correct_answer) || "(无)"}
-                          </p>
-                        ) : null}
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            </section>
-          ) : null}
+                      ))}
+                    </div>
+                  </section>
+                )
+              })()
+            : null}
         </div>
       </div>
 
