@@ -679,11 +679,17 @@ export function ChatPanel() {
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              maxLength={4000}
               onKeyDown={handleKeyDown}
               placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
               className="flex-1 resize-none rounded-lg border px-3 py-2 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
               rows={2}
             />
+            {input.length > 1500 ? (
+              <p className="mt-1 text-right text-[10px] text-amber-600">
+                内容较长 ({input.length}/4000)，建议拆分后再发
+              </p>
+            ) : null}
             {streaming ? (
               <button
                 onClick={handleStop}
