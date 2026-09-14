@@ -172,7 +172,24 @@ export function GraphView() {
       </div>
     );
   }
-  if (!data) return null;
+  if (!data || data.nodes.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-[var(--muted-foreground)]">
+        <GitFork size={36} className="opacity-25" />
+        <div>
+          <p className="font-medium text-foreground">还没有图谱数据</p>
+          <p className="mt-1 text-xs">先到 Import 上传文档并完成 ingest，节点和边会自动构建出来。</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setActiveView("sources")}
+          className="mt-1 inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)]"
+        >
+          去导入资料 →
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div
