@@ -20,12 +20,19 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Awaitable, Callable
 
 from services.graph_store import get_edges, get_nodes, make_node_id, record_exposure
 from services.ingest_engine import _strip_images
 from services.llm_client import chat_complete
 from services.search_engine import _page_body
 from storage.wiki_store import read_wiki_page
+
+# Optional async callback used by the streaming chat endpoint to surface
+# retrieval progress to the user (e.g. "Searching graph for prerequisites
+# (Round 1/2)"). It is fire-and-forget; status failures must not break the
+# pipeline.
+StatusCallback = Callable[[str], Awaitable[None]] | None
 
 
 @dataclass
@@ -181,6 +188,7 @@ async def collect_graph_evidence(
     user_id: str = "default",
     max_rounds: int = 2,
     max_expansions_per_round: int = 4,
+    on_status: StatusCallback = None,
 ) -> GraphEvidence:
     """Collect pages by graph-guided, LLM-controlled expansion.
 
@@ -342,10 +350,25 @@ Rules:
 """
 
     missing: list[str] = []
+
+    async def emit_status(text: str) -> None:
+        if on_status is None:
+            return
+        try:
+            await on_status(text)
+        except Exception:
+            # Status is best-effort; never fail retrieval on a callback error.
+            pass
+
+    await emit_status(f"正在沿知识图谱搜索相关页面（最多 {max_rounds} 轮）")
     for round_number in range(1, max_rounds + 1):
         result.rounds = round_number
+        await emit_status(
+            f"第 {round_number}/{max_rounds} 轮：判断证据是否充分"
+        )
         frontier = build_frontier()
         if not frontier:
+            await emit_status("没有更多相邻页面可以扩展")
             break
 
         prompt = _format_controller_prompt(query, list(selected_pages.values()), frontier, missing=missing)
@@ -413,8 +436,17 @@ Rules:
         except Exception:
             pass
 
+        if selected_this_round:
+            await emit_status(
+                f"已读取 {len(selected_this_round)} 个相邻页面"
+            )
         if not selected_this_round or used_chars >= page_budget:
             break
+
+    if result.rounds == 0:
+        await emit_status("图谱检索完成")
+    else:
+        await emit_status(f"图谱检索完成，共 {result.rounds} 轮、{len(result.pages)} 个页面")
 
     result.pages = list(selected_pages.values())
     result.relations = list(used_relations.values())

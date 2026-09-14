@@ -257,6 +257,7 @@ async def _run_rag_pipeline(
     project_id: str = "default",
     user_id: str = "default",
     scope: ChatScope | None = None,
+    on_status=None,
 ) -> tuple[str, list[dict], str, str, str, str]:
     """Full RAG pipeline: scope/vector/keyword seeds → iterative graph evidence → context assembly.
 
@@ -321,12 +322,25 @@ async def _run_rag_pipeline(
     # reads adjacent page content, and asks the LLM whether evidence covers the
     # question. It can therefore add prerequisite/mechanism pages that lexical
     # search alone would miss.
+
+    async def emit_status(text: str) -> None:
+        if on_status is None:
+            return
+        try:
+            await on_status(text)
+        except Exception:
+            # Status is best-effort; never fail retrieval on a callback error.
+            pass
+
+    await emit_status("正在检索相关 Wiki 页面")
+
     graph_evidence = await collect_graph_evidence(
         query,
         top_results,
         budget,
         project_id=project_id,
         user_id=user_id,
+        on_status=emit_status,
     )
     relevant_pages = graph_evidence.pages
 
@@ -449,28 +463,52 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
             yield "data: [DONE]\n\n"
         return StreamingResponse(greeting_gen(), media_type="text/event-stream")
 
-    # Full RAG pipeline
+    # Full RAG pipeline with status relay so the user can see graph retrieval progress.
     budget = compute_budget(req.context_budget)
-    pages_context, cited, page_list, index, purpose, learner_profile = await _run_rag_pipeline(
-        last_user_msg,
-        budget,
-        project_id=project_id,
-        user_id=req.user_id,
-        scope=req.scope,
-    )
+    status_queue: asyncio.Queue[str] = asyncio.Queue()
 
-    system = SYSTEM_PROMPT.format(
-        mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
-        language_instruction=language_instruction(),
-        learner_profile=learner_profile,
-        purpose=purpose or "Not defined",
-        index=index or "(No index)",
-        page_list=page_list,
-        pages_context=pages_context,
+    async def on_status(text: str) -> None:
+        try:
+            await status_queue.put(text)
+        except Exception:
+            pass
+
+    pipeline_task = asyncio.create_task(
+        _run_rag_pipeline(
+            last_user_msg,
+            budget,
+            project_id=project_id,
+            user_id=req.user_id,
+            scope=req.scope,
+            on_status=on_status,
+        )
     )
 
     async def generate():
-        yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': 'Reading relevant wiki pages...'})}\n\n"
+        # While pipeline runs, relay any status updates immediately.
+        while not pipeline_task.done():
+            try:
+                text = await asyncio.wait_for(status_queue.get(), timeout=0.1)
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': text})}\n\n"
+            except asyncio.TimeoutError:
+                continue
+        # Drain anything queued right at the end.
+        while not status_queue.empty():
+            text = status_queue.get_nowait()
+            yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': text})}\n\n"
+
+        pages_context, cited, page_list, index, purpose, learner_profile = pipeline_task.result()
+
+        system = SYSTEM_PROMPT.format(
+            mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
+            language_instruction=language_instruction(),
+            learner_profile=learner_profile,
+            purpose=purpose or "Not defined",
+            index=index or "(No index)",
+            page_list=page_list,
+            pages_context=pages_context,
+        )
+
         yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in cited]})}\n\n"
         yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': 'Answering with citations...'})}\n\n"
         full_response = ""
