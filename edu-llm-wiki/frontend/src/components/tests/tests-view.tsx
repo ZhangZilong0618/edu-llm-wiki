@@ -694,9 +694,12 @@ export function TestsView() {
                         </p>
                         {(() => {
                           const status = session.status
-                          const wrongCount = session.score != null && session.max_score
+                          // Prefer the exact wrong_count from the backend; fall
+                          // back to the score-ratio approximation for sessions
+                          // recorded before the field was introduced.
+                          const wrongCount = session.wrong_count ?? (session.score != null && session.max_score
                             ? Math.round(((session.max_score - session.score) / session.max_score) * session.question_count)
-                            : 0
+                            : 0)
                           if (status === "submitted" && wrongCount > 0) {
                             return (
                               <span className="mt-1 inline-flex rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">

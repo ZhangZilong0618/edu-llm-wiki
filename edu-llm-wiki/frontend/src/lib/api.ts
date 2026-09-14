@@ -514,6 +514,10 @@ export interface TestSummary {
   question_count: number
   score: number | null
   max_score: number | null
+  // Exact count of questions the learner got wrong (score < 0.5). Backend
+  // computes this from individual attempts so the sidebar badge can show
+  // an integer count instead of a rounded score-ratio approximation.
+  wrong_count: number | null
   created_at: string
   submitted_at: string | null
 }

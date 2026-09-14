@@ -74,5 +74,10 @@ class TestSummary(BaseModel):
     question_count: int
     score: float | None = None
     max_score: float | None = None
+    # Number of questions in this session that the learner got wrong. The
+    # frontend sidebar uses this exact value instead of approximating it
+    # from the (score / max_score) ratio, which would round wrong for any
+    # partial-credit scoring.
+    wrong_count: int | None = None
     created_at: str
     submitted_at: str | None = None

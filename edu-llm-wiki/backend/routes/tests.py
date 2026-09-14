@@ -523,6 +523,12 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
             session = TestSession.model_validate(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
             continue
+        wrong_count: int | None = None
+        if session.attempts:
+            wrong_count = sum(
+                1 for a in session.attempts
+                if (a.score or 0) / max(1, a.max_score or 1) < 0.5
+            )
         sessions.append(TestSummary(
             id=session.id,
             title=session.title,
@@ -530,6 +536,7 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
             question_count=len(session.questions),
             score=session.score,
             max_score=session.max_score,
+            wrong_count=wrong_count,
             created_at=session.created_at,
             submitted_at=session.submitted_at,
         ))
