@@ -165,7 +165,7 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
           type="button"
           onClick={handleRefit}
           disabled={refitting}
-          title="用 attempts_raw 全量记录重算 BKT 参数（至少 5 条才拟合）"
+          title={`用 attempts_raw 全量记录重算 BKT 参数（至少 5 条才拟合）${state.last_refit_at ? `\n上次拟合: ${new Date(state.last_refit_at * 1000).toLocaleString()}` : ""}`}
           className="flex shrink-0 items-center justify-center gap-1 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[11px] text-violet-700 hover:bg-violet-100 disabled:opacity-50"
         >
           <RefreshCw size={11} className={refitting ? "animate-spin" : ""} />

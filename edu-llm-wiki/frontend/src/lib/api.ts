@@ -572,6 +572,7 @@ export interface LearnerStateSummary {
   n_kcs_tracked: number
   n_kcs_mastered: number
   n_attempts: number
+  last_refit_at: number | null
 }
 
 export interface ScheduleItem {
