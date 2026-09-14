@@ -123,6 +123,7 @@ export function ChatPanel() {
       abortRef.current.abort()
       abortRef.current = null
     }
+    regenerateNextRef.current = false
     setStreaming(null)
     setChatStatus(null)
     // Persist whatever we already streamed so the partial response is
@@ -247,6 +248,7 @@ export function ChatPanel() {
       abortRef.current.abort()
       abortRef.current = null
     }
+    regenerateNextRef.current = false
     if (convIdRef.current && messages.length > 0) {
       autoSave(messages, convTitle)
     }
