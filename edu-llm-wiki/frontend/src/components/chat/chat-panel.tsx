@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X } from "lucide-react"
 
 interface Message {
   id: string
@@ -675,16 +675,29 @@ export function ChatPanel() {
             >
               {recognizingImage ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
             </button>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              maxLength={4000}
-              onKeyDown={handleKeyDown}
-              placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
-              className="flex-1 resize-none rounded-lg border px-3 py-2 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-              rows={2}
-            />
+            <div className="relative flex-1">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                maxLength={4000}
+                onKeyDown={handleKeyDown}
+                placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
+                className="w-full resize-none rounded-lg border px-3 py-2 pr-7 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                rows={2}
+              />
+              {input.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setInput("")}
+                  aria-label="清空输入"
+                  title="清空输入"
+                  className="absolute right-1.5 top-1.5 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                >
+                  <X size={12} />
+                </button>
+              ) : null}
+            </div>
             {input.length > 1500 ? (
               <p className="mt-1 text-right text-[10px] text-amber-600">
                 内容较长 ({input.length}/4000)，建议拆分后再发
