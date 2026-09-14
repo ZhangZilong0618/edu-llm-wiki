@@ -266,7 +266,7 @@ export function ChatPanel() {
     setMessages(newMsgs)
     setInput("")
     setStreaming(assistantId)
-    setChatStatus("Understanding question...")
+    setChatStatus("正在理解问题...")
     textareaRef.current?.focus()
 
     if (!convTitle && messages.length === 0) {
