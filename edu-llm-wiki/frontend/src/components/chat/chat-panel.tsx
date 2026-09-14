@@ -73,6 +73,17 @@ export function ChatPanel() {
 
   // Load conversation when switching
   useEffect(() => {
+    // Switching conversations should cancel any in-flight stream so the
+    // new conversation starts cleanly instead of inheriting stale streaming
+    // UI from the previous one.
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    regenerateNextRef.current = false
+    setStreaming(null)
+    setChatStatus(null)
+
     if (skipLoadRef.current) {
       skipLoadRef.current = false
       return
