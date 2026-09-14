@@ -142,6 +142,7 @@ export function TestsView() {
   const [submitSummary, setSubmitSummary] = useState<{ total: number; perQuestion: { id: string; ms: number }[] } | null>(null)
   const [loading, setLoading] = useState(false)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState<"all" | "submitted" | "active">("all")
   const operations = useAppStore((s) => s.operations)
   const beginOperation = useAppStore((s) => s.beginOperation)
   const endOperation = useAppStore((s) => s.endOperation)
@@ -536,11 +537,34 @@ export function TestsView() {
               <FileText size={15} className="text-[var(--muted-foreground)]" />
               <h2 className="text-sm font-semibold">测试历史</h2>
             </div>
+            <div className="mb-2 flex items-center gap-1.5 text-xs">
+              {(["all", "submitted", "active"] as const).map((key) => {
+                const label = key === "all" ? "全部" : key === "submitted" ? "已批改" : "进行中"
+                const count = key === "all"
+                  ? sessions.length
+                  : sessions.filter((s) => s.status === key).length
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setStatusFilter(key)}
+                    className={
+                      "rounded-md border px-2 py-0.5 " +
+                      (statusFilter === key
+                        ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                        : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]")
+                    }
+                  >
+                    {label} <span className="opacity-60">({count})</span>
+                  </button>
+                )
+              })}
+            </div>
             <div className="space-y-2">
               {sessions.length === 0 && (
                 <p className="rounded-md border border-dashed px-3 py-5 text-center text-sm text-[var(--muted-foreground)]">暂无测试记录</p>
               )}
-              {sessions.map((session) => (
+              {sessions.filter((s) => statusFilter === "all" || s.status === statusFilter).map((session) => (
                 <div
                   key={session.id}
                   className={`group relative overflow-hidden rounded-lg border bg-[var(--background)] transition-colors hover:border-[var(--primary)]/60 hover:bg-[var(--accent)]/30 ${
