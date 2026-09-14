@@ -47,6 +47,8 @@ export function ChatPanel() {
   const skipLoadRef = useRef(false)
   const convIdRef = useRef(convId)
   convIdRef.current = convId
+  const convTitleRef = useRef(convTitle)
+  convTitleRef.current = convTitle
   const userId = useUserStore((s) => s.userId)
   const [llmModel, setLlmModel] = useState<string>("")
   useEffect(() => {
