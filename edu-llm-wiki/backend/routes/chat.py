@@ -6,7 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from config import settings
@@ -538,12 +538,17 @@ async def chat(
 @router.post("/stream")
 async def chat_stream(
     req: ChatRequest,
+    request: Request,
     project_id: str = Query("default"),
     admin_token: str | None = Query(None),
     x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
 ):
     """Chat with the knowledge base. Streaming SSE response."""
     _require_admin_token(admin_token, x_admin_token)
+    # Local abort flag — signalled as soon as the client disconnects so the
+    # LLM stops generating instead of finishing a response the user has
+    # already discarded.
+    abort_event = asyncio.Event()
     last_user_msg = ""
     for msg in reversed(req.messages):
         if msg.role == "user":
@@ -585,7 +590,18 @@ async def chat_stream(
         )
     )
 
+    async def _watch_disconnect() -> None:
+        try:
+            while not abort_event.is_set():
+                if await request.is_disconnected():
+                    abort_event.set()
+                    return
+                await asyncio.sleep(0.25)
+        except Exception:
+            abort_event.set()
+
     async def generate():
+        watcher = asyncio.create_task(_watch_disconnect())
         # While pipeline runs, relay any status updates immediately.
         while not pipeline_task.done():
             try:
@@ -627,18 +643,27 @@ async def chat_stream(
         yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '正在生成带引用回答...'})}\n\n"
         full_response = ""
         try:
-            async for chunk in stream_chat(system_prompt=system, messages=messages):
-                full_response += chunk
-                yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            # The LLM stream broke mid-flight; let the client see a clear
-            # message and end cleanly so the UI can recover.
-            detail = str(e)[:240] or e.__class__.__name__
-            yield f"data: {json.dumps({'type': 'error', 'message': f'生成中断：{detail}'})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
+            try:
+                async for chunk in stream_chat(
+                    system_prompt=system,
+                    messages=messages,
+                    abort_signal=abort_event,
+                ):
+                    full_response += chunk
+                    yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # The LLM stream broke mid-flight; let the client see a clear
+                # message and end cleanly so the UI can recover.
+                detail = str(e)[:240] or e.__class__.__name__
+                yield f"data: {json.dumps({'type': 'error', 'message': f'生成中断：{detail}'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+        finally:
+            # Always signal the watcher to stop and wait for it to exit.
+            abort_event.set()
+            watcher.cancel()
         cleaned, actual_cited = _filter_actual_citations(full_response, cited)
         yield f"data: {json.dumps({'type': 'replace', 'text': cleaned})}\n\n"
         yield f"data: {json.dumps({'type': 'final_citations', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in actual_cited]})}\n\n"

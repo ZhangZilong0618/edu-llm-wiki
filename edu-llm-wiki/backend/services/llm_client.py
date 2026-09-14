@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 
+import asyncio
 import httpx
 
 from config import settings
@@ -31,12 +32,24 @@ async def stream_chat(
     model: str | None = None,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    abort_signal: "asyncio.Event | None" = None,
 ) -> AsyncIterator[str]:
-    """Stream chat completion. Yields content chunks."""
+    """Stream chat completion. Yields content chunks.
+
+    If ``abort_signal`` is provided, the caller can set it to stop iteration
+    early. We poll the signal between chunks and raise ``CancelledError`` so
+    the async generator is closed promptly and the underlying HTTP request
+    is torn down. This avoids wasting tokens on responses the client has
+    already discarded (e.g. when the user clicks Stop mid-stream).
+    """
     provider = settings.llm_provider
     model = model or settings.llm_model
     max_tokens = max_tokens or settings.llm_max_tokens
     temperature = temperature or settings.llm_temperature
+
+    async def _check_abort() -> None:
+        if abort_signal is not None and abort_signal.is_set():
+            raise asyncio.CancelledError("stream_chat aborted by caller")
 
     if provider == "anthropic":
         client = get_llm_client()
@@ -53,6 +66,7 @@ async def stream_chat(
             temperature=temperature,
         ) as stream:
             async for text in stream.text_stream:
+                await _check_abort()
                 yield text
     else:
         client = get_llm_client()
@@ -66,6 +80,7 @@ async def stream_chat(
             stream=True,
         )
         async for chunk in stream:
+            await _check_abort()
             # OpenAI-compatible gateways commonly emit a final usage-only chunk
             # with an empty ``choices`` array. It is not a content delta and must
             # be skipped rather than raising IndexError.
