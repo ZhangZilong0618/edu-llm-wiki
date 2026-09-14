@@ -710,11 +710,13 @@ function TestWorkspace({
           {session.questions.map((item, index) => {
             const itemAttempt = attemptsById.get(item.id)
             const answered = answerToText(answers[item.id]).trim()
+            const dur = submitSummary?.perQuestion[index]?.ms
             return (
               <button
                 key={item.id}
                 onClick={() => setCurrentIndex(index)}
-                className={`h-8 min-w-8 rounded-md border px-2 text-xs ${
+                title={dur && dur > 0 ? `用时 ${formatDuration(dur)}` : undefined}
+                className={`relative h-8 min-w-8 rounded-md border px-2 text-xs ${
                   index === currentIndex
                     ? "border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : itemAttempt
@@ -725,6 +727,9 @@ function TestWorkspace({
                 }`}
               >
                 {index + 1}
+                {dur && dur > 0 ? (
+                  <span className="ml-1 text-[9px] opacity-70">·{formatDuration(dur)}</span>
+                ) : null}
               </button>
             )
           })}
