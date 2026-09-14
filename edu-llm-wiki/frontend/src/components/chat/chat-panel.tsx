@@ -39,6 +39,7 @@ export function ChatPanel() {
   const [chatStatus, setChatStatus] = useState<string | null>(null)
   const [recognizingImage, setRecognizingImage] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -183,6 +184,7 @@ export function ChatPanel() {
     setInput("")
     setStreaming(assistantId)
     setChatStatus("Understanding question...")
+    textareaRef.current?.focus()
 
     if (!convTitle && messages.length === 0) {
       const lastUser = [...messages].reverse().find((m) => m.role === "user")
@@ -649,6 +651,7 @@ export function ChatPanel() {
               {recognizingImage ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
             </button>
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
