@@ -73,6 +73,66 @@ SYSTEM_PROMPT = r"""You are a knowledgeable wiki assistant. Answer questions bas
 {pages_context}
 """
 
+def _slugify(text: str) -> str:
+    s = (text or "").strip().lower()
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"[^\w一-鿿-]+", "", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s or "section"
+
+
+def _split_sections(content: str):
+    if not content:
+        return []
+    pattern = re.compile(r"(?m)^(#{1,3})\s+(.+?)\s*#*\s*$")
+    matches = list(pattern.finditer(content))
+    sections = []
+    cursor = 0
+    for i, m in enumerate(matches):
+        heading = m.group(2).strip()
+        if cursor < m.start():
+            sections.append(("", content[cursor:m.start()]))
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        sections.append((heading, content[start:end]))
+        cursor = end
+    if cursor < len(content):
+        sections.append(("", content[cursor:]))
+    return [(h, b) for h, b in sections if h or b.strip()]
+
+
+def _best_anchor(query: str, content: str, fallback_heading: str = "") -> str:
+    sections = _split_sections(content)
+    if not sections:
+        return _slugify(fallback_heading) if fallback_heading else ""
+    qtoks = set()
+    for i in range(len(query) - 1):
+        bigram = query[i:i + 2]
+        if all("\u4e00" <= c <= "\u9fff" for c in bigram):
+            qtoks.add(bigram)
+    for word in re.findall(r"[A-Za-z0-9]+", query.lower()):
+        if len(word) >= 2:
+            qtoks.add(word)
+    best_heading = sections[0][0]
+    best_score = -1
+    for heading, body in sections:
+        if not heading:
+            continue
+        body_lower = body.lower()
+        score = 0
+        for tok in qtoks:
+            score += body_lower.count(tok)
+        if score > best_score:
+            best_score = score
+            best_heading = heading
+    if best_score <= 0:
+        for heading, _ in sections:
+            if heading:
+                return _slugify(heading)
+        return ""
+    return _slugify(best_heading)
+
+
 GREETING_PROMPT = """You are a wiki assistant. The user sent a casual greeting — reply briefly and naturally, in one or two sentences. Do NOT invent wiki content or pretend to have retrieved pages.
 
 {language_instruction}
@@ -361,11 +421,15 @@ async def _run_rag_pipeline(
             f"[{i + 1}] {p['title']} ({p['path']})"
             for i, p in enumerate(relevant_pages)
         )
+        # Attach a per-page section anchor so the frontend can jump to
+        # the most relevant heading instead of the page top.
         for _, p in enumerate(relevant_pages):
+            anchor = _best_anchor(query, p["content"], p["title"])
             cited.append({
                 "path": p["path"],
                 "title": p["title"],
                 "snippet": p["content"][:200],
+                "anchor": anchor,
             })
     else:
         pages_context = "(No relevant wiki pages found)"

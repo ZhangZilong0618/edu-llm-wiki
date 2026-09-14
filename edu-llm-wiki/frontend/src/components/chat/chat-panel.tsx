@@ -6,11 +6,20 @@ import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
 import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X, Bot } from "lucide-react"
 
+interface CitedSource {
+  path: string
+  title: string
+  snippet: string
+  // Optional slugified heading; the chat UI scrolls the wiki page here
+  // when the citation is opened.
+  anchor?: string | null
+}
+
 interface Message {
   id: string
   role: "user" | "assistant"
   content: string
-  cited?: { path: string; title: string; snippet: string }[]
+  cited?: CitedSource[]
 }
 
 type ScopeType = "whole_wiki" | "current_page" | "selected_source"
@@ -295,12 +304,31 @@ export function ChatPanel() {
   }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope, userId])
   handleSendRef.current = handleSend
 
-  const openPage = async (path: string) => {
-    if (!path) return
+  const openPage = async (raw: string) => {
+    if (!raw) return
+    // Citation paths can carry a `#section-id` fragment so the page jumps
+    // straight to the cited section instead of landing at the top.
+    const hashIdx = raw.indexOf("#")
+    const path = hashIdx >= 0 ? raw.slice(0, hashIdx) : raw
+    const anchor = hashIdx >= 0 ? raw.slice(hashIdx + 1) : null
     try {
       const page = await api.getPage(path)
       setSelectedPage(page)
       setActiveView("wiki")
+      // Defer the scroll until after the wiki view mounts and renders the
+      // heading. Two RAFs is the cheapest reliable schedule across browsers.
+      if (anchor) {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const el = document.getElementById(decodeURIComponent(anchor))
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" })
+            el.classList.add("ring-2", "ring-[var(--primary)]", "ring-offset-2")
+            window.setTimeout(() => {
+              el.classList.remove("ring-2", "ring-[var(--primary)]", "ring-offset-2")
+            }, 1800)
+          }
+        }))
+      }
     } catch (e: any) {
       toast({ type: "error", message: e?.message || `加载页面失败：${path}` })
     }
@@ -657,7 +685,7 @@ export function ChatPanel() {
                         >
                           <button
                             type="button"
-                            onClick={() => openPage(c.path)}
+                            onClick={() => openPage(c.anchor ? `${c.path}#${c.anchor}` : c.path)}
                             className="flex-1 text-left text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                             title={`打开 ${c.path}`}
                           >

@@ -32,6 +32,9 @@ class CitedPage(BaseModel):
     path: str
     title: str
     snippet: str
+    # Optional slugified section heading; the chat UI scrolls the wiki page
+    # to this anchor when the citation is clicked.
+    anchor: str | None = None
 
 
 class ChatResponse(BaseModel):

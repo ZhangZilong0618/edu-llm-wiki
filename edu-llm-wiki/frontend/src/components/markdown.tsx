@@ -15,6 +15,49 @@ function stripFrontmatter(text: string): string {
   return text
 }
 
+/**
+ * Slugify a heading title into a stable, url-safe id. Repeats within the
+ * same document are disambiguated with -2, -3, ... so each heading has a
+ * unique anchor target.
+ */
+export function slugifyHeading(text: string): string {
+  const cleaned = (text || "")
+    .trim()
+    .toLowerCase()
+    // CJK characters are kept as-is; only ascii punctuation is removed.
+    .replace(/[`*_~()[\]{}<>!.,。，；：、？！“”‘’'"\/\\]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+  return cleaned || "section"
+}
+
+export function buildHeadingSlugMap(content: string): Map<string, string> {
+  /** Map a heading's exact text -> its unique slug, so callers can look up
+   * the anchor id from a heading name without re-running the counter logic.
+   */
+  const map = new Map<string, string>()
+  if (!content) return map
+  const used = new Set<string>()
+  // The same regex the markdown renderer uses for heading detection.
+  const lines = content.split(/\r?\n/)
+  for (const line of lines) {
+    const match = line.match(/^(#{1,3})\s+(.*?)\s*#*\s*$/)
+    if (!match) continue
+    const text = match[2].trim()
+    const base = slugifyHeading(text)
+    let candidate = base
+    let n = 2
+    while (used.has(candidate)) {
+      candidate = `${base}-${n}`
+      n += 1
+    }
+    used.add(candidate)
+    if (!map.has(text)) map.set(text, candidate)
+  }
+  return map
+}
+
 function convertLatexDelimiters(text: string): string {
   // Convert \(...\) inline math to $...$
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => `$${math}$`)
@@ -575,29 +618,47 @@ function renderMathChildren(children: ReactNode, keyPrefix = "raw-math"): ReactN
   })
 }
 
+// Per-render counter for heading slugs so duplicates get a -2 / -3 suffix
+// and remain uniquely addressable via URL fragment.
+const slugCountRef: { current: Map<string, number> } = { current: new Map() }
+function nextHeadingId(text: string): string {
+  const base = slugifyHeading(text)
+  const counts = slugCountRef.current
+  const seen = counts.get(base) ?? 0
+  counts.set(base, seen + 1)
+  return seen === 0 ? base : `${base}-${seen + 1}`
+}
+function headingText(children: any): string {
+  if (typeof children === "string") return children
+  if (Array.isArray(children)) return children.map(headingText).join("")
+  if (isValidElement(children)) return headingText((children as any).props?.children)
+  return ""
+}
+
 const components: any = {
   h1({ children, ...props }: any) {
-    const text = typeof children === "string" ? children : ""
+    const text = headingText(children)
     const isResearch = text.includes("深入探究")
     return (
-      <h1 className={`text-xl font-bold mt-6 mb-3 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
+      <h1 id={nextHeadingId(text)} className={`text-xl font-bold mt-6 mb-3 scroll-mt-20 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
         {isResearch && <span className="mr-1.5">🔬</span>}
         {children}
       </h1>
     )
   },
   h2({ children, ...props }: any) {
-    const text = typeof children === "string" ? children : ""
+    const text = headingText(children)
     const isResearch = text.includes("深入探究")
     return (
-      <h2 className={`text-lg font-semibold mt-5 mb-2 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
+      <h2 id={nextHeadingId(text)} className={`text-lg font-semibold mt-5 mb-2 scroll-mt-20 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
         {isResearch && <span className="mr-1.5">🔬</span>}
         {children}
       </h2>
     )
   },
   h3({ children, ...props }: any) {
-    return <h3 className="text-base font-semibold mt-4 mb-2" {...props}>{children}</h3>
+    const text = headingText(children)
+    return <h3 id={nextHeadingId(text)} className="text-base font-semibold mt-4 mb-2 scroll-mt-20" {...props}>{children}</h3>
   },
   a({ href, children, ...props }: any) {
     const selectPage = useAppStore.getState().selectPage
@@ -660,6 +721,9 @@ export function Markdown({
   citationQuoteLookup?: CitationQuoteLookup
   defaultSource?: string
 }) {
+  // Reset the per-render slug counter so navigating between pages does
+  // not carry over the -2 / -3 suffix state from the previous document.
+  slugCountRef.current = new Map()
   const processed = useMemo(
     () =>
       wrapBareLatexCommands(
