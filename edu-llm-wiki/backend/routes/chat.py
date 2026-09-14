@@ -586,7 +586,7 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
             pages_context=pages_context,
         )
 
-        yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in cited]})}\n\n"
+        yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in cited]})}\n\n"
         yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': 'Answering with citations...'})}\n\n"
         full_response = ""
         try:
@@ -604,7 +604,7 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
             return
         cleaned, actual_cited = _filter_actual_citations(full_response, cited)
         yield f"data: {json.dumps({'type': 'replace', 'text': cleaned})}\n\n"
-        yield f"data: {json.dumps({'type': 'final_citations', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in actual_cited]})}\n\n"
+        yield f"data: {json.dumps({'type': 'final_citations', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in actual_cited]})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
