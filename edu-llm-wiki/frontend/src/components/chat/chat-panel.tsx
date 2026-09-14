@@ -380,6 +380,7 @@ export function ChatPanel() {
     setConvTitle("")
     setInput("")
     setStoppedMessageIds(new Set())
+    setStoppedAt(new Map())
     setUnreadCount(0)
     lastSeenIndex.current = 0
   }
