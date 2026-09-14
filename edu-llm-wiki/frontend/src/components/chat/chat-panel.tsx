@@ -748,6 +748,14 @@ export function ChatPanel() {
                             title={c.anchor ? `打开 ${c.path}（定位到 ${c.anchor}）` : `打开 ${c.path}`}
                           >
                             <span className="font-medium">[{i + 1}] {c.title}</span>
+                            {c.anchor ? (
+                              <span
+                                className="ml-1 rounded bg-[var(--primary)]/10 px-1 py-0.5 text-[9px] font-medium text-[var(--primary)]"
+                                title={`点击跳转到该章节`}
+                              >
+                                §{c.anchor}
+                              </span>
+                            ) : null}
                             <span className="block truncate opacity-80">— {c.snippet.slice(0, 100)}…</span>
                             <span className="block truncate opacity-60">{c.path}</span>
                           </button>
