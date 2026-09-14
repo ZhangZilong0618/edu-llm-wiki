@@ -587,6 +587,22 @@ function TestWorkspace({
               <div className="mb-2 flex items-center gap-2 font-medium">
                 {attempt.level === "good" ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
                 批改结果：{attempt.score}/{attempt.max_score}
+                {attempt.confidence != null && attempt.confidence !== undefined ? (
+                  <span
+                    className={
+                      "ml-2 inline-flex items-center rounded px-2 py-0.5 text-xs " +
+                      (attempt.score >= 0.5
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-rose-100 text-rose-700")
+                    }
+                    title="Confidence vs correctness"
+                  >
+                    把握 {attempt.confidence}/5
+                    {attempt.score >= 0.7 && attempt.confidence >= 4 ? " · 校准良好" : null}
+                    {attempt.score < 0.5 && attempt.confidence >= 4 ? " · 过度自信" : null}
+                    {attempt.score >= 0.7 && attempt.confidence <= 2 ? " · 保守" : null}
+                  </span>
+                ) : null}
               </div>
               <p className="text-sm leading-relaxed">{attempt.feedback}</p>
               <div className="mt-3 grid gap-3 md:grid-cols-2">

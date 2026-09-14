@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User } from "lucide-react"
 
 interface Message {
   id: string
@@ -313,6 +313,9 @@ export function ChatPanel() {
             {scopeType === "current_page" && selectedPage ? selectedPage.title : null}
             {scopeType === "selected_source" && selectedSourceName ? selectedSourceName : null}
             {scopeType === "whole_wiki" ? "Using all wiki pages" : null}
+          </span>
+          <span className="ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)]" title="当前学习者 ID">
+            <User size={10} /> {userId}
           </span>
         </div>
 
