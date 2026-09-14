@@ -736,7 +736,7 @@ export function ChatPanel() {
                       </span>
                     ) : null}
                     <Markdown>{msg.content || "..."}</Markdown>
-                    {msg.id === lastAssistantId && (!msg.content?.trim() || msg.content.startsWith("Error:") || stoppedMessageIds.has(msg.id)) ? (
+                    {!streaming && msg.id === lastAssistantId && (!msg.content?.trim() || msg.content.startsWith("Error:") || stoppedMessageIds.has(msg.id)) ? (
                       <button
                         type="button"
                         onClick={() => regenerate(msg)}
