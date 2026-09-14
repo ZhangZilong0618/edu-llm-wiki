@@ -566,14 +566,14 @@ export function ChatPanel() {
                       </span>
                     ) : null}
                     <Markdown>{msg.content || "..."}</Markdown>
-                    {msg.content && msg.content.startsWith("Error:") ? (
+                    {(msg.content?.startsWith("Error:") || stoppedMessageIds.has(msg.id)) ? (
                       <button
                         type="button"
                         onClick={() => regenerate(msg)}
                         className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                         title="重新生成"
                       >
-                        <RefreshCw size={10} /> 重试
+                        <RefreshCw size={10} /> {msg.content?.startsWith("Error:") ? "重试" : "继续"}
                       </button>
                     ) : null}
                     {msg.content && !msg.content.startsWith("Error:") ? (
