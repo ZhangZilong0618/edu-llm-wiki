@@ -110,6 +110,11 @@ export function ChatPanel() {
     }
     setStreaming(null)
     setChatStatus(null)
+    // Persist whatever we already streamed so the partial response is
+    // not lost on reload.
+    if (convIdRef.current) {
+      autoSave(messages, convTitle)
+    }
   }
 
   const handleSendRef = useRef<(() => void) | null>(null)
@@ -210,6 +215,9 @@ export function ChatPanel() {
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
+    }
+    if (convIdRef.current && messages.length > 0) {
+      autoSave(messages, convTitle)
     }
     setStreaming(null)
     setChatStatus(null)
