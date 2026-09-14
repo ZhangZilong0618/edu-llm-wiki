@@ -339,18 +339,20 @@ export function ChatPanel() {
           // Pipeline or LLM stream failed mid-flight; surface a clear error
           // and stop streaming so the UI can recover.
           toast({ type: "error", message: event.message || "请求失败，请稍后再试" })
-          setMessages((prev) => prev.map((m) =>
-            m.id === assistantId && !m.content
-              ? { ...m, content: `Error: ${event.message || "请求失败"}` }
-              : m
-          ))
+          let latest: Message[] = messages
+          setMessages((prev) => {
+            const next = prev.map((m) =>
+              m.id === assistantId && !m.content
+                ? { ...m, content: `Error: ${event.message || "请求失败"}` }
+                : m
+            )
+            latest = next
+            return next
+          })
           // Persist immediately so the saved conversation includes the
-          // error annotation. We schedule the save via setTimeout(0) so
-          // React has a chance to commit the messages update first; the
-          // autoSave call replaces the in-flight debounced save.
-          setTimeout(() => {
-            if (convIdRef.current) autoSave(messagesRef.current, convTitle)
-          }, 0)
+          // error annotation. We capture the new array via `latest` so we
+          // don't race the React commit + messagesRef ref update.
+          if (convIdRef.current) autoSave(latest, convTitle)
         }
       }
 
