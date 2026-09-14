@@ -77,6 +77,14 @@ export interface MaterialsGraphData {
   }
 }
 
+// Admin token lookup. Empty when the operator hasn't configured
+// settings.api_token on the backend (local dev default).
+function adminTokenHeader(): Record<string, string> {
+  if (typeof window === "undefined") return {}
+  const tok = (window.localStorage.getItem("edu-llm-wiki.adminToken") || "").trim()
+  return tok ? { "X-Admin-Token": tok } : {}
+}
+
 export const api = {
   // Projects
   listProjects: () => request<Project[]>(`${BASE}/projects`),
@@ -107,7 +115,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      throw new Error(`HTTP ${res.status}`)
+    }
     if (!res.body) throw new Error("No response body")
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -141,7 +152,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      throw new Error(`HTTP ${res.status}`)
+    }
     if (!res.body) throw new Error("No response body")
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -215,16 +229,20 @@ export const api = {
   chat: (messages: { role: string; content: string }[], options?: Record<string, unknown>) =>
     request<ChatResponse>(`${BASE}/chat?${p()}`, {
       method: "POST",
+      headers: { "Content-Type": "application/json", ...adminTokenHeader() },
       body: JSON.stringify({ messages, ...options }),
     }),
   chatStream: async function* (messages: { role: string; content: string }[], signal?: AbortSignal, options?: Record<string, unknown>) {
     const res = await fetch(`${BASE}/chat/stream?${p()}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...adminTokenHeader() },
       body: JSON.stringify({ messages, ...options }),
       signal,
     })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    if (!res.ok) {
+      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      throw new Error(`HTTP ${res.status}`)
+    }
     if (!res.body) throw new Error("No response body")
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -250,9 +268,14 @@ export const api = {
   recognizeChatImage: async (file: File) => {
     const form = new FormData()
     form.append("file", file)
-    const res = await fetch(`${BASE}/chat/image-ocr?${p()}`, { method: "POST", body: form })
+    const res = await fetch(`${BASE}/chat/image-ocr?${p()}`, {
+      method: "POST",
+      headers: adminTokenHeader(),
+      body: form,
+    })
     if (!res.ok) {
       const text = await res.text()
+      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
       throw new Error(`Image recognition failed: ${res.status} ${text}`)
     }
     return res.json() as Promise<{ filename: string; content_type: string; text: string }>

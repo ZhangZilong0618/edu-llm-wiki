@@ -6,9 +6,10 @@ import re
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
+from config import settings
 from models.chat import ChatRequest, ChatResponse, ChatScope, CitedPage
 from services.context_budget import compute_budget
 from services.ingest_engine import _strip_images
@@ -139,6 +140,25 @@ GREETING_PROMPT = """You are a wiki assistant. The user sent a casual greeting �
 """
 
 
+def _require_admin_token(
+    admin_token: str | None = Query(None, description="管理员令牌，与 Settings.api_token 匹配"),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+) -> None:
+    """Raise 401 unless the configured api_token matches the caller-provided one.
+
+    When ``settings.api_token`` is empty (the local-dev default) the gate
+    stays open so the chat works without configuration. Production deploys
+    set the token via env and the same value into the localStorage key
+    ``edu-llm-wiki.adminToken`` on the admin's browser.
+    """
+    expected = (getattr(settings, "api_token", "") or "").strip()
+    if not expected:
+        return
+    provided = (admin_token or x_admin_token or "").strip()
+    if provided != expected:
+        raise HTTPException(status_code=401, detail="admin_token missing or invalid")
+
+
 def _mode_instruction(mode: str, answer_style: str) -> str:
     if mode == "practice":
         return (
@@ -175,7 +195,12 @@ def _filter_actual_citations(response: str, cited: list[dict]) -> tuple[str, lis
 async def image_ocr(
     file: UploadFile = File(...),
     project_id: str = Query("default"),
+    admin_token: str | None = Query(None),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
 ):
+    """..."""
+    _require_admin_token(admin_token, x_admin_token)
+    del project_id  # Reserved for future per-project OCR history.
     """Extract question text from an uploaded/captured image for chat input.
 
     Uses PaddleOCR-VL instead of the chat LLM, so text-only LLMs such as
@@ -456,8 +481,14 @@ async def _run_rag_pipeline(
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, project_id: str = Query("default")):
+async def chat(
+    req: ChatRequest,
+    project_id: str = Query("default"),
+    admin_token: str | None = Query(None),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+):
     """Chat with the knowledge base. Non-streaming."""
+    _require_admin_token(admin_token, x_admin_token)
     last_user_msg = ""
     for msg in reversed(req.messages):
         if msg.role == "user":
@@ -505,8 +536,14 @@ async def chat(req: ChatRequest, project_id: str = Query("default")):
 
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
+async def chat_stream(
+    req: ChatRequest,
+    project_id: str = Query("default"),
+    admin_token: str | None = Query(None),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+):
     """Chat with the knowledge base. Streaming SSE response."""
+    _require_admin_token(admin_token, x_admin_token)
     last_user_msg = ""
     for msg in reversed(req.messages):
         if msg.role == "user":
