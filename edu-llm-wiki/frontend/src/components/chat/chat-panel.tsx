@@ -147,11 +147,31 @@ export function ChatPanel() {
     return () => el.removeEventListener("scroll", onScroll)
   }, [])
 
-  // Cleanup on unmount
+  // Cleanup on unmount. We deliberately *flush* any pending debounced
+  // save before cancelling the timer — otherwise navigating away right
+  // after a send silently drops the latest message.
   useEffect(() => {
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current)
       if (abortRef.current) abortRef.current.abort()
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current)
+        saveTimer.current = null
+        // Fire the save immediately using whatever messages we currently
+        // have. Skip if there is no conversation to save into.
+        const id = convIdRef.current
+        if (id) {
+          api.saveConversation({
+            id,
+            title: convTitleRef.current,
+            messages: messagesRef.current.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              cited: m.cited,
+            })),
+          }).catch(() => {})
+        }
+      }
     }
   }, [])
 
