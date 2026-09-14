@@ -38,6 +38,18 @@ function answerToText(value: string | string[] | undefined): string {
   return value || ""
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const min = Math.floor(totalSec / 60)
+  const sec = totalSec % 60
+  if (min < 60) return `${min}m${sec ? `${sec}s` : ""}`
+  const hr = Math.floor(min / 60)
+  const mm = min % 60
+  return `${hr}h${mm ? `${mm}m` : ""}`
+}
+
 function scoreLabel(session: TestSummary | TestSession): string {
   if (session.score == null || session.max_score == null) return "未提交"
   return `${session.score}/${session.max_score}`
@@ -115,6 +127,9 @@ export function TestsView() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({})
   const [confidences, setConfidences] = useState<Record<string, number>>({})
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [lastAnswerAt, setLastAnswerAt] = useState<Record<string, number>>({})
+  const [submitSummary, setSubmitSummary] = useState<{ total: number; perQuestion: { id: string; ms: number }[] } | null>(null)
   const [loading, setLoading] = useState(false)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const operations = useAppStore((s) => s.operations)
@@ -183,6 +198,9 @@ export function TestsView() {
       setCurrentIndex(0)
       setAnswers({})
       setConfidences({})
+      setStartedAt(Date.now())
+      setLastAnswerAt({})
+      setSubmitSummary(null)
       await loadData()
       toast({ type: "success", message: `已生成 ${session.questions.length} 道测试题` })
     } catch (e: any) {
@@ -200,8 +218,16 @@ export function TestsView() {
       setActiveSession(session)
       setCurrentIndex(0)
       const restored: Record<string, string | string[]> = {}
-      for (const attempt of session.attempts || []) restored[attempt.question_id] = attempt.user_answer
+      const restoredConfidence: Record<string, number> = {}
+      for (const attempt of session.attempts || []) {
+        restored[attempt.question_id] = attempt.user_answer
+        if (attempt.confidence != null) restoredConfidence[attempt.question_id] = attempt.confidence
+      }
       setAnswers(restored)
+      setConfidences(restoredConfidence)
+      setStartedAt(session.submitted_at ? null : Date.now())
+      setLastAnswerAt({})
+      setSubmitSummary(null)
     } catch (e: any) {
       toast({ type: "error", message: `打开测试失败: ${e?.message || e}` })
     } finally {
@@ -230,15 +256,25 @@ export function TestsView() {
 
   const setAnswer = (questionId: string, value: string | string[]) => {
     setAnswers((prev) => ({ ...prev, [questionId]: value }))
+    setLastAnswerAt((prev) => ({ ...prev, [questionId]: Date.now() }))
   }
 
   const submit = async () => {
     if (!activeSession) return
     const key = `tests:submit:${activeSession.id}`
     beginOperation(key, "提交测试中")
+    const finishAt = Date.now()
     try {
       const session = await api.submitTest(activeSession.id, answers, confidences, userId)
       setActiveSession(session)
+      const perQuestion = session.questions.map((q) => {
+        const last = lastAnswerAt[q.id] || finishAt
+        const base = startedAt || last
+        return { id: q.id, ms: Math.max(0, last - base) }
+      })
+      const total = perQuestion.reduce((sum, x) => sum + x.ms, 0)
+      setSubmitSummary({ total, perQuestion })
+      setStartedAt(null)
       await loadData()
       toast({ type: "success", message: `测试已提交：${scoreLabel(session)}` })
     } catch (e: any) {

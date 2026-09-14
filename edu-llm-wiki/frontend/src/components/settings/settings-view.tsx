@@ -122,6 +122,30 @@ export function SettingsView() {
   const needsBaseUrl = ["google", "azure", "deepseek", "groq", "together", "openrouter", "ollama", "custom"].includes(
     llm.llm_provider,
   )
+  const testLlmOnly = async () => {
+    if (needsApiKey && !llm.llm_api_key.trim()) {
+      toast({ type: "error", message: "请先填写 API Key，再测试连接。" })
+      return
+    }
+    if (!llm.llm_model.trim()) {
+      toast({ type: "error", message: "请填写模型名称后再测试。" })
+      return
+    }
+    setLlmTesting(true)
+    try {
+      const result = await api.testLlmConnection(llm)
+      if (result.ok) {
+        toast({ type: "success", message: result.message })
+      } else {
+        toast({ type: "error", message: result.message })
+      }
+    } catch (e: unknown) {
+      toast({ type: "error", message: errorMessage(e, "连接失败") })
+    } finally {
+      setLlmTesting(false)
+    }
+  }
+
   const saveLlm = async () => {
     if (needsApiKey && !llm.llm_api_key.trim()) {
       toast({ type: "error", message: "请先填写 API Key，再保存 LLM 设置。" })
@@ -246,14 +270,25 @@ export function SettingsView() {
             title="LLM Provider"
             summary="Chat, ingest, research, and test generation."
             footer={
-              <SaveButton
-                saved={llmSaved}
-                busy={llmTesting}
-                busyLabel="Testing..."
-                savedLabel="Saved"
-                label="Save & Test"
-                onClick={saveLlm}
-              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={testLlmOnly}
+                  disabled={llmTesting}
+                  className="rounded-md border px-3 py-1.5 text-xs hover:bg-[var(--accent)] disabled:opacity-50"
+                  title="用当前表单里的设置直接测试，不保存到 .env"
+                >
+                  {llmTesting ? "Testing..." : "Test Connection"}
+                </button>
+                <SaveButton
+                  saved={llmSaved}
+                  busy={llmTesting}
+                  busyLabel="Testing..."
+                  savedLabel="Saved"
+                  label="Save & Test"
+                  onClick={saveLlm}
+                />
+              </div>
             }
           >
             <div className="grid gap-4 md:grid-cols-2">
