@@ -45,6 +45,7 @@ export function SourcesView() {
   const beginOperation = useAppStore((s) => s.beginOperation)
   const endOperation = useAppStore((s) => s.endOperation)
   const uploading = Boolean(operations["sources:upload"])
+  const [isDragging, setIsDragging] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
   const progressClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [taskQueue, setTaskQueue] = useState<string[]>([])
@@ -144,16 +145,17 @@ export function SourcesView() {
     }
   }, [])
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files) return
-    const total = files.length
-    beginOperation("sources:upload", "上传文件中")
+  const runUpload = async (filesIn: FileList | File[] | null | undefined) => {
+    if (!filesIn) return
+    const list = Array.from(filesIn)
+    if (list.length === 0) return
+    const total = list.length
+    beginOperation("sources:upload", `上传 ${total} 个文件中`)
     setUploadProgress({ done: 0, total })
     let ok = 0
     let fail = 0
     const uploaded: string[] = []
-    for (const file of Array.from(files)) {
+    for (const file of list) {
       try {
         const res = await api.uploadFile(file)
         uploaded.push(res.filename)
@@ -173,19 +175,41 @@ export function SourcesView() {
     endOperation("sources:upload")
     if (fileInputRef.current) fileInputRef.current.value = ""
     if (fail > 0) {
-      toast({ type: "error", message: `${ok} file(s) uploaded, ${fail} failed` })
+      toast({ type: "error", message: `${ok} 个上传成功，${fail} 个失败` })
     } else if (ok > 0) {
-      toast({ type: "success", message: `${ok} file(s) uploaded` })
+      toast({ type: "success", message: `已上传 ${ok} 个文件` })
     }
     if (progressClearTimer.current) clearTimeout(progressClearTimer.current)
     progressClearTimer.current = setTimeout(() => setUploadProgress(null), 1500)
-
     // Auto-trigger PaddleOCR parse for newly uploaded parseable files
     const toParse = uploaded.filter((n) => PARSEABLE_EXTS.includes(n.slice(n.lastIndexOf(".")).toLowerCase()))
     if (toParse.length > 0) {
       for (const f of toParse) {
         triggerParse(f).catch(() => {})
       }
+    }
+  }
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await runUpload(e.target.files)
+  }
+
+  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault()
+      if (!isDragging) setIsDragging(true)
+    }
+  }
+  const onDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setIsDragging(false)
+  }
+  const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setIsDragging(false)
+    if (e.dataTransfer?.files?.length) {
+      await runUpload(e.dataTransfer.files)
     }
   }
 
@@ -447,14 +471,26 @@ export function SourcesView() {
           className="hidden"
           accept=".pdf,.docx,.pptx,.xlsx,.xls,.md,.txt,.markdown,.rst"
         />
+        <div
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          className={
+            "rounded-lg border-2 border-dashed transition-colors " +
+            (isDragging
+              ? "border-[var(--primary)] bg-[var(--primary)]/5"
+              : "border-[var(--border)]")
+          }
+        >
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 border-dashed border-[var(--border)] text-xs text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors"
         >
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-          {uploading ? "Uploading..." : "Upload Documents"}
+          {uploading ? "Uploading..." : isDragging ? "松开鼠标上传" : "Upload or Drop Documents"}
         </button>
+        </div>
         {uploadProgress ? (
           <div className="mt-1.5">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--muted)]">
