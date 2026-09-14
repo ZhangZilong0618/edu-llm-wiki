@@ -882,6 +882,49 @@ function TestWorkspace({
             </section>
           )}
 
+          {(() => {
+            const masteredQuestions = session.questions.filter((q, i) => {
+              const a = (session.attempts || [])[i]
+              return a && a.score / Math.max(1, a.max_score) >= 0.7
+            })
+            if (submitted && masteredQuestions.length > 0) {
+              return (
+                <section className="rounded-lg border border-emerald-200 bg-emerald-50/30 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-emerald-800">本场已掌握</h3>
+                    <span className="text-[10px] text-emerald-600">{masteredQuestions.length} 题已掌握</span>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {masteredQuestions.map((q) => {
+                      const origIdx = session.questions.findIndex((x) => x.id === q.id)
+                      const a = (session.attempts || [])[origIdx]
+                      return (
+                        <li key={q.id}>
+                          <button
+                            type="button"
+                            onClick={() => setCurrentIndex(origIdx)}
+                            className="w-full rounded border border-emerald-200 bg-white px-2 py-1.5 text-left text-[12px] text-emerald-700 hover:bg-emerald-50"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="shrink-0 font-medium">第 {origIdx + 1} 题</span>
+                              {a ? (
+                                <span className="shrink-0 text-[10px] text-emerald-500">
+                                  · {a.score}/{a.max_score}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="line-clamp-1 text-foreground">{q.prompt.replace(/\n+/g, " ")}</p>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </section>
+              )
+            }
+            return null
+          })()}
+
           {submitted && wrongQuestions.length > 0 ? (
             <section className="rounded-lg border border-rose-200 bg-rose-50/30 p-4">
               <div className="mb-2 flex items-center justify-between gap-2">
