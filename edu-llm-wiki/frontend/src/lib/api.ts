@@ -383,11 +383,16 @@ export const api = {
     ),
 
   // Admin
-  resetLearnerState: (user_id: string, project_id = "default") =>
-    request<{ status: string; user_id: string; project_id: string; deleted: Record<string, number> }>(
-      `${BASE}/graph/admin/reset-user?${p()}&user_id=${encodeURIComponent(user_id)}&project_id=${encodeURIComponent(project_id)}`,
+  resetLearnerState: (user_id: string, project_id = "default", adminToken?: string) => {
+    const url = new URL(`${BASE}/graph/admin/reset-user?${p()}`, window.location.origin)
+    url.searchParams.set("user_id", user_id)
+    url.searchParams.set("project_id", project_id)
+    if (adminToken) url.searchParams.set("admin_token", adminToken)
+    return request<{ status: string; user_id: string; project_id: string; deleted: Record<string, number> }>(
+      url.pathname + url.search,
       { method: "POST" },
-    ),
+    )
+  },
 
   // Materials-science domain graph
   extractMaterialsGraph: (sourceTitle: string, content: string) =>

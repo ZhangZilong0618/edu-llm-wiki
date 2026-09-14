@@ -89,6 +89,10 @@ export function SettingsView() {
   })
   const [paddleSaved, setPaddleSaved] = useState(false)
   const [showPaddleToken, setShowPaddleToken] = useState(false)
+  const [adminToken, setAdminToken] = useState(() => {
+    if (typeof window === "undefined") return ""
+    return window.localStorage.getItem("edu-llm-wiki.adminToken") || ""
+  })
   const updatePaddle = (patch: Partial<PaddleocrSettings>) => {
     setPaddle((p) => ({ ...p, ...patch }))
     setPaddleSaved(false)
@@ -160,6 +164,12 @@ export function SettingsView() {
     } catch (e: unknown) {
       toast({ type: "error", message: errorMessage(e, "Failed to save embedding settings") })
     }
+  }
+
+  const saveAdminToken = () => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem("edu-llm-wiki.adminToken", adminToken.trim())
+    toast({ type: "success", message: adminToken.trim() ? "Admin Token 已保存" : "Admin Token 已清空" })
   }
 
   const savePaddle = async () => {
@@ -479,6 +489,32 @@ export function SettingsView() {
               className={`${inputClass} min-h-44 resize-y font-mono leading-6`}
             />
           </Section>
+
+          <Section
+            id="admin"
+            icon={<KeyRound size={16} />}
+            title="Admin"
+            summary="本地管理口令；只在后端 .env 配了 api_token 时才需要。"
+            footer={
+              <SaveButton
+                saved={true}
+                label="保存 Admin Token"
+                savedLabel="已保存"
+                onClick={saveAdminToken}
+              />
+            }
+          >
+            <Field label="Admin Token (可选)">
+              <SecretInput
+                value={adminToken}
+                visible={false}
+                onToggle={() => undefined}
+                onChange={(value) => setAdminToken(value)}
+                placeholder="仅在服务端配置 api_token 时填写"
+              />
+            </Field>
+          </Section>
+
         </div>
       </main>
     </div>

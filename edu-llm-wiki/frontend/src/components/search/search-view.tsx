@@ -76,8 +76,12 @@ export function SearchView() {
                 </span>
               )}
             </div>
-            <h3 className="text-sm font-medium mt-1">{r.title}</h3>
-            <p className="text-xs text-[var(--muted-foreground)] mt-0.5 line-clamp-2">{r.snippet}</p>
+            <h3 className="text-sm font-medium mt-1">
+              <Highlight text={r.title} query={searchQuery} />
+            </h3>
+            <p className="text-xs text-[var(--muted-foreground)] mt-0.5 line-clamp-2">
+              <Highlight text={r.snippet} query={searchQuery} />
+            </p>
             <p className="text-[10px] text-[var(--muted-foreground)] mt-1">{r.path} — score: {r.score.toFixed(1)}</p>
           </button>
         ))}
@@ -88,5 +92,33 @@ export function SearchView() {
         )}
       </div>
     </div>
+  )
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <>{text}</>
+  const tokens = Array.from(
+    new Set(
+      query
+        .split(/[\s,，。！？、；：「」（）()\-_/]+/)
+        .filter((t) => t.length > 0),
+    ),
+  )
+  if (tokens.length === 0) return <>{text}</>
+  const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&'))
+  const re = new RegExp('(' + escaped.join('|') + ')', 'gi')
+  const parts = text.split(re)
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <mark key={i} className='rounded bg-yellow-200 px-0.5 text-foreground'>
+            {p}
+          </mark>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </>
   )
 }

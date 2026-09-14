@@ -24,13 +24,24 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
       `将清空该学习者在当前项目中的所有学习记录（BKT / 复习 / 信心 / 错因 / 答题），此操作不可撤销。继续？`,
     )) return
     setResetting(true)
+    const adminToken = typeof window !== "undefined"
+      ? window.localStorage.getItem("edu-llm-wiki.adminToken") || ""
+      : ""
     try {
-      const res = await api.resetLearnerState(effectiveUser, projectId || "default")
+      const res = await api.resetLearnerState(
+        effectiveUser,
+        projectId || "default",
+        adminToken || undefined,
+      )
       const total = Object.values(res.deleted || {}).reduce((a, b) => a + (b || 0), 0)
       toast({ type: "success", message: `已清空 ${total} 条学习记录` })
       reload()
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || "重置失败" })
+      if (e?.message?.includes("admin_token") || e?.status === 401) {
+        toast({ type: "error", message: "后端要求 Admin Token，请先在 Settings → Admin 中配置。" })
+      } else {
+        toast({ type: "error", message: e?.message || "重置失败" })
+      }
     } finally {
       setResetting(false)
     }

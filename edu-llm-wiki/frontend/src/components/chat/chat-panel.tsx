@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil } from "lucide-react"
 
 interface Message {
   id: string
@@ -228,6 +228,23 @@ export function ChatPanel() {
     setTimeout(() => handleSendRef.current?.(), 0)
   }, [messages, streaming])
 
+  const handleRenameConv = async (id: string, currentTitle: string) => {
+    const next = typeof window === "undefined"
+      ? currentTitle
+      : (window.prompt("重命名对话", currentTitle) || "").trim()
+    if (!next || next === currentTitle) return
+    try {
+      const conv = await api.getConversation(id)
+      await api.saveConversation({ id, title: next, messages: conv.messages || [] })
+      const list = await api.listConversations()
+      setConversations(list)
+      if (convId === id) setConvTitle(next)
+      toast({ type: "success", message: "对话已重命名" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "重命名失败" })
+    }
+  }
+
   const handleDeleteConv = async (id: string) => {
     const confirmed = typeof window === "undefined"
       || window.confirm("删除该对话？该操作无法撤销。")
@@ -311,8 +328,16 @@ export function ChatPanel() {
               <MessageSquare size={12} className="shrink-0" />
               <span className="flex-1 truncate">{c.title}</span>
               <button
+                onClick={(e) => { e.stopPropagation(); handleRenameConv(c.id, c.title) }}
+                className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] transition-opacity"
+                title="重命名"
+              >
+                <Pencil size={11} />
+              </button>
+              <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteConv(c.id) }}
                 className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-500 transition-opacity"
+                title="删除"
               >
                 <Trash2 size={11} />
               </button>

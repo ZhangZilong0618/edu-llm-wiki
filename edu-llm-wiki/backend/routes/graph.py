@@ -12,7 +12,7 @@ The store layer owns persistence; this file owns HTTP wiring only.
 import asyncio
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from models.graph import (
@@ -360,7 +360,15 @@ async def get_learning_insights(
 async def reset_user_endpoint(
     project_id: str = Query("default"),
     user_id: str = Query("default"),
+    admin_token: str | None = Query(None, description="如果 Settings 中配置了 api_token，必须传入相同的值"),
 ) -> dict:
-    """Wipe per-learner state. Used for switching cohorts or restarting pilots."""
+    """Wipe per-learner state. Used for switching cohorts or restarting pilots.
+
+    The endpoint is open by default. If ``settings.api_token`` is non-empty the
+    caller must present a matching ``admin_token`` query parameter.
+    """
+    expected = getattr(settings, "api_token", "") or ""
+    if expected and admin_token != expected:
+        raise HTTPException(status_code=401, detail="admin_token missing or invalid")
     counts = store_reset_user(project_id=project_id, user_id=user_id)
     return {"status": "ok", "project_id": project_id, "user_id": user_id, "deleted": counts}
