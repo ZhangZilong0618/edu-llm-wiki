@@ -24,6 +24,8 @@ export function ChatPanel() {
   const convId = useAppStore((s) => s.currentConversationId)
   const setConvId = useAppStore((s) => s.setCurrentConversationId)
   const selectedPage = useAppStore((s) => s.selectedPage)
+  const setSelectedPage = useAppStore((s) => s.setSelectedPage)
+  const setActiveView = useAppStore((s) => s.setActiveView)
   const selectedSource = useAppStore((s) => s.selectedSource)
   const importSelectedSource = useAppStore((s) => s.importSelectedSource)
 
@@ -192,6 +194,17 @@ export function ChatPanel() {
     setChatStatus(null)
   }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope, userId])
   handleSendRef.current = handleSend
+
+  const openPage = async (path: string) => {
+    if (!path) return
+    try {
+      const page = await api.getPage(path)
+      setSelectedPage(page)
+      setActiveView("wiki")
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || `加载页面失败：${path}` })
+    }
+  }
 
   const handleNewConv = () => {
     if (abortRef.current) {
@@ -387,9 +400,16 @@ export function ChatPanel() {
                     </summary>
                     <div className="mt-1 space-y-1">
                       {msg.cited.map((c) => (
-                        <div key={c.path} className="text-[10px] text-[var(--muted-foreground)]">
-                          <span className="font-medium">{c.title}</span> — {c.snippet.slice(0, 80)}...
-                        </div>
+                        <button
+                          key={c.path}
+                          type="button"
+                          onClick={() => openPage(c.path)}
+                          className="block w-full rounded border border-transparent px-1 py-1 text-left text-[10px] text-[var(--muted-foreground)] hover:border-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                          title={`打开 ${c.path}`}
+                        >
+                          <span className="font-medium">{c.title}</span>
+                          <span className="block truncate opacity-80">— {c.snippet.slice(0, 100)}…</span>
+                        </button>
                       ))}
                     </div>
                   </details>
