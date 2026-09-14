@@ -128,8 +128,11 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
         <button
           type="button"
           onClick={() => {
-            const mastered = (state.weak_kcs || []).filter((k: any) => (k.p_known ?? 0) >= 0.85)
-            if (mastered.length === 0) return
+            const mastered = state.mastered_kcs || []
+            if (mastered.length === 0) {
+              toast({ type: "success", message: "还没有已掌握的 KC；继续做题或聊天。" })
+              return
+            }
             const list = mastered.map((k: any) => `${k.title || k.kc_id}（p=${(k.p_known ?? 0).toFixed(2)}）`).join("\n")
             toast({ type: "success", message: list })
           }}

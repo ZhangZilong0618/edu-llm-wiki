@@ -520,9 +520,24 @@ def learner_state_summary(project_id: str, user_id: str = "default") -> dict:
     ]
     weak.sort(key=lambda r: r["p_known"])
 
+    # Mirror image of weak_kcs: KCs whose BKT posterior crossed the mastery
+    # threshold (>= 0.85). The frontend "已掌握" tile reads from here so the
+    # click-to-list behaviour matches the displayed N / M count.
+    mastered = [
+        {
+            "kc_id": r["kc_id"],
+            "title": metadata.get(r["kc_id"], {}).get("title", r["kc_id"]),
+            "path": metadata.get(r["kc_id"], {}).get("path", ""),
+            "p_known": r["p_known"],
+        }
+        for r in bkt if r["p_known"] >= 0.85
+    ]
+    mastered.sort(key=lambda r: -r["p_known"])
+
     return {
         "p_known_avg": round(sum(r["p_known"] for r in bkt) / max(1, len(bkt)), 4),
         "weak_kcs": weak[:10],
+        "mastered_kcs": mastered[:20],
         "misconception_clusters": clusters,
         "transfer_windows": _transfer_windows(project_id, bkt),
         "overconfidence_gap": _overconfidence_gap(confidence),
