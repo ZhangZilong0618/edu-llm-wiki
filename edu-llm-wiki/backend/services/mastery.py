@@ -528,6 +528,7 @@ def learner_state_summary(project_id: str, user_id: str = "default") -> dict:
         "sr_due_today": len(sr),
         "decay_risk": _decay_risk(sr),
         "n_kcs_tracked": len(bkt),
+        "n_kcs_mastered": sum(1 for r in bkt if r["p_known"] >= 0.85),
     }
 
 
