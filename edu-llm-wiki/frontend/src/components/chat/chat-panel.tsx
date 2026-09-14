@@ -209,6 +209,7 @@ export function ChatPanel() {
       abortRef.current.abort()
       abortRef.current = null
     }
+    userStoppedRef.current = true
     regenerateNextRef.current = false
     if (streaming) {
       setStoppedMessageIds((prev) => {
@@ -236,6 +237,11 @@ export function ChatPanel() {
   // Mirror of `messages` so non-React callbacks (handleStop, handleNewConv)
   // always see the latest streamed content.
   const messagesRef = useRef<Message[]>([])
+  // Set to true when the user explicitly clicks Stop. Lets the catch block
+  // tell apart a deliberate abort (no toast) from a connection drop or other
+  // network failure (toast so the user knows the partial response isn't
+  // the final one).
+  const userStoppedRef = useRef(false)
   useEffect(() => { messagesRef.current = messages }, [messages])
   // When true, the next handleSend call will stream a new assistant response
   // without re-appending the last user message (used by "regenerate").
@@ -340,7 +346,15 @@ export function ChatPanel() {
         return prev
       })
     } catch (e: any) {
-      if (e?.name === "AbortError") { setStreaming(null); return }
+      const userStopped = userStoppedRef.current
+      userStoppedRef.current = false
+      if (e?.name === "AbortError") {
+        if (!userStopped) {
+          toast({ type: "error", message: "连接已断开，回复已截断。" })
+        }
+        setStreaming(null)
+        return
+      }
       const message = e?.message || "请求失败，请稍后再试"
       toast({ type: "error", message })
       setMessages((prev) => prev.map((m) =>
