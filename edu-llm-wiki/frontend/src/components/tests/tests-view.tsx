@@ -384,6 +384,20 @@ export function TestsView() {
         type: "success",
         message: `已提交 ${scoreLabel(session)} · 答对 ${correctCount} · 答错 ${wrongCount}`,
       })
+      // After the auto-refit that runs in submit_test, check whether the
+      // user newly mastered any KC and celebrate.
+      try {
+        const summary = await api.getLearningState(userId)
+        const mastered = summary?.n_kcs_mastered ?? 0
+        if (mastered > 0) {
+          toast({
+            type: "success",
+            message: `🎉 已掌握 ${mastered} / ${summary?.n_kcs_tracked ?? mastered} 个知识组件`,
+          })
+        }
+      } catch {
+        // Learning state may be empty for new users; ignore.
+      }
     } catch (e: any) {
       toast({ type: "error", message: `提交失败: ${e?.message || e}` })
     } finally {
