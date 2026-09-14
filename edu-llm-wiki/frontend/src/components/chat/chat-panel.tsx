@@ -74,10 +74,25 @@ export function ChatPanel() {
     }).catch(() => {})
   }, [convId])
 
-  // Auto-scroll
+  // Auto-scroll: only when the user is already at (or near) the bottom of
+  // the message list. Once they scroll up to read, leave them alone and
+  // surface a button to jump back to the latest message.
+  const scrollHostRef = useRef<HTMLDivElement | null>(null)
+  const [stickToBottom, setStickToBottom] = useState(true)
   useEffect(() => {
+    if (!stickToBottom) return
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, streaming])
+  }, [messages, streaming, stickToBottom])
+  useEffect(() => {
+    const el = scrollHostRef.current
+    if (!el) return
+    const onScroll = () => {
+      const distance = el.scrollHeight - el.clientHeight - el.scrollTop
+      setStickToBottom(distance < 80)
+    }
+    el.addEventListener("scroll", onScroll, { passive: true })
+    return () => el.removeEventListener("scroll", onScroll)
+  }, [])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -447,7 +462,7 @@ export function ChatPanel() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div ref={scrollHostRef} className="relative flex-1 overflow-y-auto p-4 space-y-4">
           {isEmpty && (
             <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
               <div className="text-center">
@@ -546,6 +561,19 @@ export function ChatPanel() {
           )}
           <div ref={bottomRef} />
         </div>
+        {!stickToBottom ? (
+          <button
+            type="button"
+            onClick={() => {
+              bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+              setStickToBottom(true)
+            }}
+            className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-[var(--background)] px-3 py-1 text-[11px] text-[var(--muted-foreground)] shadow hover:text-[var(--foreground)]"
+            title="跳到最新消息"
+          >
+            跳到最新 ↓
+          </button>
+        ) : null}
 
         {/* Input */}
         <div className="shrink-0 p-3 border-t">
