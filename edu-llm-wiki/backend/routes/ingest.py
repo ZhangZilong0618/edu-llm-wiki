@@ -1,6 +1,8 @@
 """API routes for document ingestion."""
 
 import asyncio
+import uuid
+import re
 import hashlib
 import json
 import mimetypes
@@ -65,7 +67,17 @@ async def upload_file(file: UploadFile = File(...), project_id: str = Query("def
     ensure_dirs(project_id=project_id)
     sp = sources_path(project_id)
 
-    safe_name = file.filename.replace("..", "").replace("/", "_").replace("\\", "_")
+    # Sanitize the filename: keep the basename only, strip control characters,
+    # collapse spaces, and reject hidden files. Falls back to a generic name
+    # if nothing usable remains.
+    raw = (file.filename or "").strip()
+    raw = Path(raw).name  # drops any directory components
+    cleaned = re.sub(r'[\x00-\x1f<>:"|?*]', "_", raw).strip().strip(".")
+    if not cleaned:
+        cleaned = f"upload-{uuid.uuid4().hex[:8]}{Path(raw).suffix.lower() or '.pdf'}"
+    if cleaned.startswith("."):
+        cleaned = f"upload-{cleaned.lstrip('.')}"
+    safe_name = cleaned
     ext = Path(safe_name).suffix.lower()
     if ext not in SUPPORTED_UPLOAD_EXTENSIONS:
         raise HTTPException(
