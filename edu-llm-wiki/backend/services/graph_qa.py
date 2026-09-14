@@ -71,6 +71,53 @@ def _extract_json_object(text: str) -> dict:
         return {}
 
 
+INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "definition": ("什么是", "定义", "含义", "指什么", "意思", "概念", "definition", "means", "what is"),
+    "comparison": ("对比", "比较", "区别", "不同", "差异", "vs", "versus", "compare", "difference", "区别于"),
+    "mechanism": ("为什么", "原因", "机理", "机制", "原理", "如何发生", "怎么形成", "why", "how does", "mechanism"),
+    "formula": ("公式", "推导", "equation", "formula", "如何计算", "求解", "等于"),
+    "application": ("应用", "怎么用", "举例", "例子", "example", "use case", "应用场景"),
+}
+
+INTENT_FOCUS: dict[str, str] = {
+    "definition": (
+        "Prioritise prerequisite / teaches edges and pages whose title is the"
+        " exact concept the user is asking about."
+    ),
+    "comparison": (
+        "Prioritise applies_to / derives / related edges and pages that"
+        " contrast the two concepts; pull in both sides of the comparison."
+    ),
+    "mechanism": (
+        "Prioritise prerequisite / teaches / enables edges and pages that"
+        " explain the underlying physical or chemical mechanism."
+    ),
+    "formula": (
+        "Prioritise applies_to / enables edges and pages that contain the"
+        " derivation, formula, or worked example."
+    ),
+    "application": (
+        "Prioritise applies_to / scaffolds edges and pages that describe a"
+        " real use case, example, or worked example."
+    ),
+}
+
+
+def _classify_intent(query: str) -> str:
+    """Return the dominant intent for ``query``, or 'general' if no signal."""
+    q = (query or "").lower()
+    if not q.strip():
+        return "general"
+    best_intent = "general"
+    best_hits = 0
+    for intent, keywords in INTENT_KEYWORDS.items():
+        hits = sum(1 for kw in keywords if kw.lower() in q)
+        if hits > best_hits:
+            best_hits = hits
+            best_intent = intent
+    return best_intent
+
+
 def _priority(edge_type: str) -> int:
     """Favour pedagogically important edges when the controller is ambiguous."""
     order = {
@@ -113,6 +160,14 @@ def _format_controller_prompt(
             f"Evidence: {_shorten(page.get('content', ''), 900)}"
         )
 
+    intent = _classify_intent(query)
+    intent_focus = INTENT_FOCUS.get(intent)
+    intent_block = (
+        f"\n## Question intent\nDetected intent: {intent}.\n{intent_focus}\n"
+        if intent_focus
+        else ""
+    )
+
     frontier_parts: list[str] = []
     for candidate in frontier:
         edge = candidate.get("edge", {})
@@ -132,7 +187,7 @@ def _format_controller_prompt(
 
     return f"""## User question
 {query}
-
+{intent_block}
 {missing_text}## Current evidence
 {chr(10).join(evidence_parts) if evidence_parts else "(none)"}
 
