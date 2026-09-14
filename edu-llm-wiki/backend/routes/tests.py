@@ -90,11 +90,13 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _resolve_kc_id(project_id: str, related: str) -> str:
+def _resolve_kc_id(project_id: str, related: str, nodes: list[dict] | None = None) -> str:
     """Resolve a page path or title to the stable graph node id."""
     if related.endswith(".md"):
         return make_node_id(project_id, related)
-    for node in get_nodes(project_id):
+    if nodes is None:
+        nodes = get_nodes(project_id)
+    for node in nodes:
         if related in {
             node.get("page_path"),
             node.get("label"),
@@ -600,6 +602,7 @@ async def submit_test(
     # one transaction per attempt.
     from services.mastery import record_attempt as record_v3_attempt
 
+    nodes = get_nodes(project_id) if session.questions else []
     for question, attempt in zip(session.questions, attempts):
         related = question.related_page or (
             question.concepts[0] if question.concepts else None
@@ -610,7 +613,7 @@ async def submit_test(
             record_v3_attempt,
             project_id=project_id,
             user_id=user_id,
-            kc_id=_resolve_kc_id(project_id, related),
+            kc_id=_resolve_kc_id(project_id, related, nodes),
             score=attempt.score,
             max_score=attempt.max_score or 1.0,
             response=_answer_text(attempt.user_answer),
