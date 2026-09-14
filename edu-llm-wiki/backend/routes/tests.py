@@ -661,6 +661,14 @@ async def submit_test(
             attempt_id=question.id,
         )
 
+    # Opportunistically refit BKT parameters so the LearningPanel's
+    # "已掌握" count updates without requiring a manual "拟合并" click.
+    # Silent on failure — this is a UX nicety, not a correctness requirement.
+    try:
+        from services.graph_store import refit_bkt_for_user
+        refit_bkt_for_user(project_id=project_id, user_id=user_id)
+    except Exception:
+        pass
     return session
 
 
