@@ -340,7 +340,16 @@ function CitationPopover({
             )}
             {pages.map((p, i) => {
               const data = cache[p]
-              if (!data) return null
+              if (!data) {
+                return (
+                  <div key={p} className="cite-popover__page cite-popover__page--missing">
+                    {pages.length > 1 && (
+                      <div className="cite-popover__page-label">第 {p} 页</div>
+                    )}
+                    <p className="cite-popover__empty">该页暂不可用（文件可能已被删除或重新解析）。</p>
+                  </div>
+                )
+              }
               return (
                 <div key={p} className="cite-popover__page">
                   {pages.length > 1 && (
