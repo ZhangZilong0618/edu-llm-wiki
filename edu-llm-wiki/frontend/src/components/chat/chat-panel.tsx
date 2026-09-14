@@ -725,7 +725,7 @@ export function ChatPanel() {
                             type="button"
                             onClick={() => openPage(c.anchor ? `${c.path}#${c.anchor}` : c.path)}
                             className="flex-1 text-left text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                            title={`打开 ${c.path}`}
+                            title={c.anchor ? `打开 ${c.path}（定位到 ${c.anchor}）` : `打开 ${c.path}`}
                           >
                             <span className="font-medium">[{i + 1}] {c.title}</span>
                             <span className="block truncate opacity-80">— {c.snippet.slice(0, 100)}…</span>
