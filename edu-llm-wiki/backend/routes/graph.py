@@ -15,6 +15,8 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from config import settings
+
 from models.graph import (
     GraphData,
     GraphEvent as GraphEventModel,
