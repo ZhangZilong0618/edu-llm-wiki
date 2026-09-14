@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { useAppStore } from "@/stores/app-store"
+import { useUserStore } from "@/stores/user-store"
 import { api } from "@/lib/api"
 import { toast } from "@/components/ui/toast"
 import { Search, Loader2 } from "lucide-react"
@@ -9,12 +10,13 @@ export function SearchView() {
   const { searchQuery, setSearchQuery, searchResults, setSearchResults, isSearching, setIsSearching } = useAppStore()
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const userId = useUserStore((s) => s.userId)
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
     setIsSearching(true)
     try {
-      const resp = await api.search(searchQuery)
+      const resp = await api.search(searchQuery, false, 20, userId)
       setSearchResults(resp.results)
     } catch (e: any) {
       toast({ type: "error", message: e?.message || "Search failed" })

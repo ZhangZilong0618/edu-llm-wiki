@@ -29,8 +29,8 @@ export function KnowledgeTree() {
       useAppStore.getState().setSelectedSource(null)
       setSelectedPage(page)
       setActiveView("wiki")
-    } catch {
-      setSelectedPage({ path: p.path, title: p.title, page_type: p.type, content: "", sources: [], tags: [], created: "", updated: "", difficulty: null, prerequisites: [], related: [], common_misconceptions: [], worked_example_ref: [], last_reviewed: "" })
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || `加载页面失败：${p.path}` })
     }
   }
 

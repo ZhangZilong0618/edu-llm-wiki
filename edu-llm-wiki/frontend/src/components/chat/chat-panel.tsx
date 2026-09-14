@@ -175,7 +175,8 @@ export function ChatPanel() {
       }
 
       setMessages((prev) => {
-        autoSave(prev, input.slice(0, 50))
+        const title = userMsg.content.trim().slice(0, 50) || convTitle
+        autoSave(prev, title)
         return prev
       })
     } catch (e: any) {

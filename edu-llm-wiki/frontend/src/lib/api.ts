@@ -200,9 +200,9 @@ export const api = {
     request<{ status: string }>(`${BASE}/wiki/system/schema?${p()}`, { method: "PUT", body: JSON.stringify({ content }) }),
 
   // Search
-  search: (q: string, vector = false, topK = 20) =>
+  search: (q: string, vector = false, topK = 20, userId = "default") =>
     request<SearchResponse>(
-      `${BASE}/search?q=${encodeURIComponent(q)}&vector=${vector}&top_k=${topK}&${p()}`
+      `${BASE}/search?q=${encodeURIComponent(q)}&vector=${vector}&top_k=${topK}&user_id=${encodeURIComponent(userId)}&${p()}`
     ),
 
   // Graph

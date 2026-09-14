@@ -15,6 +15,8 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
   const [state, setState] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [reviewOpen, setReviewOpen] = useState(false)
+  const [tick, setTick] = useState(0)
+  const reload = () => setTick((t) => t + 1)
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -23,7 +25,7 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
       .catch((e) => toast({ type: "error", message: e?.message || "加载学习画像失败" }))
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [userId, projectId, effectiveUser])
+  }, [userId, projectId, effectiveUser, tick])
   if (loading) return <div className="text-[11px] text-[var(--muted-foreground)]">载入画像…</div>
   if (!state) return (
     <div className="rounded-lg border bg-[var(--card)] p-3 text-[11px] text-[var(--muted-foreground)]">
@@ -32,7 +34,17 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
   )
   return (
     <section className="space-y-3 rounded-lg border bg-[var(--card)] p-3">
-      <h3 className="flex items-center gap-1 text-xs font-semibold"><Brain size={12} /> 学习画像</h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1 text-xs font-semibold"><Brain size={12} /> 学习画像</h3>
+        <button
+          type="button"
+          onClick={reload}
+          aria-label="刷新学习画像"
+          className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+        >
+          <RefreshCw size={10} /> 刷新
+        </button>
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <Tile label="BKT 后验" value={(state.p_known_avg * 100).toFixed(0) + "%"} />
         <Tile label="过度自信" value={(state.overconfidence_gap * 100).toFixed(0) + "%"} warn={state.overconfidence_gap > 0.2} />

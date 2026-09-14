@@ -2,7 +2,8 @@
 // learning path panel and live event stream. State lives here so it can
 // persist across view changes; each child component is dumb.
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { toast } from "@/components/ui/toast";
 import { BookOpen, GitFork, RefreshCw, X } from "lucide-react";
 
 import { useAppStore } from "@/stores/app-store";
@@ -24,6 +25,13 @@ export function GraphView() {
   const compactLayout = useMediaQuery("(max-width: 980px)");
 
   const { data, mastery, loading, error, reload } = useGraphData({ projectId });
+  const toastShown = useRef<string | null>(null)
+  useEffect(() => {
+    if (error && toastShown.current !== error) {
+      toastShown.current = error
+      toast({ type: "error", message: `图谱加载失败：${error}` })
+    }
+  }, [error])
   const events = useGraphEvents(projectId);
 
   const [selected, setSelected] = useState<GraphSelection>(null);
