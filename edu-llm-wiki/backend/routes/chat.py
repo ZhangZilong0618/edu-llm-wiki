@@ -497,6 +497,19 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
             text = status_queue.get_nowait()
             yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': text})}\n\n"
 
+        # If the pipeline raised, surface the error instead of leaving the
+        # client waiting for a stream that will never produce [DONE].
+        if pipeline_task.cancelled():
+            yield f"data: {json.dumps({'type': 'error', 'message': '请求已取消'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        exc = pipeline_task.exception()
+        if exc is not None:
+            detail = str(exc)[:240] or exc.__class__.__name__
+            yield f"data: {json.dumps({'type': 'error', 'message': f'检索失败：{detail}'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         pages_context, cited, page_list, index, purpose, learner_profile = pipeline_task.result()
 
         system = SYSTEM_PROMPT.format(
@@ -512,9 +525,19 @@ async def chat_stream(req: ChatRequest, project_id: str = Query("default")):
         yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in cited]})}\n\n"
         yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': 'Answering with citations...'})}\n\n"
         full_response = ""
-        async for chunk in stream_chat(system_prompt=system, messages=messages):
-            full_response += chunk
-            yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
+        try:
+            async for chunk in stream_chat(system_prompt=system, messages=messages):
+                full_response += chunk
+                yield f"data: {json.dumps({'type': 'content', 'text': chunk})}\n\n"
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # The LLM stream broke mid-flight; let the client see a clear
+            # message and end cleanly so the UI can recover.
+            detail = str(e)[:240] or e.__class__.__name__
+            yield f"data: {json.dumps({'type': 'error', 'message': f'生成中断：{detail}'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
         cleaned, actual_cited = _filter_actual_citations(full_response, cited)
         yield f"data: {json.dumps({'type': 'replace', 'text': cleaned})}\n\n"
         yield f"data: {json.dumps({'type': 'final_citations', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet']} for c in actual_cited]})}\n\n"

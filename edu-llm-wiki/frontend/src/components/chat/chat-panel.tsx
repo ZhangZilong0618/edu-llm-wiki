@@ -251,6 +251,15 @@ export function ChatPanel() {
         } else if (event.type === "replace") {
           lastContent = event.text
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+        } else if (event.type === "error") {
+          // Pipeline or LLM stream failed mid-flight; surface a clear error
+          // and stop streaming so the UI can recover.
+          toast({ type: "error", message: event.message || "请求失败，请稍后再试" })
+          setMessages((prev) => prev.map((m) =>
+            m.id === assistantId && !m.content
+              ? { ...m, content: `Error: ${event.message || "请求失败"}` }
+              : m
+          ))
         }
       }
 
