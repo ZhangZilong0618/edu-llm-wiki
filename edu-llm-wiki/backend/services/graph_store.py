@@ -273,7 +273,10 @@ def connect(project_id: str) -> Iterator[sqlite3.Connection]:
     """Yield a per-project SQLite connection (cached, WAL, thread-safe)."""
     path = _db_path(project_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    key = project_id
+    # Include projects_dir in the key so tests that swap the data
+    # root via monkeypatch don't accidentally reuse a stale connection
+    # from a different tmp dir.
+    key = f"{getattr(settings, 'projects_dir', '')}::{project_id}"
     connections = _thread_connections()
     with _lock:
         conn = connections.get(key)
@@ -817,6 +820,50 @@ def load_insights(project_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
+
+def refit_bkt_for_user(project_id: str, user_id: str, *, min_observations: int = 5) -> dict:
+    """Recompute the 4-parameter BKT for ``user_id`` in ``project_id`` from
+    their full attempts_raw history. Skips rows with a null score.
+
+    Returns the fitted parameters and a status dict; if there are fewer
+    than ``min_observations`` rows the function returns the canonical
+    defaults and reports ``status="insufficient_data"`` so the caller can
+    avoid clobbering the BKT state with noise.
+    """
+    from services.learning.bkt import default_params, mle_fit
+    with connect(project_id) as conn:
+        rows = conn.execute(
+            "SELECT correct, score, max_score, ts FROM attempts_raw "
+            "WHERE project_id=? AND user_id=? AND score IS NOT NULL "
+            "ORDER BY ts ASC",
+            (project_id, user_id),
+        ).fetchall()
+    history = []
+    for correct, score, max_score, _ts in rows:
+        # Treat "correct enough" as a correct observation; everything else as wrong.
+        threshold = (max_score or 1.0) * 0.7
+        history.append((bool(score >= threshold)))
+    if len(history) < min_observations:
+        return {
+            "status": "insufficient_data",
+            "observations": len(history),
+            "params": default_params(),
+        }
+    params = mle_fit(history)
+    # Persist to bkt_params.
+    with connect(project_id) as conn:
+        for kc in {row[0] for row in conn.execute(
+                "SELECT DISTINCT kc_id FROM attempts_raw WHERE project_id=? AND user_id=?",
+                (project_id, user_id))}:
+            conn.execute(
+                "INSERT INTO bkt_params(project_id,user_id,kc_id,p_known,p_t,p_g,p_s,last_obs,obs_n)"
+                " VALUES(?,?,?,?,?,?,?,?,1)"
+                " ON CONFLICT(project_id,user_id,kc_id) DO UPDATE SET "
+                "p_known=excluded.p_known,p_t=excluded.p_t,p_g=excluded.p_g,p_s=excluded.p_s,last_obs=excluded.last_obs,obs_n=bkt_params.obs_n+1",
+                (project_id, user_id, kc, params["p_known"], params["p_t"], params["p_g"], params["p_s"], _now()),
+            )
+    return {"status": "ok", "observations": len(history), "params": params}
+
 
 def record_event(project_id: str, event_type: str, payload: dict) -> int:
     with connect(project_id) as conn:

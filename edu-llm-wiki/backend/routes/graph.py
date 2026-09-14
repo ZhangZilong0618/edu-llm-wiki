@@ -358,6 +358,36 @@ async def get_learning_insights(
     )
 
 
+@router.post("/admin/refit-bkt")
+async def refit_bkt_endpoint(
+    project_id: str = Query("default"),
+    user_id: str = Query("default"),
+    admin_token: str | None = Query(None),
+) -> dict:
+    """Recompute the 4-parameter BKT for ``user_id`` from their attempts_raw
+    history using forward-algorithm log-likelihood maximization.
+
+    Requires ``settings.api_token`` to match when configured.
+    """
+    expected = getattr(settings, "api_token", "") or ""
+    if expected and admin_token != expected:
+        raise HTTPException(status_code=401, detail="admin_token missing or invalid")
+    from services.graph_store import refit_bkt_for_user, record_event
+    result = refit_bkt_for_user(project_id=project_id, user_id=user_id)
+    if result["status"] != "ok":
+        return result
+    record_event(
+        project_id=project_id,
+        event_type="bkt_refit",
+        payload={
+            "user_id": user_id,
+            "observations": result["observations"],
+            "params": result["params"],
+        },
+    )
+    return result
+
+
 @router.post("/admin/reset-user")
 async def reset_user_endpoint(
     project_id: str = Query("default"),
