@@ -268,6 +268,18 @@ export function TestsView() {
     setAnswers((prev) => ({ ...prev, [questionId]: value }))
     setLastAnswerAt((prev) => ({ ...prev, [questionId]: Date.now() }))
   }
+  const resetAnswers = () => {
+    if (typeof window === "undefined") return
+    const confirmed = window.confirm("清空本场测试的所有答案和把握，重新开始作答？已提交的成绩不会变。")
+    if (!confirmed) return
+    setAnswers({})
+    setConfidences({})
+    setLastAnswerAt({})
+    setCurrentIndex(0)
+    setStartedAt(Date.now())
+    setSubmitSummary(null)
+    toast({ type: "success", message: "已清空答案，可以重新作答" })
+  }
 
   const exportTest = () => {
     if (!activeSession) return
@@ -567,6 +579,7 @@ export function TestsView() {
               userId={userId}
               submitSummary={submitSummary}
               onExport={exportTest}
+              onResetAnswers={resetAnswers}
             />
           )}
         </main>
@@ -590,6 +603,7 @@ function TestWorkspace({
   userId,
   submitSummary,
   onExport,
+  onResetAnswers,
 }: {
   session: TestSession
   currentIndex: number
@@ -605,6 +619,7 @@ function TestWorkspace({
   userId: string
   submitSummary: { total: number; perQuestion: { id: string; ms: number }[] } | null
   onExport: () => void
+  onResetAnswers: () => void
 }) {
   const question = session.questions[currentIndex]
   const attempt = attemptsById.get(question.id)
@@ -628,6 +643,16 @@ function TestWorkspace({
                 title="导出本次测试结果为 Markdown"
               >
                 <Download size={10} /> 导出
+              </button>
+            ) : null}
+            {submitted ? (
+              <button
+                type="button"
+                onClick={onResetAnswers}
+                className="ml-2 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 hover:bg-amber-100"
+                title="清空答案和把握，重新作答。已提交的成绩会保留在对话里。"
+              >
+                <RotateCcw size={10} /> 重新作答
               </button>
             ) : null}
             </p>
