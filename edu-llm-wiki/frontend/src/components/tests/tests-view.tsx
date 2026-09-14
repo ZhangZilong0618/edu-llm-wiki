@@ -376,7 +376,14 @@ export function TestsView() {
       setSubmitSummary({ total, perQuestion })
       setStartedAt(null)
       await loadData()
-      toast({ type: "success", message: `测试已提交：${scoreLabel(session)}` })
+      const wrongCount = (session.attempts || []).filter(
+        (a) => a.score / Math.max(1, a.max_score) < 0.5
+      ).length
+      const correctCount = (session.attempts || []).length - wrongCount
+      toast({
+        type: "success",
+        message: `已提交 ${scoreLabel(session)} · 答对 ${correctCount} · 答错 ${wrongCount}`,
+      })
     } catch (e: any) {
       toast({ type: "error", message: `提交失败: ${e?.message || e}` })
     } finally {
