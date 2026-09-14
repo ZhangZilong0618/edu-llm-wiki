@@ -361,7 +361,7 @@ def _bkt_rows(project_id: str, user_id: str) -> list[dict]:
     with _connect(project_id) as conn:
         rows = conn.execute(
             """
-            SELECT kc_id,p_known,p_t,p_g,p_s,last_obs
+            SELECT kc_id,p_known,p_t,p_g,p_s,last_obs,obs_n
             FROM bkt_params
             WHERE project_id=? AND user_id=?
             ORDER BY p_known ASC
@@ -373,6 +373,7 @@ def _bkt_rows(project_id: str, user_id: str) -> list[dict]:
             "kc_id": r[0], "p_known": float(r[1]),
             "p_t": float(r[2]), "p_g": float(r[3]), "p_s": float(r[4]),
             "last_obs": float(r[5]),
+            "obs_n": int(r[6] or 0),
         }
         for r in rows
     ]
@@ -530,8 +531,8 @@ def learner_state_summary(project_id: str, user_id: str = "default") -> dict:
         "decay_risk": _decay_risk(sr),
         "n_kcs_tracked": len(bkt),
         "n_kcs_mastered": sum(1 for r in bkt if r["p_known"] >= 0.85),
-        "n_attempts": sum(int(r.get("attempts") or 0) for r in bkt),
-        "last_refit_at": max((r.get("last_obs") or 0) for r in bkt) or None,
+        "n_attempts": sum(int(r.get("obs_n") or 0) for r in bkt),
+        "last_refit_at": (max(r.get("last_obs") or 0 for r in bkt) if bkt else 0) or None,
     }
 
 
