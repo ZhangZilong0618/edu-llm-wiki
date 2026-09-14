@@ -624,7 +624,7 @@ async def chat_stream(
         )
 
         yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in cited]})}\n\n"
-        yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': 'Answering with citations...'})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '正在生成带引用回答...'})}\n\n"
         full_response = ""
         try:
             async for chunk in stream_chat(system_prompt=system, messages=messages):
