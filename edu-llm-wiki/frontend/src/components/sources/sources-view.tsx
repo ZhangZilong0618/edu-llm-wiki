@@ -46,6 +46,7 @@ export function SourcesView() {
   const endOperation = useAppStore((s) => s.endOperation)
   const uploading = Boolean(operations["sources:upload"])
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
+  const progressClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [taskQueue, setTaskQueue] = useState<string[]>([])
   const [activeTask, setActiveTask] = useState<string | null>(null)
   const [taskStates, setTaskStates] = useState<Record<string, IngestTaskState>>({})
@@ -121,6 +122,12 @@ export function SourcesView() {
     }
   }, [refreshParseStatuses])
 
+  useEffect(() => {
+    return () => {
+      if (progressClearTimer.current) clearTimeout(progressClearTimer.current)
+    }
+  }, [])
+
   const triggerParseAllPending = useCallback(async () => {
     try {
       await api.parseAllPending()
@@ -130,6 +137,12 @@ export function SourcesView() {
       toast({ type: "error", message: `Batch parse failed: ${e?.message || e}` })
     }
   }, [refreshParseStatuses])
+
+  useEffect(() => {
+    return () => {
+      if (progressClearTimer.current) clearTimeout(progressClearTimer.current)
+    }
+  }, [])
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -164,7 +177,8 @@ export function SourcesView() {
     } else if (ok > 0) {
       toast({ type: "success", message: `${ok} file(s) uploaded` })
     }
-    setTimeout(() => setUploadProgress(null), 1500)
+    if (progressClearTimer.current) clearTimeout(progressClearTimer.current)
+    progressClearTimer.current = setTimeout(() => setUploadProgress(null), 1500)
 
     // Auto-trigger PaddleOCR parse for newly uploaded parseable files
     const toParse = uploaded.filter((n) => PARSEABLE_EXTS.includes(n.slice(n.lastIndexOf(".")).toLowerCase()))
