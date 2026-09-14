@@ -32,6 +32,7 @@ export function ChatPanel() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState<string | null>(null)
+  const [stoppedMessageIds, setStoppedMessageIds] = useState<Set<string>>(() => new Set())
   const [convTitle, setConvTitle] = useState("")
   const [scopeType, setScopeType] = useState<ScopeType>("whole_wiki")
   const [chatStatus, setChatStatus] = useState<string | null>(null)
@@ -71,6 +72,7 @@ export function ChatPanel() {
     api.getConversation(convId).then((c) => {
       setMessages(c.messages || [])
       setConvTitle(c.title || "")
+      setStoppedMessageIds(new Set())
     }).catch(() => {})
   }, [convId])
 
@@ -124,6 +126,13 @@ export function ChatPanel() {
       abortRef.current = null
     }
     regenerateNextRef.current = false
+    if (streaming) {
+      setStoppedMessageIds((prev) => {
+        const next = new Set(prev)
+        next.add(streaming)
+        return next
+      })
+    }
     setStreaming(null)
     setChatStatus(null)
     // Persist whatever we already streamed so the partial response is
@@ -258,6 +267,7 @@ export function ChatPanel() {
     setMessages([])
     setConvTitle("")
     setInput("")
+    setStoppedMessageIds(new Set())
   }
 
   const copyMessage = async (text: string) => {
@@ -512,6 +522,11 @@ export function ChatPanel() {
               >
                 {msg.role === "assistant" ? (
                   <div className="text-sm">
+                    {stoppedMessageIds.has(msg.id) ? (
+                      <span className="mb-1 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
+                        (已停止)
+                      </span>
+                    ) : null}
                     <Markdown>{msg.content || "..."}</Markdown>
                     {msg.content && msg.content.startsWith("Error:") ? (
                       <button
