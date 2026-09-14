@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { api } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
@@ -438,6 +438,17 @@ export function ChatPanel() {
     }
   }
 
+  // The "重试/继续" + "已停止" badge only make sense on the latest
+  // assistant message, since regenerate() acts on the most recent user
+  // turn. Older stopped messages keep their (已停止) badge for context
+  // but no longer expose the regenerate button.
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return messages[i].id
+    }
+    return null
+  }, [messages])
+
   const isEmpty = messages.length === 0 && !convId
 
   return (
@@ -586,7 +597,7 @@ export function ChatPanel() {
                       </span>
                     ) : null}
                     <Markdown>{msg.content || "..."}</Markdown>
-                    {(msg.content?.startsWith("Error:") || stoppedMessageIds.has(msg.id)) ? (
+                    {msg.id === lastAssistantId && (msg.content?.startsWith("Error:") || stoppedMessageIds.has(msg.id)) ? (
                       <button
                         type="button"
                         onClick={() => regenerate(msg)}
