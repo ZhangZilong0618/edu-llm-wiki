@@ -353,6 +353,7 @@ def record_attempt(
         "tags": tags,
         "quality": quality,
         "correct": correct,
+        "mastered": bkt_prior["p_known"] < 0.85 <= p_known,
     }
 
 

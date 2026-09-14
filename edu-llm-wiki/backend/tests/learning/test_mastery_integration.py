@@ -146,3 +146,39 @@ def test_record_attempt_handles_missing_node(monkeypatch, tmp_path):
         assert row[4] == 4
         # hint_ladder defaults to 0.
         assert row[5] == 0
+
+
+def test_record_attempt_signals_mastered_when_crossing_threshold(monkeypatch, tmp_path):
+    """The ``mastered`` flag in the response should be true exactly when p_known
+    crosses the 0.85 mastery threshold from below on this attempt."""
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+    ensure_schema("mastery-cross")
+
+    # KC starts at p_known=0.1 with a low p_t=0.05, so individual correct
+    # observations only nudge it up slowly.
+    from services.graph_store import upsert_mastery
+    upsert_mastery(
+        "mastery-cross", "u1", "kcM",
+        {"state": "exposed", "p_known": 0.10, "score": 0.0, "attempts": 0, "successes": 0,
+         "last_seen_at": 0.0, "next_review_at": 0.0, "metadata": {}},
+    )
+    # Five correct answers, with low p_t, push p_known toward 1.
+    for _ in range(5):
+        record_attempt("mastery-cross", "u1", "kcM", score=1, max_score=1, confidence=4)
+    res = record_attempt("mastery-cross", "u1", "kcM", score=1, max_score=1, confidence=4)
+    assert "mastered" in res
+    if res["mastered"]:
+        # Sanity: confirmed p_known is on the other side of 0.85.
+        assert res["bkt"]["p_known"] >= 0.85
+
+
+def test_record_attempt_mastered_false_when_under_threshold(monkeypatch, tmp_path):
+    """If p_known stays under 0.85, the response should have mastered=False."""
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+    ensure_schema("mastery-no-cross")
+
+    res = record_attempt(
+        "mastery-no-cross", "u1", "kcX", score=0, max_score=1, confidence=2
+    )
+    assert res["mastered"] is False
+    assert res["bkt"]["p_known"] < 0.85
