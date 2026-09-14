@@ -129,7 +129,7 @@ export function ChatPanel() {
     setChatStatus("Understanding question...")
 
     if (!convTitle && messages.length === 0) {
-      setConvTitle(input.slice(0, 50))
+      setConvTitle(userMsg.content.trim().slice(0, 50))
     }
 
     const controller = new AbortController()

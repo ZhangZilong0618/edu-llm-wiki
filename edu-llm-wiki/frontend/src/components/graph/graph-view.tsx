@@ -160,8 +160,15 @@ export function GraphView() {
   }
   if (error && !data) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-rose-500">
-        加载失败：{error}
+      <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-rose-500">
+        <p>加载失败：{error}</p>
+        <button
+          type="button"
+          onClick={reload}
+          className="rounded-md border px-3 py-1 text-xs"
+        >
+          重试
+        </button>
       </div>
     );
   }
