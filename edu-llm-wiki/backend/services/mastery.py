@@ -469,6 +469,13 @@ def _transfer_windows(project_id: str, bkt_rows: list[dict]) -> list[dict]:
 
 
 def _readiness_summary(project_id: str, bkt_rows: list[dict]) -> float:
+    """Average ZPD-style readiness over KCs that actually have prerequisite edges.
+
+    KCs with no prerequisites (sources, queries, guides) are excluded: they
+    do not represent a readiness gap, so averaging them in would inflate the
+    metric on cold-start projects. Nodes that the learner has never attempted
+    at all are also excluded, since their readiness is genuinely unknown.
+    """
     mastery = {r["kc_id"]: r["p_known"] for r in bkt_rows}
     prereqs_by_target: dict[str, list[str]] = {}
     for edge in get_edges(project_id):
@@ -479,10 +486,15 @@ def _readiness_summary(project_id: str, bkt_rows: list[dict]) -> float:
         return 1.0
     scores: list[float] = []
     for prereqs in prereqs_by_target.values():
-        if any(p not in mastery for p in prereqs):
+        attempted = [p for p in prereqs if p in mastery]
+        if not attempted:
+            continue
+        if any(mastery[p] < READINESS_THRESHOLD for p in attempted):
             scores.append(0.0)
         else:
-            scores.append(min(1.0, min(mastery[p] for p in prereqs) / READINESS_THRESHOLD))
+            scores.append(1.0)
+    if not scores:
+        return 0.0
     return round(sum(scores) / len(scores), 4)
 
 
