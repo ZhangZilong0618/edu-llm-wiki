@@ -87,7 +87,15 @@ export function ChatPanel() {
   // surface a button to jump back to the latest message.
   const scrollHostRef = useRef<HTMLDivElement | null>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const lastSeenIndex = useRef(0)
   useEffect(() => {
+    if (messages.length > lastSeenIndex.current) {
+      if (!stickToBottom) {
+        setUnreadCount((c) => c + (messages.length - lastSeenIndex.current))
+      }
+    }
+    lastSeenIndex.current = messages.length
     if (!stickToBottom) return
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, streaming, stickToBottom])
@@ -632,11 +640,12 @@ export function ChatPanel() {
             onClick={() => {
               bottomRef.current?.scrollIntoView({ behavior: "smooth" })
               setStickToBottom(true)
+              setUnreadCount(0)
             }}
             className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-[var(--background)] px-3 py-1 text-[11px] text-[var(--muted-foreground)] shadow hover:text-[var(--foreground)]"
             title="跳到最新消息"
           >
-            跳到最新 ↓
+            {unreadCount > 0 ? `${unreadCount} 条新消息 ↓` : "跳到最新 ↓"}
           </button>
         ) : null}
 
