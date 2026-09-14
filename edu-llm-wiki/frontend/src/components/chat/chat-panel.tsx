@@ -817,9 +817,11 @@ export function ChatPanel() {
                 </button>
               ) : null}
             </div>
-            {input.length > 1500 ? (
-              <p className="mt-1 text-right text-[10px] text-amber-600">
-                内容较长 ({input.length}/4000)，建议拆分后再发
+            {input.length > 300 ? (
+              <p
+                className={`mt-1 text-right text-[10px] ${input.length > 1500 ? "text-amber-600" : "text-[var(--muted-foreground)]"}`}
+              >
+                {input.length}/4000{input.length > 1500 ? " · 建议拆分后再发" : ""}
               </p>
             ) : null}
             {streaming ? (
