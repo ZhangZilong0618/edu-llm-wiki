@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon } from "lucide-react"
 
 interface Message {
   id: string
@@ -497,17 +497,30 @@ export function ChatPanel() {
                       Sources ({msg.cited.length})
                     </summary>
                     <div className="mt-1 space-y-1">
-                      {msg.cited.map((c) => (
-                        <button
+                      {msg.cited.map((c, i) => (
+                        <div
                           key={c.path}
-                          type="button"
-                          onClick={() => openPage(c.path)}
-                          className="block w-full rounded border border-transparent px-1 py-1 text-left text-[10px] text-[var(--muted-foreground)] hover:border-[var(--border)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                          title={`打开 ${c.path}`}
+                          className="group flex items-start gap-1 rounded border border-transparent px-1 py-1 hover:border-[var(--border)] hover:bg-[var(--accent)]"
                         >
-                          <span className="font-medium">{c.title}</span>
-                          <span className="block truncate opacity-80">— {c.snippet.slice(0, 100)}…</span>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => openPage(c.path)}
+                            className="flex-1 text-left text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                            title={`打开 ${c.path}`}
+                          >
+                            <span className="font-medium">[{i + 1}] {c.title}</span>
+                            <span className="block truncate opacity-80">— {c.snippet.slice(0, 100)}…</span>
+                            <span className="block truncate opacity-60">{c.path}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => copyMessage(c.path)}
+                            className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 hover:bg-[var(--background)] hover:text-[var(--foreground)] group-hover:opacity-100"
+                            title="复制引用路径"
+                          >
+                            <LinkIcon size={11} />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </details>
