@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react"
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react"
 import { FileSearch, Download } from "lucide-react"
 import { api, type TestCreateRequest, type TestQuestion, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
@@ -180,6 +180,67 @@ export function TestsView() {
     return activeSession.questions.filter((question) => answerToText(answers[question.id]).trim()).length
   }, [activeSession, answers])
 
+  const draftKey = (uid: string, sessionId: string) =>
+    `tests.draft.${uid}.${sessionId}`
+
+  type DraftPayload = {
+    answers: Record<string, string | string[]>
+    confidences: Record<string, number>
+    lastAnswerAt: Record<string, number>
+    savedAt: number
+  }
+
+  const readDraft = (uid: string, sessionId: string): DraftPayload | null => {
+    if (typeof window === "undefined") return null
+    try {
+      const raw = window.localStorage.getItem(draftKey(uid, sessionId))
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as DraftPayload
+      if (!parsed || typeof parsed !== "object") return null
+      return parsed
+    } catch {
+      return null
+    }
+  }
+
+  const writeDraft = (
+    uid: string,
+    sessionId: string,
+    payload: { answers: Record<string, string | string[]>; confidences: Record<string, number>; lastAnswerAt: Record<string, number> },
+  ) => {
+    if (typeof window === "undefined") return
+    try {
+      const value: DraftPayload = { ...payload, savedAt: Date.now() }
+      window.localStorage.setItem(draftKey(uid, sessionId), JSON.stringify(value))
+    } catch {
+      // localStorage may be full or disabled; ignore — the worst case is the
+      // next refresh loses the in-progress answers.
+    }
+  }
+
+  const clearDraft = (uid: string, sessionId: string) => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.removeItem(draftKey(uid, sessionId))
+    } catch {
+      // ignore
+    }
+  }
+
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!activeSession || activeSession.submitted_at) return
+    if (!userId) return
+    if (Object.keys(answers).length === 0 && Object.keys(confidences).length === 0) return
+    if (draftTimer.current) clearTimeout(draftTimer.current)
+    draftTimer.current = setTimeout(() => {
+      writeDraft(userId, activeSession.id, { answers, confidences, lastAnswerAt })
+    }, 800)
+    return () => {
+      if (draftTimer.current) clearTimeout(draftTimer.current)
+    }
+  }, [activeSession, answers, confidences, lastAnswerAt, userId])
+
   const loadData = async () => {
     try {
       const [testList, sourceList] = await Promise.all([api.listTests(), api.listSources().catch(() => [])])
@@ -234,10 +295,28 @@ export function TestsView() {
         restored[attempt.question_id] = attempt.user_answer
         if (attempt.confidence != null) restoredConfidence[attempt.question_id] = attempt.confidence
       }
+
+      // Restore in-progress draft from localStorage if the learner never
+      // submitted this session yet. A submitted session keeps the server
+      // record as authoritative.
+      let restoredLastAnswerAt: Record<string, number> = {}
+      if (!session.submitted_at) {
+        const draft = readDraft(userId, session.id)
+        if (draft) {
+          for (const [qid, val] of Object.entries(draft.answers || {})) {
+            restored[qid] = val
+          }
+          for (const [qid, val] of Object.entries(draft.confidences || {})) {
+            restoredConfidence[qid] = val
+          }
+          restoredLastAnswerAt = draft.lastAnswerAt || {}
+        }
+      }
+
       setAnswers(restored)
       setConfidences(restoredConfidence)
       setStartedAt(session.submitted_at ? null : Date.now())
-      setLastAnswerAt({})
+      setLastAnswerAt(restoredLastAnswerAt)
       setSubmitSummary(null)
     } catch (e: any) {
       toast({ type: "error", message: `打开测试失败: ${e?.message || e}` })
@@ -253,6 +332,7 @@ export function TestsView() {
     if (!confirmed) return
     try {
       await api.deleteTest(id)
+      clearDraft(userId, id)
       if (activeSession?.id === id) {
         setActiveSession(null)
         setAnswers({})
@@ -296,6 +376,7 @@ export function TestsView() {
 
   const resetAnswers = () => {
     if (typeof window === "undefined") return
+    if (!activeSession) return
     const confirmed = window.confirm("清空本场测试的所有答案和把握，重新开始作答？已提交的成绩不会变。")
     if (!confirmed) return
     setAnswers({})
@@ -304,6 +385,7 @@ export function TestsView() {
     setCurrentIndex(0)
     setStartedAt(Date.now())
     setSubmitSummary(null)
+    clearDraft(userId, activeSession.id)
     toast({ type: "success", message: "已清空答案，可以重新作答" })
   }
 
@@ -375,6 +457,8 @@ export function TestsView() {
       const total = perQuestion.reduce((sum, x) => sum + x.ms, 0)
       setSubmitSummary({ total, perQuestion })
       setStartedAt(null)
+      // Submission succeeded; the server record is now authoritative.
+      clearDraft(userId, activeSession.id)
       await loadData()
       const wrongCount = (session.attempts || []).filter(
         (a) => a.score / Math.max(1, a.max_score) < 0.5
