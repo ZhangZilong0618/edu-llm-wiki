@@ -161,18 +161,25 @@ export function ChatPanel() {
     autoResizeTextarea()
   }, [autoResizeTextarea, input.length])
 
-  // Auto-save with debounce
+  // Auto-save with debounce. We deliberately do NOT refetch the entire
+  // conversation list on every content save -- only when the title
+  // changes (rename or first user message) so the sidebar doesn’t flicker
+  // and we don’t waste a round-trip per keystroke.
   const autoSave = useCallback((msgs: Message[], title?: string) => {
     const id = convIdRef.current
     if (!id) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
+      const nextTitle = title ?? convTitle
       api.saveConversation({
         id,
-        title: title ?? convTitle,
+        title: nextTitle,
         messages: msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, cited: m.cited })),
       }).then(() => {
-        api.listConversations().then(setConversations).catch(() => {})
+        if (nextTitle !== convTitleRef.current) {
+          convTitleRef.current = nextTitle
+          api.listConversations().then(setConversations).catch(() => {})
+        }
       }).catch(() => {})
     }, 500)
   }, [convTitle, setConversations])
