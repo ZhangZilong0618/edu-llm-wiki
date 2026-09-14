@@ -27,7 +27,6 @@ def test_collect_graph_evidence_expands_until_sufficient(monkeypatch):
         "read_wiki_page",
         lambda path, project_id: {"title": path, "content": f"Full content for {path}"},
     )
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     calls = []
 

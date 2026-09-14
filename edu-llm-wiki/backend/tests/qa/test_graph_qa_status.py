@@ -28,7 +28,6 @@ def test_collect_graph_evidence_emits_status(monkeypatch):
         "read_wiki_page",
         lambda path, project_id: {"title": path, "content": f"Full content for {path}"},
     )
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     calls = []
 
@@ -76,7 +75,6 @@ def test_status_callback_is_optional(monkeypatch):
         "read_wiki_page",
         lambda path, project_id: {"title": path, "content": "x" * 50},
     )
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     async def fake_chat_complete(**kwargs):
         return '{"sufficient": true, "candidate_ids": [], "missing": []}'
@@ -101,7 +99,6 @@ def test_status_callback_failure_does_not_break_pipeline(monkeypatch):
         "read_wiki_page",
         lambda path, project_id: {"title": path, "content": "y" * 50},
     )
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     async def fake_chat_complete(**kwargs):
         return '{"sufficient": true, "candidate_ids": [], "missing": []}'
@@ -140,7 +137,6 @@ def test_collect_graph_evidence_stops_when_frontier_exhausted(monkeypatch):
         "read_wiki_page",
         lambda path, project_id: {"title": path, "content": f"content {path}"},
     )
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     async def fake_chat_complete(**kwargs):
         # Always ask for more — but after round 1 there is no frontier.
@@ -186,7 +182,6 @@ def test_collect_graph_evidence_falls_back_when_model_fails(monkeypatch):
         "read_wiki_page",
         lambda path, project_id: {"title": path, "content": f"content {path}"},
     )
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     async def fake_chat_complete(**kwargs):
         raise RuntimeError("controller unavailable")
@@ -226,7 +221,6 @@ def test_collect_graph_evidence_respects_page_budget(monkeypatch):
         return {"title": path, "content": "x" * 4_500}
 
     monkeypatch.setattr(graph_qa, "read_wiki_page", fake_read_wiki_page)
-    monkeypatch.setattr(graph_qa, "record_exposure", lambda **kwargs: None)
 
     async def fake_chat_complete(**kwargs):
         return '{"sufficient": false, "candidate_ids": ["b"], "missing": ["more"]}'

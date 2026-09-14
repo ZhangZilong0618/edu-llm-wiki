@@ -22,7 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from services.graph_store import get_edges, get_nodes, make_node_id, record_exposure
+from services.graph_store import get_edges, get_nodes, make_node_id
 from services.ingest_engine import _strip_images
 from services.llm_client import chat_complete
 from services.search_engine import _page_body
@@ -429,12 +429,10 @@ Rules:
             if len(selected_this_round) >= max_expansions_per_round:
                 break
 
-        # Expose traversed nodes for learner analytics.
-        try:
-            for candidate in selected_this_round:
-                record_exposure(project_id=project_id, user_id=user_id, node_id=candidate["node_id"])
-        except Exception:
-            pass
+        # NOTE: do not call record_exposure here. _run_rag_pipeline records
+        # every relevant page (including these graph-traversed ones) once at
+        # the end of the pipeline, so calling it again would do redundant
+        # upserts without changing the learner state.
 
         if selected_this_round:
             await emit_status(
