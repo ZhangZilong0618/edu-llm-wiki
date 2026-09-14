@@ -4,7 +4,7 @@
 // clusters, readiness progress and SR queue.
 import { useEffect, useState } from "react"
 import { toast } from "@/components/ui/toast"
-import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw, CheckCircle2, ListChecks } from "lucide-react"
+import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw, CheckCircle2, ListChecks, Download } from "lucide-react"
 import { api } from "@/lib/api"
 import { useUserStore } from "@/stores/user-store"
 import { PosteriorBar } from "./posterior-bar"
@@ -19,6 +19,19 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
   const [resetting, setResetting] = useState(false)
   const [refitting, setRefitting] = useState(false)
   const reload = () => setTick((t) => t + 1)
+  const exportState = () => {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `learner-state-${effectiveUser}-${Date.now()}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast({ type: "success", message: "学习画像已下载" })
+  }
+
   const handleRefit = async () => {
     if (refitting) return
     const adminToken = typeof window !== "undefined"
@@ -170,6 +183,14 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
         >
           <RefreshCw size={11} className={refitting ? "animate-spin" : ""} />
           {refitting ? "拟合中..." : "拟合并"}
+        </button>
+        <button
+          type="button"
+          onClick={exportState}
+          title="下载当前学习者画像（含 BKT / SR / 已掌握 KCs）为 JSON"
+          className="flex shrink-0 items-center justify-center gap-1 rounded border border-slate-300 bg-slate-50 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
+        >
+          <Download size={11} /> 导出
         </button>
       </div>
       {reviewOpen && (
