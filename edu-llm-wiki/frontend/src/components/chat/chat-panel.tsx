@@ -561,7 +561,10 @@ export function ChatPanel() {
                 {msg.role === "assistant" ? (
                   <div className="text-sm">
                     {stoppedMessageIds.has(msg.id) ? (
-                      <span className="mb-1 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
+                      <span
+                        className="mb-1 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700"
+                        title="你在模型回答完整前手动停止了生成"
+                      >
                         (已停止)
                       </span>
                     ) : null}
