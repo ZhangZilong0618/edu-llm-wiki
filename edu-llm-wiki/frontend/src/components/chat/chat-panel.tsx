@@ -315,19 +315,28 @@ export function ChatPanel() {
       const page = await api.getPage(path)
       setSelectedPage(page)
       setActiveView("wiki")
-      // Defer the scroll until after the wiki view mounts and renders the
-      // heading. Two RAFs is the cheapest reliable schedule across browsers.
+      // Defer the scroll until the wiki view mounts and renders the
+      // heading. Two RAFs covers the fast path; for slow renders (long
+      // page, lots of citations) we poll briefly so the user always
+      // lands on the cited section rather than the page top.
       if (anchor) {
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const el = document.getElementById(decodeURIComponent(anchor))
+        const decoded = decodeURIComponent(anchor)
+        let attempts = 0
+        const tryScroll = () => {
+          const el = document.getElementById(decoded)
           if (el) {
             el.scrollIntoView({ behavior: "smooth", block: "start" })
             el.classList.add("ring-2", "ring-[var(--primary)]", "ring-offset-2")
             window.setTimeout(() => {
               el.classList.remove("ring-2", "ring-[var(--primary)]", "ring-offset-2")
             }, 1800)
+            return
           }
-        }))
+          if (attempts++ < 12) {
+            window.setTimeout(tryScroll, 120)
+          }
+        }
+        requestAnimationFrame(tryScroll)
       }
     } catch (e: any) {
       toast({ type: "error", message: e?.message || `加载页面失败：${path}` })
