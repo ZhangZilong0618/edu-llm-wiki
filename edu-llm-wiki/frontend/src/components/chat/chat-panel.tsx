@@ -481,7 +481,11 @@ export function ChatPanel() {
     // Flag handleSend to skip appending a duplicate user bubble.
     setMessages((prev) => prev.filter((m) => m.id !== target.id))
     regenerateNextRef.current = true
-    setInput(lastUser.content)
+    // Clear any residual text the user might have been drafting; the
+    // previous user message we are regenerating from is already kept in
+    // `messages` (since we only removed the assistant), so we must NOT
+    // overwrite the textarea with it.
+    setInput("")
     setTimeout(() => handleSendRef.current?.(), 0)
   }, [messages, streaming])
 
