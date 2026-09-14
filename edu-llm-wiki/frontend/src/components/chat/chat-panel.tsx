@@ -382,6 +382,8 @@ export function ChatPanel() {
         <div className="p-2 border-b flex gap-1.5">
           <button
             onClick={handleNewConv}
+            aria-label="新建对话"
+            title="新建对话"
             className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-dashed border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
           >
             <Plus size={12} /> New Chat
@@ -389,6 +391,7 @@ export function ChatPanel() {
           <button
             onClick={exportConv}
             disabled={!convId}
+            aria-label="导出当前对话为 Markdown"
             title="导出当前对话为 Markdown"
             className="shrink-0 flex items-center justify-center px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] disabled:opacity-40"
           >
@@ -605,8 +608,9 @@ export function ChatPanel() {
             {streaming ? (
               <button
                 onClick={handleStop}
+                aria-label="停止生成"
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"
-                title="Stop generating"
+                title="停止生成"
               >
                 <Square size={14} />
               </button>
@@ -614,6 +618,7 @@ export function ChatPanel() {
               <button
                 onClick={handleSend}
                 disabled={!input.trim()}
+                aria-label="发送消息"
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 transition-opacity"
               >
                 <Send size={14} />
