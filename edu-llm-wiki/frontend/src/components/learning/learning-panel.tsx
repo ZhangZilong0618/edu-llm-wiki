@@ -125,12 +125,24 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
         <Tile label="BKT 后验" value={(state.p_known_avg * 100).toFixed(0) + "%"} />
         <Tile label="过度自信" value={(state.overconfidence_gap * 100).toFixed(0) + "%"} warn={state.overconfidence_gap > 0.2} />
         <Tile label="待复习" value={state.sr_due_today} icon={RefreshCw} />
-        <Tile
-          label="已掌握"
-          value={`${state.n_kcs_mastered ?? 0} / ${state.n_kcs_tracked ?? 0}`}
-          icon={CheckCircle2}
-          warn={(state.n_kcs_mastered ?? 0) > 0}
-        />
+        <button
+          type="button"
+          onClick={() => {
+            const mastered = (state.weak_kcs || []).filter((k: any) => (k.p_known ?? 0) >= 0.85)
+            if (mastered.length === 0) return
+            const list = mastered.map((k: any) => `${k.title || k.kc_id}（p=${(k.p_known ?? 0).toFixed(2)}）`).join("\n")
+            toast({ type: "success", message: list })
+          }}
+          title="点击查看已掌握的 KC 列表"
+          className="text-left"
+        >
+          <Tile
+            label="已掌握"
+            value={`${state.n_kcs_mastered ?? 0} / ${state.n_kcs_tracked ?? 0}`}
+            icon={CheckCircle2}
+            warn={(state.n_kcs_mastered ?? 0) > 0}
+          />
+        </button>
         <Tile label="总答题数" value={state.n_attempts ?? 0} icon={ListChecks} />
         <Tile label="遗忘风险" value={(state.decay_risk * 100).toFixed(0) + "%"} warn={state.decay_risk > 0.5} />
       </div>
