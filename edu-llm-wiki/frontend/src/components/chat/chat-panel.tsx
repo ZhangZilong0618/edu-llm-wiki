@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download } from "lucide-react"
 
 interface Message {
   id: string
@@ -219,6 +219,61 @@ export function ChatPanel() {
     setInput("")
   }
 
+  const copyMessage = async (text: string) => {
+    if (!text) return
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        toast({ type: "success", message: "已复制" })
+        return
+      }
+    } catch {
+      // fall through to legacy fallback
+    }
+    if (typeof document === "undefined") return
+    const ta = document.createElement("textarea")
+    ta.value = text
+    ta.style.position = "fixed"
+    ta.style.opacity = "0"
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand("copy")
+      toast({ type: "success", message: "已复制" })
+    } catch {
+      toast({ type: "error", message: "复制失败，请手动复制" })
+    } finally {
+      document.body.removeChild(ta)
+    }
+  }
+
+  const exportConv = () => {
+    if (!convId) {
+      toast({ type: "error", message: "当前没有可导出的对话" })
+      return
+    }
+    const md = messages
+      .map((m) => {
+        const role = m.role === "user" ? "User" : "Assistant"
+        const cite = m.cited && m.cited.length
+          ? "\n\nSources:\n" + m.cited.map((c, i) => `  [${i + 1}] ${c.title} — ${c.path}`).join("\n")
+          : ""
+        return `## ${role}\n\n${m.content}${cite}`
+      })
+      .join("\n\n---\n\n")
+    const header = `# ${convTitle || "Conversation"}\n\nExported: ${new Date().toLocaleString()}\n\n---\n\n`
+    const blob = new Blob([header + md], { type: "text/markdown;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${(convTitle || "conversation").replace(/[\\\\/:*?"<>|]+/g, "_").slice(0, 64)}.md`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast({ type: "success", message: "对话已导出为 Markdown" })
+  }
+
   const regenerate = useCallback((target: Message) => {
     if (streaming) return
     const lastUser = [...messages].reverse().find((m) => m.role === "user")
@@ -301,12 +356,20 @@ export function ChatPanel() {
     <div className="flex h-full">
       {/* Conversation sidebar */}
       <div className="w-44 shrink-0 border-r flex flex-col bg-[var(--sidebar)]">
-        <div className="p-2 border-b">
+        <div className="p-2 border-b flex gap-1.5">
           <button
             onClick={handleNewConv}
-            className="w-full flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-dashed border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
+            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-dashed border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
           >
             <Plus size={12} /> New Chat
+          </button>
+          <button
+            onClick={exportConv}
+            disabled={!convId}
+            title="导出当前对话为 Markdown"
+            className="shrink-0 flex items-center justify-center px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] disabled:opacity-40"
+          >
+            <Download size={12} />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">
@@ -411,6 +474,16 @@ export function ChatPanel() {
                         title="重新生成"
                       >
                         <RefreshCw size={10} /> 重试
+                      </button>
+                    ) : null}
+                    {msg.content && !msg.content.startsWith("Error:") ? (
+                      <button
+                        type="button"
+                        onClick={() => copyMessage(msg.content)}
+                        className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                        title="复制回答"
+                      >
+                        <Copy size={10} /> 复制
                       </button>
                     ) : null}
                   </div>
