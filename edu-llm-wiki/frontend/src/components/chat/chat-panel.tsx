@@ -63,9 +63,7 @@ export function ChatPanel() {
   const abortRef = useRef<AbortController | null>(null)
   const skipLoadRef = useRef(false)
   const convIdRef = useRef(convId)
-  convIdRef.current = convId
   const convTitleRef = useRef(convTitle)
-  convTitleRef.current = convTitle
 
   // Set to true once a conversation's row has been refreshed into the
   // sidebar at least once. When the *first* message of a brand-new
@@ -74,6 +72,12 @@ export function ChatPanel() {
   // (the per-title-refresh guard in autoSave still applies) to avoid
   // flicker and round-trips.
   const wasRefreshedRef = useRef(false)
+
+  // Keep the "latest" refs in sync after commit (don't mutate refs in render).
+  useEffect(() => {
+    convIdRef.current = convId
+    convTitleRef.current = convTitle
+  }, [convId, convTitle])
 
   const userId = useUserStore((s) => s.userId)
   const [llmModel, setLlmModel] = useState<string>("")
