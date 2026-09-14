@@ -89,6 +89,34 @@ export function SettingsView() {
   })
   const [paddleSaved, setPaddleSaved] = useState(false)
   const [showPaddleToken, setShowPaddleToken] = useState(false)
+  const [refitting, setRefitting] = useState(false)
+  const [lastRefitAt, setLastRefitAt] = useState<number | null>(null)
+  const triggerRefit = async () => {
+    if (refitting) return
+    const tok = (typeof window === "undefined" ? "" : window.localStorage.getItem("edu-llm-wiki.adminToken") || "")
+    setRefitting(true)
+    try {
+      const res = await api.refitBkt("default", "default", tok || undefined)
+      if (res.status === "ok") {
+        setLastRefitAt(Math.floor(Date.now() / 1000))
+        const p = res.params || {}
+        toast({
+          type: "success",
+          message: `BKT 拟合完成 (${res.observations} 条记录)：p_known=${p.p_known}, p_t=${p.p_t}`,
+        })
+      } else {
+        toast({ type: "error", message: "数据不足（至少 5 条 attempt）" })
+      }
+    } catch (e: any) {
+      if (e?.message?.includes("admin_token") || e?.status === 401) {
+        toast({ type: "error", message: "后端要求 Admin Token，请先在上方配置。" })
+      } else {
+        toast({ type: "error", message: e?.message || "BKT 拟合失败" })
+      }
+    } finally {
+      setRefitting(false)
+    }
+  }
   const [adminToken, setAdminToken] = useState(() => {
     if (typeof window === "undefined") return ""
     return window.localStorage.getItem("edu-llm-wiki.adminToken") || ""
@@ -548,6 +576,23 @@ export function SettingsView() {
                 placeholder="仅在服务端配置 api_token 时填写"
               />
             </Field>
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={triggerRefit}
+                disabled={refitting}
+                className="rounded-md border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+              >
+                {refitting ? "拟合中..." : "拟合并 BKT"}
+              </button>
+              {lastRefitAt ? (
+                <span className="text-[10px] text-[var(--muted-foreground)]">
+                  上次拟合: {new Date(lastRefitAt * 1000).toLocaleString()}
+                </span>
+              ) : (
+                <span className="text-[10px] text-[var(--muted-foreground)]">从未拟合</span>
+              )}
+            </div>
           </Section>
 
         </div>
