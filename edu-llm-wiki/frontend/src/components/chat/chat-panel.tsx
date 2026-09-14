@@ -133,6 +133,9 @@ export function ChatPanel() {
   }
 
   const handleSendRef = useRef<(() => void) | null>(null)
+  // When true, the next handleSend call will stream a new assistant response
+  // without re-appending the last user message (used by "regenerate").
+  const regenerateNextRef = useRef(false)
   const handleSend = useCallback(async () => {
     if (!input.trim() || streaming) return
 
@@ -143,16 +146,28 @@ export function ChatPanel() {
       setConvId(currentConvId)
     }
 
-    const userMsg: Message = { id: nextId(), role: "user", content: input }
     const assistantId = nextId()
-    const newMsgs = [...messages, userMsg, { id: assistantId, role: "assistant" as const, content: "" }]
+    let baseMsgs = messages
+    if (regenerateNextRef.current) {
+      // Drop the most recent user message; it will be re-sent as part of the
+      // chat history to the model, but we do not want to append a duplicate
+      // "user" bubble in the UI.
+      baseMsgs = messages.slice(0, -1)
+      regenerateNextRef.current = false
+    } else {
+      const userMsg: Message = { id: nextId(), role: "user", content: input }
+      baseMsgs = [...messages, userMsg]
+    }
+    const newMsgs = [...baseMsgs, { id: assistantId, role: "assistant" as const, content: "" }]
     setMessages(newMsgs)
     setInput("")
     setStreaming(assistantId)
     setChatStatus("Understanding question...")
 
     if (!convTitle && messages.length === 0) {
-      setConvTitle(userMsg.content.trim().slice(0, 50))
+      const lastUser = [...messages].reverse().find((m) => m.role === "user")
+      const titleSeed = lastUser?.content?.trim() || input.trim()
+      setConvTitle(titleSeed.slice(0, 50))
     }
 
     const controller = new AbortController()
@@ -198,8 +213,9 @@ export function ChatPanel() {
       }
 
       setMessages((prev) => {
-        const title = userMsg.content.trim().slice(0, 50) || convTitle
-        autoSave(prev, title)
+        const lastUser = [...prev].reverse().find((m) => m.role === "user")
+        const titleSeed = lastUser?.content?.trim() || convTitle
+        autoSave(prev, titleSeed.slice(0, 50))
         return prev
       })
     } catch (e: any) {
@@ -301,7 +317,10 @@ export function ChatPanel() {
     if (streaming) return
     const lastUser = [...messages].reverse().find((m) => m.role === "user")
     if (!lastUser) return
+    // Remove the errored assistant message but keep the last user message.
+    // Flag handleSend to skip appending a duplicate user bubble.
     setMessages((prev) => prev.filter((m) => m.id !== target.id))
+    regenerateNextRef.current = true
     setInput(lastUser.content)
     setTimeout(() => handleSendRef.current?.(), 0)
   }, [messages, streaming])
