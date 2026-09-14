@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react"
 import { FileSearch, Download } from "lucide-react"
-import { api, type TestCreateRequest, type TestSession, type TestSummary } from "@/lib/api"
+import { api, type TestCreateRequest, type TestQuestion, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { ConfidenceSlider } from "@/components/learning/confidence-slider"
 import { toast } from "@/components/ui/toast"
@@ -650,6 +650,15 @@ export function TestsView() {
   )
 }
 
+function computeWrongQuestions(session: TestSession): TestQuestion[] {
+  if (!session.attempts) return []
+  return session.questions.filter((q, i) => {
+    const a = session.attempts[i]
+    if (!a) return false
+    return a.score / Math.max(1, a.max_score) < 0.5
+  })
+}
+
 function TestWorkspace({
   session,
   currentIndex,
@@ -686,6 +695,7 @@ function TestWorkspace({
   onRegenerateFromWrong: () => void
 }) {
   const question = session.questions[currentIndex]
+  const wrongQuestions = computeWrongQuestions(session)
   const attempt = attemptsById.get(question.id)
   const submitted = session.status === "submitted"
   const resultPercent = session.score != null && session.max_score ? Math.round((session.score / session.max_score) * 100) : null
