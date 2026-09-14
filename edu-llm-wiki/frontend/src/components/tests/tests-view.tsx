@@ -685,7 +685,12 @@ function TestWorkspace({
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-semibold">{session.title}</h2>
             <p className="text-sm text-[var(--muted-foreground)]">
-              {session.questions.length} 题 · {questionTypeSummary(session)} · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
+              <span className="inline-flex items-center gap-1">
+                {session.title?.includes("重做") ? (
+                  <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">重做</span>
+                ) : null}
+                {session.questions.length} 题 · {questionTypeSummary(session)} · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
+              </span>
               {submitted && resultPercent != null ? ` · 得分 ${scoreLabel(session)} (${resultPercent}%)` : ""}
             {submitted ? (
               <button
