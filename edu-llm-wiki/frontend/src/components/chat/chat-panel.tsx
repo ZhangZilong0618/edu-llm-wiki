@@ -359,6 +359,12 @@ export function ChatPanel() {
     const hashIdx = raw.indexOf("#")
     const path = hashIdx >= 0 ? raw.slice(0, hashIdx) : raw
     const anchor = hashIdx >= 0 ? raw.slice(hashIdx + 1) : null
+    if (!path) {
+      // Path-less anchor (e.g. "##my-section") is malformed; refuse to
+      // call the wiki API with an empty path which would 404.
+      toast({ type: "error", message: "引用路径缺失，无法打开" })
+      return
+    }
     try {
       const page = await api.getPage(path)
       setSelectedPage(page)
