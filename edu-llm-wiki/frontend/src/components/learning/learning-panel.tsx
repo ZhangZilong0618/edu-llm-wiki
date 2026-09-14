@@ -4,7 +4,7 @@
 // clusters, readiness progress and SR queue.
 import { useEffect, useState } from "react"
 import { toast } from "@/components/ui/toast"
-import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw } from "lucide-react"
+import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw, CheckCircle2 } from "lucide-react"
 import { api } from "@/lib/api"
 import { useUserStore } from "@/stores/user-store"
 import { PosteriorBar } from "./posterior-bar"
@@ -112,6 +112,12 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
         <Tile label="BKT 后验" value={(state.p_known_avg * 100).toFixed(0) + "%"} />
         <Tile label="过度自信" value={(state.overconfidence_gap * 100).toFixed(0) + "%"} warn={state.overconfidence_gap > 0.2} />
         <Tile label="待复习" value={state.sr_due_today} icon={RefreshCw} />
+        <Tile
+          label="已掌握"
+          value={`${state.n_kcs_mastered ?? 0} / ${state.n_kcs_tracked ?? 0}`}
+          icon={CheckCircle2}
+          warn={(state.n_kcs_mastered ?? 0) > 0}
+        />
         <Tile label="遗忘风险" value={(state.decay_risk * 100).toFixed(0) + "%"} warn={state.decay_risk > 0.5} />
       </div>
       <div className="space-y-1">

@@ -570,6 +570,7 @@ export interface LearnerStateSummary {
   sr_due_today: number
   decay_risk: number
   n_kcs_tracked: number
+  n_kcs_mastered: number
 }
 
 export interface ScheduleItem {
