@@ -1046,3 +1046,26 @@ def record_attempt(
 
 def record_graph_event(project_id, event_type, payload):
     return record_event(project_id, event_type, payload)
+
+
+def reset_user(project_id: str, user_id: str) -> dict:
+    """Wipe all per-learner state for ``user_id`` in ``project_id``.
+    Returns a per-table row count that was removed.
+    """
+    counts: dict[str, int] = {}
+    tables = [
+        'bkt_params',
+        'sr_schedule',
+        'confidence_log',
+        'attempts_raw',
+        'misconception_traces',
+        'node_mastery',
+    ]
+    with connect(project_id) as conn:
+        for table in tables:
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE project_id=? AND user_id=?",
+                (project_id, user_id),
+            )
+            counts[table] = cur.rowcount
+    return counts

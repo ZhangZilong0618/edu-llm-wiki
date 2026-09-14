@@ -16,7 +16,25 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
   const [loading, setLoading] = useState(true)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [tick, setTick] = useState(0)
+  const [resetting, setResetting] = useState(false)
   const reload = () => setTick((t) => t + 1)
+  const handleReset = async () => {
+    if (resetting) return
+    if (typeof window !== "undefined" && !window.confirm(
+      `将清空该学习者在当前项目中的所有学习记录（BKT / 复习 / 信心 / 错因 / 答题），此操作不可撤销。继续？`,
+    )) return
+    setResetting(true)
+    try {
+      const res = await api.resetLearnerState(effectiveUser, projectId || "default")
+      const total = Object.values(res.deleted || {}).reduce((a, b) => a + (b || 0), 0)
+      toast({ type: "success", message: `已清空 ${total} 条学习记录` })
+      reload()
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "重置失败" })
+    } finally {
+      setResetting(false)
+    }
+  }
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -77,9 +95,21 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
           ))}
         </div>
       )}
-      <button onClick={() => setReviewOpen(true)} className="flex w-full items-center justify-center gap-1 rounded border bg-[var(--primary)] px-2 py-1 text-[11px] text-[var(--primary-foreground)]">
-        <Trophy size={11} /> 进入复习
-      </button>
+      <div className="flex gap-1.5">
+        <button onClick={() => setReviewOpen(true)} className="flex flex-1 items-center justify-center gap-1 rounded border bg-[var(--primary)] px-2 py-1 text-[11px] text-[var(--primary-foreground)]">
+          <Trophy size={11} /> 进入复习
+        </button>
+        <button
+          type="button"
+          onClick={handleReset}
+          disabled={resetting}
+          title="清空该学习者在当前项目中的 BKT / SM-2 / 信心 / 错因 / 答题记录"
+          className="flex shrink-0 items-center justify-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={resetting ? "animate-spin" : ""} />
+          {resetting ? "重置中..." : "重置"}
+        </button>
+      </div>
       {reviewOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setReviewOpen(false)}>
           <div className="max-h-[80vh] w-[28rem] overflow-auto rounded-lg bg-[var(--background)] p-4" onClick={(e) => e.stopPropagation()}>

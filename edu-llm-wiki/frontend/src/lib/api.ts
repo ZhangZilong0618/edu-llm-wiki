@@ -382,6 +382,13 @@ export const api = {
       `${BASE}/graph/learning/insights?${p()}&user_id=${user_id}`,
     ),
 
+  // Admin
+  resetLearnerState: (user_id: string, project_id = "default") =>
+    request<{ status: string; user_id: string; project_id: string; deleted: Record<string, number> }>(
+      `${BASE}/graph/admin/reset-user?${p()}&user_id=${encodeURIComponent(user_id)}&project_id=${encodeURIComponent(project_id)}`,
+      { method: "POST" },
+    ),
+
   // Materials-science domain graph
   extractMaterialsGraph: (sourceTitle: string, content: string) =>
     request<MaterialsGraphData>(`${BASE}/materials-graph/extract`, {

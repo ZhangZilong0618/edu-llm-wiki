@@ -25,6 +25,7 @@ from services.graph_engine import events as graph_events
 from services.graph_engine.paths import compute_learning_path
 from services.graph_store import (
     get_nodes as store_get_nodes,
+    reset_user as store_reset_user,
     get_edges as store_get_edges,
     get_communities as store_get_communities,
     get_insights as store_get_insights,
@@ -353,3 +354,13 @@ async def get_learning_insights(
         graph.get("communities") or [],
         state,
     )
+
+
+@router.post("/admin/reset-user")
+async def reset_user_endpoint(
+    project_id: str = Query("default"),
+    user_id: str = Query("default"),
+) -> dict:
+    """Wipe per-learner state. Used for switching cohorts or restarting pilots."""
+    counts = store_reset_user(project_id=project_id, user_id=user_id)
+    return {"status": "ok", "project_id": project_id, "user_id": user_id, "deleted": counts}

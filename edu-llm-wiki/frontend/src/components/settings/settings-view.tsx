@@ -108,9 +108,23 @@ export function SettingsView() {
   }, [])
 
   const needsApiKey = !["ollama"].includes(llm.llm_provider)
+  const providerHint: Record<string, string> = {
+    anthropic: "Anthropic 需要原生 base_url 与 claude-* 系列模型名。",
+    google: "Google Gemini 走 OpenAI 兼容端点，需要 base_url 与 gemini-* 模型。",
+    azure: "Azure OpenAI 必填 base_url（形如 https://<resource>.openai.azure.com/openai/deployments/<dep>）。",
+    ollama: "本地 Ollama 默认 http://localhost:11434/v1，模型名形如 llama3.2，无需 API Key。",
+    custom: "Custom 走任何 OpenAI 兼容服务，请同时填写 base_url 与模型名。",
+  }
+  const needsBaseUrl = ["google", "azure", "deepseek", "groq", "together", "openrouter", "ollama", "custom"].includes(
+    llm.llm_provider,
+  )
   const saveLlm = async () => {
     if (needsApiKey && !llm.llm_api_key.trim()) {
       toast({ type: "error", message: "请先填写 API Key，再保存 LLM 设置。" })
+      return
+    }
+    if (needsBaseUrl && !llm.llm_base_url.trim()) {
+      toast({ type: "error", message: "该 Provider 必填 Base URL，请补全后再保存。" })
       return
     }
     if (!llm.llm_model.trim()) {
@@ -252,6 +266,11 @@ export function SettingsView() {
                     </option>
                   ))}
                 </select>
+                {providerHint[llm.llm_provider] ? (
+                  <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                    {providerHint[llm.llm_provider]}
+                  </p>
+                ) : null}
               </Field>
 
               <Field label="Model">
