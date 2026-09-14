@@ -39,6 +39,15 @@ function answerToText(value: string | string[] | undefined): string {
   return value || ""
 }
 
+function questionTypeSummary(session: TestSession): string {
+  const counts: Record<string, number> = {}
+  for (const q of session.questions) {
+    const label = q.type === "multiple_choice" ? "选择" : q.type === "fill_blank" ? "填空" : "简答"
+    counts[label] = (counts[label] || 0) + 1
+  }
+  return Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(" · ")
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   const totalSec = Math.round(ms / 1000)
@@ -609,7 +618,7 @@ function TestWorkspace({
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-semibold">{session.title}</h2>
             <p className="text-sm text-[var(--muted-foreground)]">
-              {session.questions.length} 题 · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
+              {session.questions.length} 题 · {questionTypeSummary(session)} · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
               {submitted && resultPercent != null ? ` · 得分 ${scoreLabel(session)} (${resultPercent}%)` : ""}
             {submitted ? (
               <button
