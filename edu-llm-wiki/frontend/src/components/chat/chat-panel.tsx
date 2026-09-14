@@ -194,9 +194,16 @@ export function ChatPanel() {
   handleSendRef.current = handleSend
 
   const handleNewConv = () => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    setStreaming(null)
+    setChatStatus(null)
     setConvId(null)
     setMessages([])
     setConvTitle("")
+    setInput("")
   }
 
   const regenerate = useCallback((target: Message) => {
