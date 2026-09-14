@@ -102,3 +102,64 @@ def test_regenerate_from_wrong_rejects_perfect_run(monkeypatch, tmp_path):
         )
         assert r.status_code == 400
         assert "没有错题" in r.json()["detail"]
+
+
+def test_submit_triggers_bkt_refit(monkeypatch, tmp_path):
+    """Submitting a test should silently trigger a BKT refit so the
+    LearningPanel's mastered count updates without a manual click."""
+    from fastapi.testclient import TestClient
+    from main import app
+    from services.graph_store import ensure_schema, connect
+    from storage.wiki_store import ensure_dirs
+    from services.mastery import record_attempt
+
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+    ensure_schema("default")
+    ensure_dirs(project_id="default")
+
+    # Pre-load enough history so refit would succeed.
+    for _ in range(6):
+        record_attempt("default", "u1", "kc1", score=1, max_score=1, confidence=4)
+        record_attempt("default", "u1", "kc2", score=0, max_score=1, confidence=2)
+
+    # Write a test session.
+    from routes.tests import _write_session
+    from models.tests import TestSession, TestQuestion
+    session = TestSession(
+        id="sess-refit-on-submit",
+        title="X",
+        scope="wiki",
+        source=None,
+        mode="practice",
+        difficulty="basic",
+        status="active",
+        questions=[TestQuestion(
+            id="q1", type="multiple_choice",
+            prompt="x?", options=["A","B","C","D"], answer="A",
+            related_page="concepts/x.md", concepts=[], difficulty="basic",
+        )],
+        attempts=[], score=None, max_score=None,
+        created_at="2026-01-01T00:00:00", submitted_at=None,
+    )
+    _write_session(session, "default")
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/tests/sess-refit-on-submit/submit?project_id=default&user_id=u1",
+            json={"answers": {"q1": "A"}, "confidences": {"q1": 4}},
+        )
+        assert r.status_code == 200
+
+    # After submit, attempts_raw should have new entry.
+    with connect("default") as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM attempts_raw WHERE project_id=? AND user_id=? AND question_id='q1'",
+            ("default", "u1"),
+        ).fetchone()
+        assert n[0] == 1
+        # And bkt_params has at least one row (refit wrote them).
+        n_bkt = conn.execute(
+            "SELECT COUNT(*) FROM bkt_params WHERE project_id=? AND user_id=?",
+            ("default", "u1"),
+        ).fetchone()
+        assert n_bkt[0] >= 1
