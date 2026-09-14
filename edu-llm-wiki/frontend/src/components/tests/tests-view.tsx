@@ -319,8 +319,10 @@ export function TestsView() {
       const session = await api.submitTest(activeSession.id, answers, confidences, userId)
       setActiveSession(session)
       const perQuestion = session.questions.map((q) => {
-        const last = lastAnswerAt[q.id] || finishAt
-        const base = startedAt || last
+        const last = lastAnswerAt[q.id]
+        // Un-answered questions do not have a per-question duration; show 0.
+        if (!last) return { id: q.id, ms: 0 }
+        const base = startedAt ?? last
         return { id: q.id, ms: Math.max(0, last - base) }
       })
       const total = perQuestion.reduce((sum, x) => sum + x.ms, 0)
