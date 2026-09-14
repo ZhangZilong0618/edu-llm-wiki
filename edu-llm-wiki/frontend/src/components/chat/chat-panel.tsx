@@ -324,6 +324,7 @@ export function ChatPanel() {
                 <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-20" />
                 <p className="text-lg mb-2">Knowledge Wiki Assistant</p>
                 <p>Ask with citations from your selected scope.</p>
+                <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">当前学习者：<span className="font-medium text-[var(--foreground)]">{userId}</span></p>
               </div>
             </div>
           )}
