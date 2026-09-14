@@ -182,3 +182,16 @@ def test_record_attempt_mastered_false_when_under_threshold(monkeypatch, tmp_pat
     )
     assert res["mastered"] is False
     assert res["bkt"]["p_known"] < 0.85
+
+
+def test_learner_state_summary_includes_last_refit_at(monkeypatch, tmp_path):
+    """The summary now carries ``last_refit_at`` (max last_obs across the
+    user's bkt_params). This regression test pins the contract so the
+    LearningPanel's tooltip and the new celebration toast keep working."""
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+    ensure_schema("last-refit")
+    record_attempt("last-refit", "u1", "kcA", score=1, max_score=1, confidence=4)
+    summary = learner_state_summary("last-refit", "u1")
+    assert "last_refit_at" in summary
+    assert summary["last_refit_at"] is not None
+    assert summary["last_refit_at"] > 0
