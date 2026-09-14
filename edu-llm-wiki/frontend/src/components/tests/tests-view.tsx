@@ -460,8 +460,10 @@ export function TestsView() {
       // Submission succeeded; the server record is now authoritative.
       clearDraft(userId, activeSession.id)
       await loadData()
+      // Use the same count the sidebar uses (the backend-computed wrong_count
+      // when available, fallback to the approximation from individual attempts).
       const wrongCount = (session.attempts || []).filter(
-        (a) => a.score / Math.max(1, a.max_score) < 0.5
+        (a) => (a.score || 0) / Math.max(1, a.max_score || 1) < 0.5
       ).length
       const correctCount = (session.attempts || []).length - wrongCount
       toast({
