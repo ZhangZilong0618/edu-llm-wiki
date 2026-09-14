@@ -33,6 +33,7 @@ export function ChatPanel() {
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState<string | null>(null)
   const [stoppedMessageIds, setStoppedMessageIds] = useState<Set<string>>(() => new Set())
+  const [stoppedAt, setStoppedAt] = useState<Map<string, number>>(() => new Map())
   const [convTitle, setConvTitle] = useState("")
   const [loadingConversations, setLoadingConversations] = useState(true)
   const [scopeType, setScopeType] = useState<ScopeType>("whole_wiki")
@@ -150,6 +151,11 @@ export function ChatPanel() {
       setStoppedMessageIds((prev) => {
         const next = new Set(prev)
         next.add(streaming)
+        return next
+      })
+      setStoppedAt((prev) => {
+        const next = new Map(prev)
+        next.set(streaming, Date.now())
         return next
       })
     }
@@ -574,7 +580,7 @@ export function ChatPanel() {
                     {stoppedMessageIds.has(msg.id) ? (
                       <span
                         className="mb-1 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700"
-                        title="你在模型回答完整前手动停止了生成"
+                        title={(stoppedAt.get(msg.id) ? `你在模型回答完整前手动停止了生成 (${new Date(stoppedAt.get(msg.id) as number).toLocaleTimeString()})` : "你在模型回答完整前手动停止了生成")}
                       >
                         (已停止)
                       </span>
