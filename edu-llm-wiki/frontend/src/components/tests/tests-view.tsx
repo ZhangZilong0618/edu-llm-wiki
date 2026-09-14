@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react"
-import { Download } from "lucide-react"
-import { FileSearch } from "lucide-react"
+import { FileSearch, Download } from "lucide-react"
 import { api, type TestCreateRequest, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { ConfidenceSlider } from "@/components/learning/confidence-slider"
@@ -18,6 +17,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Trash2,
 } from "lucide-react"
 
