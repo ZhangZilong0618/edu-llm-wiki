@@ -786,7 +786,7 @@ export function ChatPanel() {
             <div className="flex justify-start">
               <div className="bg-[var(--muted)] rounded-xl px-4 py-2.5 flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
-                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "Thinking..."}</span>
+                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "思考中..."}</span>
               </div>
             </div>
           )}
