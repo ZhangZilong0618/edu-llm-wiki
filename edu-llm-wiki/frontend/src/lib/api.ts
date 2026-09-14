@@ -386,6 +386,11 @@ export const api = {
     ),
 
   // Admin
+  refitBkt: (user_id: string, project_id = "default", adminToken?: string) =>
+    request<{ status: string; observations: number; params?: Record<string, number> }>(
+      `${BASE}/graph/admin/refit-bkt?${p()}&user_id=${encodeURIComponent(user_id)}&project_id=${encodeURIComponent(project_id)}${adminToken ? `&admin_token=${encodeURIComponent(adminToken)}` : ""}`,
+      { method: "POST" },
+    ),
   resetLearnerState: (user_id: string, project_id = "default", adminToken?: string) => {
     const url = new URL(`${BASE}/graph/admin/reset-user?${p()}`, window.location.origin)
     url.searchParams.set("user_id", user_id)

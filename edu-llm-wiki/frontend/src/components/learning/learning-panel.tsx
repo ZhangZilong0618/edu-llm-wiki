@@ -17,7 +17,41 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
   const [reviewOpen, setReviewOpen] = useState(false)
   const [tick, setTick] = useState(0)
   const [resetting, setResetting] = useState(false)
+  const [refitting, setRefitting] = useState(false)
   const reload = () => setTick((t) => t + 1)
+  const handleRefit = async () => {
+    if (refitting) return
+    const adminToken = typeof window !== "undefined"
+      ? window.localStorage.getItem("edu-llm-wiki.adminToken") || ""
+      : ""
+    setRefitting(true)
+    try {
+      const res = await api.refitBkt(
+        effectiveUser,
+        projectId || "default",
+        adminToken || undefined,
+      )
+      if (res.status === "ok") {
+        const p = res.params || {}
+        toast({
+          type: "success",
+          message: `已用 ${res.observations} 条记录拟合 BKT：p_known=${p.p_known}, p_t=${p.p_t}, p_g=${p.p_g}, p_s=${p.p_s}`,
+        })
+      } else {
+        toast({ type: "error", message: "数据不足（至少 5 条 attempt）" })
+      }
+      reload()
+    } catch (e: any) {
+      if (e?.message?.includes("admin_token") || e?.status === 401) {
+        toast({ type: "error", message: "后端要求 Admin Token，请先在 Settings → Admin 中配置。" })
+      } else {
+        toast({ type: "error", message: e?.message || "BKT 拟合失败" })
+      }
+    } finally {
+      setRefitting(false)
+    }
+  }
+
   const handleReset = async () => {
     if (resetting) return
     if (typeof window !== "undefined" && !window.confirm(
@@ -119,6 +153,16 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
         >
           <RefreshCw size={11} className={resetting ? "animate-spin" : ""} />
           {resetting ? "重置中..." : "重置"}
+        </button>
+        <button
+          type="button"
+          onClick={handleRefit}
+          disabled={refitting}
+          title="用 attempts_raw 全量记录重算 BKT 参数（至少 5 条才拟合）"
+          className="flex shrink-0 items-center justify-center gap-1 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-[11px] text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+        >
+          <RefreshCw size={11} className={refitting ? "animate-spin" : ""} />
+          {refitting ? "拟合中..." : "拟合并"}
         </button>
       </div>
       {reviewOpen && (
