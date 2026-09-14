@@ -520,7 +520,16 @@ export function ChatPanel() {
                 <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-20" />
                 <p className="text-lg mb-2">Knowledge Wiki Assistant</p>
                 <p>Ask with citations from your selected scope.</p>
-                <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">当前学习者：<span className="font-medium text-[var(--foreground)]">{userId}</span></p>
+                <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
+                  当前学习者：<span className="font-medium text-[var(--foreground)]">{userId}</span>
+                </p>
+                <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                  知识库为空？到 <button
+                    type="button"
+                    onClick={() => useAppStore.getState().setActiveView("sources")}
+                    className="font-medium text-[var(--primary)] underline-offset-2 hover:underline"
+                  >导入资料</button> 上传文档后这里会有答案。
+                </p>
               </div>
             </div>
           )}
