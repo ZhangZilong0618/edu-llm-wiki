@@ -1039,7 +1039,7 @@ function TestWorkspace({
           {(() => {
             const masteredQuestions = session.questions.filter((q, i) => {
               const a = (session.attempts || [])[i]
-              return a && a.score / Math.max(1, a.max_score) >= 0.7
+              return a && (a.score || 0) / Math.max(1, a.max_score || 1) >= 0.7
             })
             if (submitted && masteredQuestions.length > 0) {
               return (
