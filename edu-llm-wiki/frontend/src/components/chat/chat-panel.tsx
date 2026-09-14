@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw } from "lucide-react"
 
 interface Message {
   id: string
@@ -110,6 +110,7 @@ export function ChatPanel() {
     setChatStatus(null)
   }
 
+  const handleSendRef = useRef<(() => void) | null>(null)
   const handleSend = useCallback(async () => {
     if (!input.trim() || streaming) return
 
@@ -190,12 +191,22 @@ export function ChatPanel() {
     setStreaming(null)
     setChatStatus(null)
   }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope, userId])
+  handleSendRef.current = handleSend
 
   const handleNewConv = () => {
     setConvId(null)
     setMessages([])
     setConvTitle("")
   }
+
+  const regenerate = useCallback((target: Message) => {
+    if (streaming) return
+    const lastUser = [...messages].reverse().find((m) => m.role === "user")
+    if (!lastUser) return
+    setMessages((prev) => prev.filter((m) => m.id !== target.id))
+    setInput(lastUser.content)
+    setTimeout(() => handleSendRef.current?.(), 0)
+  }, [messages, streaming])
 
   const handleDeleteConv = async (id: string) => {
     const confirmed = typeof window === "undefined"
@@ -347,6 +358,16 @@ export function ChatPanel() {
                 {msg.role === "assistant" ? (
                   <div className="text-sm">
                     <Markdown>{msg.content || "..."}</Markdown>
+                    {msg.content && msg.content.startsWith("Error:") ? (
+                      <button
+                        type="button"
+                        onClick={() => regenerate(msg)}
+                        className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                        title="重新生成"
+                      >
+                        <RefreshCw size={10} /> 重试
+                      </button>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="whitespace-pre-wrap">{msg.content}</p>
