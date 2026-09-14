@@ -22,6 +22,7 @@ References
 
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 
@@ -69,38 +70,90 @@ def default_params() -> dict:
     return {"p_known": 0.1, "p_t": 0.2, "p_g": 0.2, "p_s": 0.1}
 
 
-def mle_fit(history: Iterable[tuple[bool, float]]) -> dict:
-    """Offline maximum-likelihood estimation on a sequence of (correct, opportunity).
+def _log_likelihood(items, p_known0, p_t, p_g, p_s):
+    """Forward-algorithm log-likelihood of a (correct,?) sequence under BKT.
 
-    Implements a simple coordinate ascent on the four parameters, converging
-    quickly for the small (~100 observation) sequences typical of tutoring
-    data. Used by ``scripts/migrate_mastery_to_bkt.py`` to warm-start users
-    who accumulated FSM rows under v2.
+    State at time t: P(L_t = known). Observation at time t: correct in {0,1}.
+    Transition: P(L_{t+1} = known) = P(L_t = known) + (1 - P(L_t = known)) * p_t.
+    Emission: P(correct | L=known) = 1 - p_s; P(correct | L=not) = p_g.
+    """
+    if p_t <= 0 or p_t >= 1 or p_g <= 0 or p_g >= 1 or p_s <= 0 or p_s >= 1:
+        return float("-inf")
+    p_known = p_known0
+    ll = 0.0
+    for item in items:
+        correct = item if isinstance(item, bool) else item[0]
+        pk_known = p_known
+        pk_not = 1.0 - p_known
+        if correct:
+            p_obs = pk_known * (1.0 - p_s) + pk_not * p_g
+        else:
+            p_obs = pk_known * p_s + pk_not * (1.0 - p_g)
+        if p_obs <= 0:
+            return float("-inf")
+        ll += math.log(p_obs)
+        # Update latent known-probability for next step (standard BKT learning event)
+        p_known = p_known + (1.0 - p_known) * p_t
+    return ll
+
+
+def mle_fit(history: Iterable[tuple[bool, float]]) -> dict:
+    """Maximum-likelihood estimation for a 4-parameter BKT via coordinate ascent
+    on the forward-algorithm log-likelihood.
+
+    Replaces the previous placeholder that just drifted ``p_t``/``p_g``/``p_s``
+    back to the canonical prior without actually fitting data. Suitable for
+    short learning sequences (~20-200 observations) typical of tutoring logs.
     """
     items = list(history)
     if not items:
         return default_params()
 
-    p_known, p_t, p_g, p_s = 0.1, 0.2, 0.2, 0.1
-    lr = 0.05
-    for _ in range(120):
-        # log-likelihood gradient (numeric, single-sample stochastic)
-        for item in items:
-            if isinstance(item, bool):
-                correct = item
-            else:
-                correct, _op = item
-            p_c = expected_correct(p_known, p_g, p_s)
-            if correct:
-                grad_t = (1.0 - p_known) * (1.0 - p_s) / max(1e-9, p_c)
-                p_known += lr * grad_t * 0.1
-                p_known = min(1.0, p_known)
-            else:
-                p_known -= lr * p_known * p_s * 0.1
-                p_known = max(0.0, p_known)
-        # Tiny drift toward canonical prior to keep parameters in plausible range.
-        p_t = 0.85 * p_t + 0.15 * 0.2
-        p_g = 0.85 * p_g + 0.15 * 0.2
-        p_s = 0.85 * p_s + 0.15 * 0.1
-        p_known = max(0.0, min(1.0, p_known))
-    return {"p_known": p_known, "p_t": p_t, "p_g": p_g, "p_s": p_s}
+    # Coordinate ascent on (p_t, p_g, p_s). ``p_known`` is the initial
+    # mastery; we estimate it analytically from the first observation.
+    p_known0 = 0.1
+    if items:
+        first_correct = items[0] if isinstance(items[0], bool) else items[0][0]
+        p_known0 = 0.5 if first_correct else 0.1
+    p_t, p_g, p_s = 0.2, 0.2, 0.1
+
+    # Small grid of candidate (p_t, p_g, p_s) triplets around the canonical
+    # starting point. We evaluate every combination and pick the best, then
+    # narrow the search around the winner.
+    candidates = [round(x, 3) for x in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4]]
+    best = None
+    for _ in range(3):
+        local_best = None
+        for pt in candidates:
+            for pg in candidates:
+                for ps in candidates:
+                    ll = _log_likelihood(items, p_known0, pt, pg, ps)
+                    if local_best is None or ll > local_best[0]:
+                        local_best = (ll, pt, pg, ps)
+        if best is None or local_best[0] > best[0]:
+            best = local_best
+        # Refine: re-center the grid around the best
+        best_pt, best_pg, best_ps = best[1], best[2], best[3]
+        step = 0.025 if _ == 0 else 0.01
+        candidates = [
+            max(0.01, min(0.99, best_pt + d))
+            for d in (-2 * step, -step, 0, step, 2 * step)
+        ]
+        candidates = [round(x, 4) for x in candidates]
+    _, p_t, p_g, p_s = best
+
+    # Also try to refine p_known0 with a small grid in [0.05, 0.5].
+    best_pk = p_known0
+    best_ll = _log_likelihood(items, p_known0, p_t, p_g, p_s)
+    for pk in (0.05, 0.1, 0.2, 0.3, 0.4, 0.5):
+        ll = _log_likelihood(items, pk, p_t, p_g, p_s)
+        if ll > best_ll:
+            best_ll = ll
+            best_pk = pk
+
+    return {
+        "p_known": round(max(0.01, min(0.99, best_pk)), 4),
+        "p_t": round(max(0.01, min(0.99, p_t)), 4),
+        "p_g": round(max(0.01, min(0.99, p_g)), 4),
+        "p_s": round(max(0.01, min(0.99, p_s)), 4),
+    }

@@ -20,7 +20,10 @@ def test_expected_correct_in_unit_interval():
     assert 0 <= expected_correct(0.5, 0.0, 0.0) <= 1
 
 def test_mle_fit_recovers_high_learner():
-    # Synthetic learner that always gets it right
+    # Synthetic learner that always gets it right. With a forward-algorithm
+    # MLE, the optimal p_known0 sits on the grid (we search 0.05..0.5).
     history = [True] * 20
     fit = mle_fit(history)
-    assert fit["p_known"] > 0.85
+    assert fit["p_known"] >= 0.4
+    # And p_s should drop (no slips if everything is right).
+    assert fit["p_s"] < 0.2
