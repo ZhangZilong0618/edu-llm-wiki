@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react"
+import { Download } from "lucide-react"
 import { FileSearch } from "lucide-react"
 import { api, type TestCreateRequest, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
@@ -259,6 +260,56 @@ export function TestsView() {
     setLastAnswerAt((prev) => ({ ...prev, [questionId]: Date.now() }))
   }
 
+  const exportTest = () => {
+    if (!activeSession) return
+    const lines: string[] = []
+    lines.push(`# ${activeSession.title || "Test Session"}`)
+    lines.push("")
+    lines.push(`- Exported: ${new Date().toLocaleString()}`)
+    lines.push(`- 学习者: ${userId}`)
+    if (activeSession.submitted_at) {
+      lines.push(`- 提交时间: ${activeSession.submitted_at}`)
+    }
+    if (activeSession.score != null && activeSession.max_score != null) {
+      const pct = Math.round((activeSession.score / activeSession.max_score) * 100)
+      lines.push(`- 得分: ${activeSession.score}/${activeSession.max_score} (${pct}%)`)
+    }
+    if (submitSummary) {
+      const avg = Math.round(submitSummary.total / Math.max(1, submitSummary.perQuestion.length))
+      lines.push(`- 总用时: ${formatDuration(submitSummary.total)} · 平均 ${formatDuration(avg)} / 题`)
+    }
+    lines.push("")
+    activeSession.questions.forEach((q, i) => {
+      const a = activeSession.attempts?.find((x) => x.question_id === q.id)
+      const conf = a?.confidence
+      const dur = submitSummary?.perQuestion[i]?.ms
+      lines.push(`## Q${i + 1}. ${q.prompt.replace(/\n+/g, " ").slice(0, 200)}`)
+      lines.push(`- 类型: ${q.type}`)
+      if (q.options.length > 0) lines.push(`- 选项: ${q.options.join(" | ")}`)
+      lines.push(`- 参考答案: ${q.answer}`)
+      lines.push(`- 学生答案: ${a ? answerToText(a.user_answer) : "(未作答)"}`)
+      if (a) lines.push(`- 得分: ${a.score}/${a.max_score} · 等级: ${a.level}`)
+      if (conf != null) lines.push(`- 把握: ${conf}/5`)
+      if (dur != null) lines.push(`- 用时: ${formatDuration(dur)}`)
+      if (q.explanation) {
+        lines.push("")
+        lines.push("**解析**")
+        lines.push(q.explanation)
+      }
+      lines.push("")
+    })
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${(activeSession.title || "test").replace(/[\\\\/:*?"<>|]+/g, "_").slice(0, 64)}.md`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast({ type: "success", message: "测试结果已导出" })
+  }
+
   const submit = async () => {
     if (!activeSession) return
     const key = `tests:submit:${activeSession.id}`
@@ -503,6 +554,8 @@ export function TestsView() {
               onSubmit={submit}
               attemptsById={attemptsById}
               userId={userId}
+              submitSummary={submitSummary}
+              onExport={exportTest}
             />
           )}
         </main>
@@ -524,6 +577,8 @@ function TestWorkspace({
   onSubmit,
   attemptsById,
   userId,
+  submitSummary,
+  onExport,
 }: {
   session: TestSession
   currentIndex: number
@@ -537,6 +592,8 @@ function TestWorkspace({
   onSubmit: () => void
   attemptsById: Map<string, TestSession["attempts"][number]>
   userId: string
+  submitSummary: { total: number; perQuestion: { id: string; ms: number }[] } | null
+  onExport: () => void
 }) {
   const question = session.questions[currentIndex]
   const attempt = attemptsById.get(question.id)
@@ -552,6 +609,16 @@ function TestWorkspace({
             <p className="text-sm text-[var(--muted-foreground)]">
               {session.questions.length} 题 · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
               {submitted && resultPercent != null ? ` · 得分 ${scoreLabel(session)} (${resultPercent}%)` : ""}
+            {submitted ? (
+              <button
+                type="button"
+                onClick={onExport}
+                className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                title="导出本次测试结果为 Markdown"
+              >
+                <Download size={10} /> 导出
+              </button>
+            ) : null}
             </p>
           </div>
           {!submitted && (
