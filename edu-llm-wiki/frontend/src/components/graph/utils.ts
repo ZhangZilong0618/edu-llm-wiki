@@ -54,8 +54,31 @@ function _visualWidth(text: string): number {
   return w;
 }
 
+const STRONG_DOMAIN_EDGES = new Set([
+  "has_composition",
+  "composition_to_structure",
+  "processed_by",
+  "results_in_structure",
+  "determines_property",
+  "explained_by",
+  "measured_by",
+  "characterized_by",
+  "modeled_by",
+  "predicted_by",
+  "uses_descriptor",
+  "leads_to_failure",
+  "diagnosed_by",
+  "prevented_by",
+  "safety_constraint_of",
+]);
+
 export function isStrongEdge(edge: { edge_type: string; weight: number }): boolean {
-  return edge.edge_type === "direct" || edge.edge_type === "prerequisite" || edge.weight >= 8;
+  return (
+    edge.edge_type === "direct" ||
+    edge.edge_type === "prerequisite" ||
+    STRONG_DOMAIN_EDGES.has(edge.edge_type) ||
+    edge.weight >= 8
+  );
 }
 
 export function mixColor(color: string, mix: string, ratio: number): string {

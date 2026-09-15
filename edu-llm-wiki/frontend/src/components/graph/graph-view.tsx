@@ -7,12 +7,13 @@ import { toast } from "@/components/ui/toast";
 import { BookOpen, GitFork, RefreshCw, X } from "lucide-react";
 
 import { useAppStore } from "@/stores/app-store";
-import { api, type LearningPathResponse } from "@/lib/api";
+import { api, type LearningPathResponse, type MaterialsGraphData } from "@/lib/api";
 import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki";
 
 import { GraphNetworkCanvas, type GraphHoverState, type GraphSelection } from "./graph-network-canvas";
 import { GraphFilterPanel } from "./graph-filter-panel";
 import { GraphMasteryBadge } from "./graph-mastery-badge";
+import { MaterialsGraphPanel, type MaterialsPageOption } from "./materials-graph-panel";
 import { useGraphData, type MasteryMap } from "./use-graph-data";
 import { useGraphEvents } from "./use-graph-events";
 import { DEFAULT_HIDDEN_TYPES, COMMUNITY_COLORS, type ColorMode } from "./constants";
@@ -45,17 +46,79 @@ export function GraphView() {
   const [path, setPath] = useState<LearningPathResponse | null>(null);
   const [pathLoading, setPathLoading] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<{ text: string; loading: boolean } | null>(null);
+  const [articlePages, setArticlePages] = useState<MaterialsPageOption[]>([]);
+  const [articlePath, setArticlePath] = useState("");
+  const [materialsGraph, setMaterialsGraph] = useState<MaterialsGraphData | null>(null);
+  const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [materialsError, setMaterialsError] = useState<string | null>(null);
+  const [previewingMaterials, setPreviewingMaterials] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMaterialsGraph(null);
+    setPreviewingMaterials(false);
+    setMaterialsError(null);
+    api.listPages()
+      .then((pages) => {
+        if (cancelled) return;
+        const options = [...pages].sort((a, b) =>
+          (a.title || a.path).localeCompare(b.title || b.path, "zh-Hans-CN"),
+        );
+        setArticlePages(options);
+        setArticlePath(
+          (current) =>
+            current ||
+            options.find((page) => page.path.includes("环境敏感开裂"))?.path ||
+            options.find((page) => page.type === "synthesis")?.path ||
+            options[0]?.path ||
+            "",
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setArticlePages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const materialsPreviewGraph = useMemo(
+    () => (materialsGraph ? materialsGraphToGraphData(materialsGraph) : null),
+    [materialsGraph],
+  );
+  const displayData = previewingMaterials ? materialsPreviewGraph : data;
+
+  const extractMaterialsGraph = useCallback(async () => {
+    if (!articlePath) return;
+    setMaterialsLoading(true);
+    setMaterialsError(null);
+    try {
+      const graph = await api.extractMaterialsGraphFromPage(articlePath, projectId);
+      setMaterialsGraph(graph);
+      setPreviewingMaterials(true);
+      setSelected(null);
+      setPath(null);
+      setShowWeakLinks(true);
+      toast({ type: "success", message: "文章关系图谱抽取完成" });
+    } catch (e: any) {
+      const message = e?.message || String(e);
+      setMaterialsError(message);
+      toast({ type: "error", message: `文章图谱抽取失败：${message}` });
+    } finally {
+      setMaterialsLoading(false);
+    }
+  }, [articlePath, projectId]);
 
   const visibleNodes = useMemo<GraphNode[]>(() => {
-    if (!data) return [];
-    return data.nodes.filter((n) => !hiddenTypes.has(n.node_type || "unknown"));
-  }, [data, hiddenTypes]);
+    if (!displayData) return [];
+    return displayData.nodes.filter((n) => !hiddenTypes.has(n.node_type || "unknown"));
+  }, [displayData, hiddenTypes]);
 
   const nodesById = useMemo<Record<string, GraphNode>>(() => {
     const m: Record<string, GraphNode> = {};
-    for (const n of data?.nodes || []) m[n.id] = n;
+    for (const n of displayData?.nodes || []) m[n.id] = n;
     return m;
-  }, [data]);
+  }, [displayData]);
 
   const openNodeInWiki = useCallback(async (node: GraphNode) => {
     const path = typeof node.metadata?.path === "string" ? node.metadata.path : null
@@ -70,14 +133,14 @@ export function GraphView() {
   }, [setActiveView, setSelectedPage])
 
   const selectedNodeData = useMemo(() => {
-    if (!selected || !data) return null;
-    const neighbors = groupNeighborsByNode(selected.node, data.edges, nodesById);
+    if (!selected || !displayData) return null;
+    const neighbors = groupNeighborsByNode(selected.node, displayData.edges, nodesById);
     return {
       node: selected.node,
       neighbors,
       degree: neighbors.length,
     };
-  }, [selected, data, nodesById]);
+  }, [selected, displayData, nodesById]);
 
   // Clicking a graph node only shows an inline description. It never changes
   // the active app view, so users can explore without losing the graph.
@@ -117,17 +180,17 @@ export function GraphView() {
   // wiki pages are deleted). Clear both the selection and its learning path so
   // the sidebar never continues to display a route to a nonexistent node.
   useEffect(() => {
-    if (!data || !selected) return;
+    if (!displayData || !selected) return;
     if (!nodesById[selected.node.id]) {
       setSelected(null);
       setPath(null);
     }
-  }, [data, nodesById, selected]);
+  }, [displayData, nodesById, selected]);
 
   // Auto-load a learning path when the user selects a node they haven't
   // mastered yet. Skipped silently if mastery is still loading.
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || previewingMaterials) return;
     const m = mastery[selected.node.id];
     if (m && (m.level === "proficient" || m.level === "mastered")) {
       setPath(null);
@@ -149,16 +212,16 @@ export function GraphView() {
     return () => {
       cancelled = true;
     };
-  }, [selected, mastery]);
+  }, [selected, mastery, previewingMaterials]);
 
-  if (loading && !data) {
+  if ((loading || materialsLoading) && !displayData) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
         正在加载知识图谱…
       </div>
     );
   }
-  if (error && !data) {
+  if (error && !displayData) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-rose-500">
         <p>加载失败：{error}</p>
@@ -172,7 +235,7 @@ export function GraphView() {
       </div>
     );
   }
-  if (!data || data.nodes.length === 0) {
+  if (!displayData || displayData.nodes.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-[var(--muted-foreground)]">
         <GitFork size={36} className="opacity-25" />
@@ -201,7 +264,7 @@ export function GraphView() {
     >
       <section className="relative min-h-0 min-w-0 overflow-hidden bg-[var(--background)]">
         <GraphNetworkCanvas
-          data={data}
+          data={displayData}
           selected={selected}
           hover={hover}
           searchQuery={search}
@@ -227,7 +290,7 @@ export function GraphView() {
             刷新
           </button>
           <span className="min-w-0 rounded-md border bg-[var(--background)] px-2 py-1 text-[10px] text-[var(--muted-foreground)] shadow-sm">
-            节点 {visibleNodes.length}/{data.nodes.length} · 边 {data.edges.length}
+            {previewingMaterials ? "文章图谱" : "全库图谱"} · 节点 {visibleNodes.length}/{displayData.nodes.length} · 边 {displayData.edges.length}
           </span>
         </div>
 
@@ -273,7 +336,7 @@ export function GraphView() {
       >
         <div className="flex h-full min-h-0 w-full flex-col overflow-y-auto p-3 text-[13px] sm:p-4">
           <GraphFilterPanel
-            data={data}
+            data={displayData}
             hiddenTypes={hiddenTypes}
             setHiddenTypes={setHiddenTypes}
             showWeakLinks={showWeakLinks}
@@ -284,11 +347,33 @@ export function GraphView() {
             setQuery={setSearch}
             onReset={() => {
               setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES));
-              setShowWeakLinks(false);
+              setShowWeakLinks(previewingMaterials);
               setColorMode("type");
               setSearch("");
               setNodeScale(1);
               setSpacing(1);
+            }}
+          />
+
+          <MaterialsGraphPanel
+            pages={articlePages}
+            pagePath={articlePath}
+            onPagePathChange={setArticlePath}
+            onExtract={() => void extractMaterialsGraph()}
+            loading={materialsLoading}
+            error={materialsError}
+            graph={materialsGraph}
+            previewing={previewingMaterials}
+            onPreview={() => {
+              setPreviewingMaterials(true);
+              setSelected(null);
+              setPath(null);
+              setShowWeakLinks(true);
+            }}
+            onExitPreview={() => {
+              setPreviewingMaterials(false);
+              setSelected(null);
+              setPath(null);
             }}
           />
 
@@ -391,6 +476,37 @@ function useMediaQuery(query: string): boolean {
   }, [query]);
 
   return matches;
+}
+
+function materialsGraphToGraphData(graph: MaterialsGraphData): GraphData {
+  const degree = new Map<string, number>();
+  for (const edge of graph.edges) {
+    degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+  }
+
+  return {
+    nodes: graph.nodes.map((node) => ({
+      id: node.id,
+      label: node.label,
+      node_type: node.node_type,
+      size: Math.max(2, Math.min(8, 2 + (degree.get(node.id) || 0))),
+      community: -1,
+      metadata: {
+        definition: node.definition,
+        source_term: node.source_term || "",
+        source_ref: node.source_ref || "",
+      },
+    })),
+    edges: graph.edges.map((edge) => ({
+      source: edge.source,
+      target: edge.target,
+      edge_type: edge.edge_type,
+      weight: edge.weight,
+    })),
+    communities: [],
+    insights: [],
+  };
 }
 
 function computeDegree(nodeId: string, edges: GraphEdge[]): number {

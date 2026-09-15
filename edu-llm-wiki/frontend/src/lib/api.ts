@@ -39,6 +39,7 @@ export interface MaterialsGraphNode {
   label: string
   node_type: string
   definition: string
+  source_term?: string
   source_ref?: string | null
   difficulty?: number | null
   bloom_level?: string | null
@@ -58,6 +59,15 @@ export interface MaterialsGraphEdge {
   weight: number
 }
 
+export interface MaterialsGraphRelationCandidate {
+  source: string
+  target: string
+  edge_type: string
+  evidence: string
+  score: number
+  reason: string
+}
+
 export interface MaterialsGraphData {
   source_title: string
   course_profile: {
@@ -69,11 +79,16 @@ export interface MaterialsGraphData {
   }
   nodes: MaterialsGraphNode[]
   edges: MaterialsGraphEdge[]
+  relation_candidates?: MaterialsGraphRelationCandidate[]
   stats: {
     node_count: number
     edge_count: number
     node_types: string[]
     edge_types: string[]
+    relation_candidate_count?: number
+    relation_candidate_coverage?: number
+    connected_components?: number
+    isolated_node_count?: number
   }
 }
 
@@ -431,10 +446,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ source_title: sourceTitle, content }),
     }),
-  extractMaterialsGraphFromPage: (pagePath: string) =>
+  extractMaterialsGraphFromPage: (pagePath: string, projectId = "default") =>
     request<MaterialsGraphData>(`${BASE}/materials-graph/from-page`, {
       method: "POST",
-      body: JSON.stringify({ page_path: pagePath }),
+      body: JSON.stringify({ page_path: pagePath, project_id: projectId }),
     }),
 }
 
