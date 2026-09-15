@@ -91,6 +91,32 @@ async def stream_chat(
                 yield delta.content
 
 
+async def _await_with_abort(awaitable, abort_signal: "asyncio.Event | None"):
+    """Await a request while allowing an Event to cancel it promptly."""
+    if abort_signal is None:
+        return await awaitable
+
+    if abort_signal.is_set():
+        awaitable.close()
+        raise asyncio.CancelledError("chat_complete aborted by caller")
+
+    request_task = asyncio.ensure_future(awaitable)
+    abort_task = asyncio.ensure_future(abort_signal.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {request_task, abort_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if request_task in done:
+            return request_task.result()
+        request_task.cancel()
+        await asyncio.wait({request_task})
+        raise asyncio.CancelledError("chat_complete aborted by caller")
+    finally:
+        abort_task.cancel()
+        await asyncio.wait({abort_task})
+
+
 async def chat_complete(
     system_prompt: str,
     messages: list[dict],
@@ -98,8 +124,14 @@ async def chat_complete(
     max_tokens: int | None = None,
     temperature: float | None = None,
     response_format: dict | None = None,
+    abort_signal: "asyncio.Event | None" = None,
 ) -> str:
-    """Non-streaming chat completion. Returns full response."""
+    """Non-streaming chat completion. Returns full response.
+
+    ``abort_signal`` mirrors ``stream_chat``: setting it cancels the in-flight
+    request so long-running controller calls do not continue after the caller
+    disconnects.
+    """
     provider = settings.llm_provider
     model = model or settings.llm_model
     max_tokens = max_tokens or settings.llm_max_tokens
@@ -111,12 +143,15 @@ async def chat_complete(
         anthropic_messages = [
             {"role": m["role"], "content": m["content"]} for m in messages
         ]
-        resp = await client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=anthropic_messages,
-            temperature=temperature,
+        resp = await _await_with_abort(
+            client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=anthropic_messages,
+                temperature=temperature,
+            ),
+            abort_signal,
         )
         return resp.content[0].text
 
@@ -131,7 +166,10 @@ async def chat_complete(
     if response_format:
         kwargs["response_format"] = response_format
 
-    resp = await client.chat.completions.create(**kwargs)
+    resp = await _await_with_abort(
+        client.chat.completions.create(**kwargs),
+        abort_signal,
+    )
     if not resp.choices:
         return ""
     return resp.choices[0].message.content or ""

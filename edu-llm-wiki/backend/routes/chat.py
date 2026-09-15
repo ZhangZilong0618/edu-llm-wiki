@@ -343,6 +343,7 @@ async def _run_rag_pipeline(
     user_id: str = "default",
     scope: ChatScope | None = None,
     on_status=None,
+    abort_signal: "asyncio.Event | None" = None,
 ) -> tuple[str, list[dict], str, str, str, str]:
     """Full RAG pipeline: scope/vector/keyword seeds → iterative graph evidence → context assembly.
 
@@ -426,6 +427,7 @@ async def _run_rag_pipeline(
         project_id=project_id,
         user_id=user_id,
         on_status=emit_status,
+        abort_signal=abort_signal,
     )
     relevant_pages = graph_evidence.pages
 
@@ -587,6 +589,7 @@ async def chat_stream(
             user_id=req.user_id,
             scope=req.scope,
             on_status=on_status,
+            abort_signal=abort_event,
         )
     )
 

@@ -244,6 +244,7 @@ async def collect_graph_evidence(
     max_rounds: int = 2,
     max_expansions_per_round: int = 4,
     on_status: StatusCallback = None,
+    abort_signal: "asyncio.Event | None" = None,
 ) -> GraphEvidence:
     """Collect pages by graph-guided, LLM-controlled expansion.
 
@@ -258,6 +259,11 @@ async def collect_graph_evidence(
     used_relations: dict[tuple[str, str, str], dict] = {}
     result = GraphEvidence()
 
+    def _check_abort() -> None:
+        if abort_signal is not None and abort_signal.is_set():
+            raise asyncio.CancelledError("graph evidence collection aborted")
+
+    _check_abort()
     nodes = get_nodes(project_id)
     if not nodes:
         try:
@@ -417,6 +423,7 @@ Rules:
 
     await emit_status(f"正在沿知识图谱搜索相关页面（最多 {max_rounds} 轮）")
     for round_number in range(1, max_rounds + 1):
+        _check_abort()
         result.rounds = round_number
         await emit_status(
             f"第 {round_number}/{max_rounds} 轮：判断证据是否充分"
@@ -434,6 +441,7 @@ Rules:
                 max_tokens=320,
                 temperature=0.1,
                 response_format={"type": "json_object"},
+                abort_signal=abort_signal,
             )
             result.model_calls += 1
             decision = _extract_json_object(raw)

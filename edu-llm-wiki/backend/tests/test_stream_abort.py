@@ -112,3 +112,68 @@ def test_stream_chat_yields_when_signal_not_set():
             assert produced == chunks
 
     asyncio.run(run())
+
+
+def test_chat_complete_aborts_when_signal_set():
+    """A set abort signal must cancel a non-streaming request before it runs."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import pytest
+
+    async def run():
+        with patch("services.llm_client.get_llm_client") as mock_get_client:
+            client = AsyncMock()
+
+            async def slow_create(**kwargs):
+                await asyncio.sleep(10)
+                raise AssertionError("request should have been cancelled")
+
+            client.chat.completions.create = slow_create
+            mock_get_client.return_value = client
+            abort = asyncio.Event()
+            abort.set()
+
+            with pytest.raises(asyncio.CancelledError):
+                await llm_client.chat_complete(
+                    system_prompt="x",
+                    messages=[{"role": "user", "content": "y"}],
+                    abort_signal=abort,
+                )
+
+    asyncio.run(run())
+
+
+def test_chat_complete_cancels_in_flight_request_when_signal_set():
+    """A signal set during a non-streaming request must cancel that request."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import pytest
+
+    async def run():
+        with patch("services.llm_client.get_llm_client") as mock_get_client:
+            client = AsyncMock()
+
+            async def slow_create(**kwargs):
+                await asyncio.sleep(10)
+                raise AssertionError("request should have been cancelled")
+
+            client.chat.completions.create = slow_create
+            mock_get_client.return_value = client
+            abort = asyncio.Event()
+
+            async def set_abort():
+                await asyncio.sleep(0.01)
+                abort.set()
+
+            trigger = asyncio.create_task(set_abort())
+            with pytest.raises(asyncio.CancelledError):
+                await llm_client.chat_complete(
+                    system_prompt="x",
+                    messages=[{"role": "user", "content": "y"}],
+                    abort_signal=abort,
+                )
+            await trigger
+
+    asyncio.run(run())
