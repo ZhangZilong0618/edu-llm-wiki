@@ -14,6 +14,7 @@ class MaterialsGraphNode(BaseModel):
     label: str
     node_type: str
     definition: str = ""
+    source_term: str = ""
     source_ref: str | None = None
     difficulty: int | None = Field(default=None, ge=1, le=5)
     bloom_level: str | None = None
@@ -33,11 +34,24 @@ class MaterialsGraphEdge(BaseModel):
     weight: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
+class MaterialsGraphRelationCandidate(BaseModel):
+    source: str
+    target: str
+    edge_type: str
+    evidence: str = ""
+    score: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+
+
 class MaterialsGraphStats(BaseModel):
     node_count: int = 0
     edge_count: int = 0
     node_types: list[str] = Field(default_factory=list)
     edge_types: list[str] = Field(default_factory=list)
+    relation_candidate_count: int = 0
+    relation_candidate_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    connected_components: int = 1
+    isolated_node_count: int = 0
 
 
 class MaterialsGraphData(BaseModel):
@@ -45,6 +59,7 @@ class MaterialsGraphData(BaseModel):
     course_profile: MaterialsGraphCourseProfile
     nodes: list[MaterialsGraphNode]
     edges: list[MaterialsGraphEdge]
+    relation_candidates: list[MaterialsGraphRelationCandidate] = Field(default_factory=list)
     stats: MaterialsGraphStats
 
 

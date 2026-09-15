@@ -4,7 +4,9 @@ import json
 from services.materials_graph import (
     _normalize_edge_type,
     _normalize_node_type,
+    build_relation_candidates,
     extract_materials_graph,
+    extract_relations,
 )
 
 
@@ -93,15 +95,24 @@ def test_extract_materials_graph_runs_all_four_stages(monkeypatch):
 
     assert graph["course_profile"]["course"] == "材料失效分析"
     assert len(graph["nodes"]) == 6
-    assert len(graph["edges"]) == 4
+    # Four model-verified edges plus one conservative related bridge that
+    # connects the processing/structure chain to the mechanism/property chain.
+    assert len(graph["edges"]) == 5
     assert graph["stats"]["node_count"] == 6
-    assert graph["stats"]["edge_count"] == 4
+    assert graph["stats"]["edge_count"] == 5
+    assert graph["stats"]["relation_candidate_count"] > 0
+    assert graph["stats"]["relation_candidate_coverage"] == 1.0
+    assert graph["stats"]["connected_components"] == 1
+    assert graph["stats"]["isolated_node_count"] == 0
+    assert graph["relation_candidates"]
+    bridge = next(edge for edge in graph["edges"] if edge["edge_type"] == "related")
+    assert bridge["confidence"] <= 0.45
 
     labels = {node["label"] for node in graph["nodes"]}
     assert {"低碳钢", "淬火", "马氏体", "位错运动", "屈服强度", "XRD"} == labels
 
     edge_types = {edge["edge_type"] for edge in graph["edges"]}
-    assert {"processed_by", "results_in_structure", "determines_property", "characterized_by"} == edge_types
+    assert {"processed_by", "results_in_structure", "determines_property", "characterized_by"} <= edge_types
 
     by_label = {node["label"]: node for node in graph["nodes"]}
     assert by_label["位错运动"]["difficulty"] == 4
@@ -130,3 +141,146 @@ def test_json_repair_retry_recovers_from_invalid_response(monkeypatch):
     assert len(nodes) == 1
     assert nodes[0]["label"] == "热导率"
     assert nodes[0]["node_type"] == "property"
+
+
+def test_relation_candidates_follow_ontology_and_cover_every_atom():
+    content = """
+    低碳钢含有碳元素。
+    低碳钢经过淬火处理。
+    淬火形成马氏体组织。
+    马氏体决定屈服强度。
+    屈服强度可由位错运动解释。
+    XRD 用于表征马氏体。
+    """
+    nodes = [
+        {"id": "steel", "label": "低碳钢", "node_type": "material"},
+        {"id": "carbon", "label": "碳元素", "node_type": "composition"},
+        {"id": "quench", "label": "淬火", "node_type": "processing"},
+        {"id": "martensite", "label": "马氏体", "node_type": "structure"},
+        {"id": "yield", "label": "屈服强度", "node_type": "property"},
+        {"id": "dislocation", "label": "位错运动", "node_type": "mechanism"},
+        {"id": "xrd", "label": "XRD", "node_type": "instrument"},
+    ]
+
+    candidates = build_relation_candidates(content, nodes)
+    triples = {
+        (item["source"], item["target"], item["edge_type"])
+        for item in candidates
+    }
+
+    expected = {
+        ("steel", "carbon", "has_composition"),
+        ("steel", "quench", "processed_by"),
+        ("quench", "martensite", "results_in_structure"),
+        ("martensite", "yield", "determines_property"),
+        ("yield", "dislocation", "explained_by"),
+        ("martensite", "xrd", "characterized_by"),
+    }
+    assert expected <= triples
+
+    covered = {item["source"] for item in candidates} | {item["target"] for item in candidates}
+    assert covered == {node["id"] for node in nodes}
+    assert all(item["evidence"] for item in candidates)
+    assert all(0.0 <= item["score"] <= 1.0 for item in candidates)
+
+
+def test_relation_prompt_contains_candidates_for_model_verification(monkeypatch):
+    nodes = [
+        {"id": "martensite", "label": "马氏体", "node_type": "structure"},
+        {"id": "yield", "label": "屈服强度", "node_type": "property"},
+    ]
+    candidates = [{
+        "source": "martensite",
+        "target": "yield",
+        "edge_type": "determines_property",
+        "evidence": "马氏体决定屈服强度。",
+        "score": 0.85,
+        "reason": "test candidate",
+    }]
+    prompts = []
+
+    async def fake_chat_complete(system_prompt, messages, **kwargs):
+        prompts.append(messages[0]["content"])
+        return '{"edges": []}'
+
+    monkeypatch.setattr("services.materials_graph.chat_complete", fake_chat_complete)
+    edges = asyncio.run(extract_relations(
+        "马氏体决定屈服强度。",
+        source_title="测试文章",
+        nodes=nodes,
+        relation_candidates=candidates,
+    ))
+
+    assert edges == []
+    assert "## Relation candidates" in prompts[0]
+    assert "马氏体 [martensite] -> 屈服强度 [yield] | determines_property" in prompts[0]
+    assert "Relation candidates are hypotheses" in prompts[0]
+
+
+def test_extract_relations_repairs_reversed_typed_direction(monkeypatch):
+    nodes = [
+        {"id": "xrd", "label": "XRD", "node_type": "instrument"},
+        {"id": "martensite", "label": "马氏体", "node_type": "structure"},
+    ]
+
+    async def fake_chat_complete(system_prompt, messages, **kwargs):
+        return json.dumps({
+            "edges": [{
+                "source": "XRD",
+                "target": "马氏体",
+                "type": "characterized_by",
+                "evidence": "XRD表征马氏体",
+                "confidence": 0.9,
+            }]
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr("services.materials_graph.chat_complete", fake_chat_complete)
+    edges = asyncio.run(extract_relations(
+        "XRD表征马氏体。",
+        source_title="测试文章",
+        nodes=nodes,
+    ))
+
+    assert len(edges) == 1
+    assert edges[0]["source"] == "martensite"
+    assert edges[0]["target"] == "xrd"
+    assert edges[0]["edge_type"] == "characterized_by"
+
+
+def test_extract_relations_upgrades_related_to_typed_candidate(monkeypatch):
+    nodes = [
+        {"id": "hydrogen_embrittlement", "label": "氢脆", "node_type": "failure_mode"},
+        {"id": "hydrogen_mechanism", "label": "氢致韧性下降", "node_type": "mechanism"},
+    ]
+    candidates = [{
+        "source": "hydrogen_embrittlement",
+        "target": "hydrogen_mechanism",
+        "edge_type": "explained_by",
+        "evidence": "氢进入金属后造成韧性下降",
+        "score": 0.9,
+        "reason": "same-sentence co-occurrence + type-compatible relation",
+    }]
+
+    async def fake_chat_complete(system_prompt, messages, **kwargs):
+        return json.dumps({
+            "edges": [{
+                "source": "氢脆",
+                "target": "氢致韧性下降",
+                "type": "related",
+                "evidence": "氢进入金属后造成韧性下降",
+                "confidence": 0.8,
+            }]
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr("services.materials_graph.chat_complete", fake_chat_complete)
+    edges = asyncio.run(extract_relations(
+        "氢脆是氢进入金属后造成韧性下降。",
+        source_title="测试文章",
+        nodes=nodes,
+        relation_candidates=candidates,
+    ))
+
+    assert len(edges) == 1
+    assert edges[0]["edge_type"] == "explained_by"
+    assert edges[0]["source"] == "hydrogen_embrittlement"
+    assert edges[0]["target"] == "hydrogen_mechanism"
