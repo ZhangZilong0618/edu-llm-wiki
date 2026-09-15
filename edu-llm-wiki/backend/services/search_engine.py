@@ -209,8 +209,12 @@ async def graph_expand(
             neighbor_path = (
                 neighbor_meta.get("page_path")
                 or neighbor_meta.get("metadata", {}).get("path")
-                or f"{neighbor}.md"
             )
+            # Search results must resolve to real Wiki pages. A graph node
+            # without a page cannot be opened or cited, so do not synthesize
+            # an invalid ``<node-id>.md`` path for it.
+            if not neighbor_path:
+                continue
             if neighbor_path not in seen_paths and neighbor in nodes_by_id:
                 candidates.append((neighbor, neighbor_path, weight))
         # Sort by edge weight descending, take top 3 (matching old system: getRelatedNodes limit 3)
