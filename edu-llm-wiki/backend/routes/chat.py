@@ -13,10 +13,10 @@ from config import settings
 from models.chat import ChatRequest, ChatResponse, ChatScope, CitedPage
 from services.context_budget import compute_budget
 from services.ingest_engine import _strip_images
-from services.graph_qa import collect_graph_evidence
+from services.graph_qa import GraphEvidence, collect_graph_evidence
 from services.language import language_instruction
 from services.llm_client import chat_complete, stream_chat
-from services.search_engine import keyword_search
+from services.search_engine import _page_body, keyword_search
 from storage.wiki_store import list_wiki_pages, read_wiki_page, wiki_path
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -342,6 +342,8 @@ async def _run_rag_pipeline(
     project_id: str = "default",
     user_id: str = "default",
     scope: ChatScope | None = None,
+    retrieval_mode: str = "graph",
+    include_learner_state: bool = True,
     on_status=None,
     abort_signal: "asyncio.Event | None" = None,
 ) -> tuple[str, list[dict], str, str, str, str]:
@@ -365,43 +367,49 @@ async def _run_rag_pipeline(
         raw_index = _strip_images(index_path.read_text(encoding="utf-8"))
 
     # ── Phase 0: Explicit user-selected scope ──
-    top_results: list[dict] = _scope_seed_results(scope or ChatScope(), project_id=project_id)
+    if retrieval_mode == "none":
+        top_results: list[dict] = []
+        relevant_pages: list[dict] = []
+    else:
+        top_results = _scope_seed_results(scope or ChatScope(), project_id=project_id)
+
     seeded_paths = {r["path"] for r in top_results}
 
     # ── Phase 1: Vector semantic search (primary) ──
-    try:
-        from services.vector_store import vector_search
-        vector_results = await asyncio.to_thread(
-            vector_search, query, top_k=20, project_id=project_id
-        )
-        for i, vr in enumerate(vector_results):
-            if vr["path"] in seeded_paths:
-                continue
-            top_results.append({
-                "path": vr["path"],
-                "title": vr["title"],
-                "snippet": vr["snippet"],
-                "score": 15.0 - i * 0.5,  # rank-weighted base score
-                "title_match": False,
-                "vector_score": vr["score"],
-            })
-    except Exception as e:
-        print(f"[RAG] Vector search unavailable: {e}")
+    if retrieval_mode != "none":
+        try:
+            from services.vector_store import vector_search
+            vector_results = await asyncio.to_thread(
+                vector_search, query, top_k=20, project_id=project_id
+            )
+            for i, vr in enumerate(vector_results):
+                if vr["path"] in seeded_paths:
+                    continue
+                top_results.append({
+                    "path": vr["path"],
+                    "title": vr["title"],
+                    "snippet": vr["snippet"],
+                    "score": 15.0 - i * 0.5,
+                    "title_match": False,
+                    "vector_score": vr["score"],
+                })
+        except Exception as e:
+            print(f"[RAG] Vector search unavailable: {e}")
 
     # ── Phase 1.5: Keyword search (fallback / supplementary) ──
-    keyword_results = keyword_search(query, top_k=10, project_id=project_id)
-    keyword_paths = {r["path"] for r in top_results}
-    for kr in keyword_results:
-        if kr["path"] not in keyword_paths:
-            kr["score"] = max(1, kr["score"] * 0.7)  # lower priority than vector results
-            top_results.append(kr)
-    # Boost vector hits that also show in keyword
-    for r in top_results:
-        if r["path"] in {k["path"] for k in keyword_results}:
-            r["score"] += 2.0
+    if retrieval_mode != "none":
+        keyword_results = keyword_search(query, top_k=10, project_id=project_id)
+        keyword_paths = {r["path"] for r in top_results}
+        for kr in keyword_results:
+            if kr["path"] not in keyword_paths:
+                kr["score"] = max(1, kr["score"] * 0.7)
+                top_results.append(kr)
+        for r in top_results:
+            if r["path"] in {k["path"] for k in keyword_results}:
+                r["score"] += 2.0
 
-    top_results.sort(key=lambda x: -x["score"])
-    top_results = top_results[:20]
+        top_results.sort(key=lambda x: -x["score"])
+        top_results = top_results[:20]
 
     # ── Phase 2: Iterative graph-guided evidence collection ──
     # Search provides seed nodes; the controller traverses typed graph edges,
@@ -420,16 +428,58 @@ async def _run_rag_pipeline(
 
     await emit_status("正在检索相关 Wiki 页面")
 
-    graph_evidence = await collect_graph_evidence(
-        query,
-        top_results,
-        budget,
-        project_id=project_id,
-        user_id=user_id,
-        on_status=emit_status,
-        abort_signal=abort_signal,
-    )
-    relevant_pages = graph_evidence.pages
+    if retrieval_mode == "graph":
+        graph_evidence = await collect_graph_evidence(
+            query,
+            top_results,
+            budget,
+            project_id=project_id,
+            user_id=user_id,
+            on_status=emit_status,
+            abort_signal=abort_signal,
+        )
+        relevant_pages = graph_evidence.pages
+    elif retrieval_mode == "vector":
+        # Vector/keyword-only baseline: no graph traversal.
+        relevant_pages = []
+        seen_paths = set()
+        used_chars = 0
+        page_budget = int(budget.get("page_budget", 20_000))
+        max_page_size = int(budget.get("max_page_size", 5_000))
+        for result in top_results:
+            path = result.get("path")
+            if not path or path in seen_paths:
+                continue
+            seen_paths.add(path)
+            try:
+                page = read_wiki_page(path, project_id=project_id)
+            except Exception:
+                page = None
+            content = (page or {}).get("content", "") or _page_body(path, project_id=project_id)
+            content = _strip_images(content)
+            if not content:
+                continue
+            remaining = max(0, page_budget - used_chars)
+            if remaining <= 0:
+                break
+            content = content[:min(max_page_size, remaining)]
+            if len(content) >= max_page_size or len(content) >= remaining:
+                content = content.rstrip() + "\n\n[...truncated...]"
+            used_chars += len(content)
+            relevant_pages.append({
+                "path": path,
+                "title": result.get("title") or (page or {}).get("title") or path,
+                "content": content,
+                "snippet": content[:320],
+                "node_type": result.get("node_type", "unknown"),
+                "origin": "vector",
+                "priority": 1,
+                "score": float(result.get("score", 0) or 0),
+            })
+        graph_evidence = GraphEvidence()
+    else:
+        relevant_pages = []
+        graph_evidence = GraphEvidence()
 
     # ── Assemble context ──
     pages_context = ""
@@ -476,9 +526,12 @@ async def _run_rag_pipeline(
     except Exception:
         pass
 
-    learner_profile = await asyncio.to_thread(
-        _format_learner_profile, project_id, user_id
-    )
+    if include_learner_state:
+        learner_profile = await asyncio.to_thread(
+            _format_learner_profile, project_id, user_id
+        )
+    else:
+        learner_profile = "(Learner state disabled for this ablation condition.)"
     return pages_context, cited, page_list, index, purpose, learner_profile
 
 
@@ -515,6 +568,8 @@ async def chat(
         project_id=project_id,
         user_id=req.user_id,
         scope=req.scope,
+        retrieval_mode=req.options.retrieval_mode,
+        include_learner_state=req.options.include_learner_state,
     )
 
     system = SYSTEM_PROMPT.format(
@@ -527,7 +582,7 @@ async def chat(
         pages_context=pages_context,
     )
 
-    response = await chat_complete(system_prompt=system, messages=messages)
+    response = await chat_complete(system_prompt=system, messages=messages, model=req.options.model)
     response, actual_cited = _filter_actual_citations(response, cited)
 
     return ChatResponse(
@@ -588,6 +643,8 @@ async def chat_stream(
             project_id=project_id,
             user_id=req.user_id,
             scope=req.scope,
+            retrieval_mode=req.options.retrieval_mode,
+            include_learner_state=req.options.include_learner_state,
             on_status=on_status,
             abort_signal=abort_event,
         )
@@ -650,6 +707,7 @@ async def chat_stream(
                 async for chunk in stream_chat(
                     system_prompt=system,
                     messages=messages,
+                    model=req.options.model,
                     abort_signal=abort_event,
                 ):
                     full_response += chunk

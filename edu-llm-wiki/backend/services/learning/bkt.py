@@ -1,21 +1,20 @@
-"""Bayesian Knowledge Tracing — Corbatt & Sandberg 1992.
+"""Bayesian Knowledge Tracing (Corbett & Anderson, 1994).
 
-Four parameter logistic model:
-* ``p_known`` — probability the learner currently knows the skill
-* ``p_t``     — learning transition (unknown → known per opportunity)
-* ``p_g``     — guess probability when skill is not known
-* ``p_s``     — slip probability when skill is known
+Four-parameter model:
+* ``p_known`` — probability that the learner currently knows the skill
+* ``p_t`` — learning transition (unknown -> known per opportunity)
+* ``p_g`` — guess probability when the skill is not known
+* ``p_s`` — slip probability when the skill is known
 
-Used in service of *logistic* logistic regression for skill mastery;
-the constants give a robust default that approximates the canonical
-Corbatt et al. cross-validation results on four Cognitive Tutor
-datasets to within ±2 AUC.
+The defaults are pragmatic priors for an online tutoring system. They are
+intentionally conservative and are refit from a learner's observed history
+by :func:`mle_fit` once enough evidence has accumulated.
 
 References
 ----------
-* Corbatt, A. T., & Sandberg, J. M. (1992). Modeling the structure
-  of problem solving for individualized instruction.
-  *Educational Technology*.
+* Corbett, A. T., & Anderson, J. R. (1994). Knowledge tracing: Modeling
+  the acquisition of procedural knowledge. *User Modeling and User-Adapted
+  Interaction*, 4(4), 253-278.
 * Yudelson, M. V., Koedinger, K. R., & Gordon, G. J. (2013). Individualized
   Bayesian knowledge tracing models. In *AIED*.
 """

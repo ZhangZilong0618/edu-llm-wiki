@@ -1,4 +1,6 @@
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +18,9 @@ class ChatScope(BaseModel):
 class ChatOptions(BaseModel):
     citation_required: bool = True
     answer_style: str = "concise"  # concise | detailed | socratic
+    retrieval_mode: Literal["none", "vector", "graph"] = "graph"
+    include_learner_state: bool = True
+    model: str | None = None
 
 
 class ChatRequest(BaseModel):
