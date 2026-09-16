@@ -518,7 +518,50 @@ export function LearnView() {
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-3">
+      {nextItem && (
+        <section className="shrink-0 border-b bg-[var(--background)] px-4 py-3">
+          <div className="mb-2 flex items-center gap-2">
+            <Play className="h-4 w-4 text-[var(--primary)]" />
+            <h2 className="text-sm font-semibold">Continue Learning</h2>
+            {nextItem.status === "needs_review" && (
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
+                Review
+              </span>
+            )}
+          </div>
+          <div className="flex items-start gap-3 rounded-md border bg-[var(--card)] p-3">
+            <TypeIcon type={nextItem.type} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{nextItem.title}</p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">{nextItem.reason}</p>
+              {nextItem.prerequisites.length > 0 && (
+                <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                  Requires: {nextItem.prerequisites.slice(0, 3).join(", ")}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 gap-1">
+              <IconButton
+                label="Start"
+                onClick={() => openItem(nextItem)}
+                icon={<Play size={14} />}
+              />
+              <IconButton
+                label="Ask Tutor"
+                onClick={() => askTutor(nextItem)}
+                icon={<MessageCircle size={14} />}
+              />
+              <IconButton
+                label="Done"
+                onClick={() => updateStatus(nextItem.id, "done")}
+                icon={<Check size={14} />}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div className="max-h-[38vh] shrink-0 overflow-y-auto border-b px-4 py-3">
         <LearningPanel userId={userId} projectId={currentProject} />
       </div>
 
@@ -527,49 +570,6 @@ export function LearnView() {
           className={`${tutorItem ? "min-h-[160px] shrink-0" : "flex-1"} min-h-0 overflow-y-auto px-4 py-4`}
           style={tutorItem ? { flexBasis: `${tutorTopPercent}%` } : undefined}
         >
-          {nextItem && (
-            <section className="mb-5 border-b pb-4">
-              <div className="mb-2 flex items-center gap-2">
-                <Play className="h-4 w-4 text-[var(--primary)]" />
-                <h2 className="text-sm font-semibold">Continue Learning</h2>
-                {nextItem.status === "needs_review" && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
-                    Review
-                  </span>
-                )}
-              </div>
-              <div className="flex items-start gap-3 rounded-md border p-3">
-                <TypeIcon type={nextItem.type} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{nextItem.title}</p>
-                  <p className="mt-1 text-xs text-[var(--muted-foreground)]">{nextItem.reason}</p>
-                  {nextItem.prerequisites.length > 0 && (
-                    <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-                      Requires: {nextItem.prerequisites.slice(0, 3).join(", ")}
-                    </p>
-                  )}
-                </div>
-                <div className="flex shrink-0 gap-1">
-                  <IconButton
-                    label="Start"
-                    onClick={() => openItem(nextItem)}
-                    icon={<Play size={14} />}
-                  />
-                  <IconButton
-                    label="Ask Tutor"
-                    onClick={() => askTutor(nextItem)}
-                    icon={<MessageCircle size={14} />}
-                  />
-                  <IconButton
-                    label="Done"
-                    onClick={() => updateStatus(nextItem.id, "done")}
-                    icon={<Check size={14} />}
-                  />
-                </div>
-              </div>
-            </section>
-          )}
-
           {stages.map((stage, index) => {
             const collapsed = collapsedStages.has(stage.id);
             const stageDone = stage.items.filter((item) => item.status === "done").length;
