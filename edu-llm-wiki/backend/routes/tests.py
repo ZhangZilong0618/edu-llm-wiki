@@ -10,10 +10,19 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from config import settings
-from models.tests import TestAnswerRequest, TestAttempt, TestCreateRequest, TestQuestion, TestSession, TestSummary
+from models.tests import (
+    TestAnswerRequest,
+    TestAttempt,
+    TestCreateRequest,
+    TestQuestion,
+    TestSession,
+    TestSummary,
+    TestUpdateRequest,
+)
 from services.graph_store import get_nodes, make_node_id
 from services.language import language_instruction
 from services.llm_client import chat_complete
+from services.search_engine import keyword_search
 from storage.wiki_store import list_wiki_pages, read_wiki_page, validate_project_id
 
 router = APIRouter(prefix="/api/tests", tags=["tests"])
@@ -88,6 +97,112 @@ def _session_path(session_id: str, project_id: str) -> Path:
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _normalize_folder(value: str | None) -> str | None:
+    """Normalize a user-defined folder label without turning it into a path."""
+    if not value:
+        return None
+    text = re.sub(r"\s+", " ", value).strip().strip("/")
+    parts = []
+    for part in text.split("/"):
+        clean = re.sub(r'[\\/:*?"<>|]+', "-", part).strip(" .-")
+        if clean:
+            parts.append(clean)
+    return "/".join(parts)[:160] or None
+
+
+def _chinese_number(text: str) -> int | None:
+    direct = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if text == "十":
+        return 10
+    if text.endswith("十") and text[:-1] in direct:
+        return direct[text[:-1]] * 10
+    if "十" in text:
+        tens, _, ones = text.partition("十")
+        return direct.get(tens, 1) * 10 + direct.get(ones, 0)
+    if text in direct:
+        return direct[text]
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _apply_natural_prompt(req: TestCreateRequest) -> TestCreateRequest:
+    """Extract concrete constraints from a free-form generation request.
+
+    The full natural-language instruction is still passed to the LLM. This
+    parser only guarantees deterministic backend invariants (question count,
+    requested types, and difficulty) so UI controls and API consumers agree.
+    """
+    prompt = (req.natural_prompt or "").strip()
+    if not prompt:
+        return req
+
+    # Match both “10道” and “10题”; the noun “题” may occur later in a longer
+    # instruction such as “出10道关于疲劳断裂的应用题”.
+    count_match = re.search(
+        r"(\d+|[一两二三四五六七八九十]+)\s*(?:道|个|题)",
+        prompt,
+    )
+    if count_match:
+        count = _chinese_number(count_match.group(1))
+        if count:
+            req.question_count = max(1, min(30, count))
+
+    lower = prompt.lower()
+    type_patterns = {
+        "multiple_choice": ("选择题", "单选题", "多选题", "multiple choice", "choice"),
+        "fill_blank": ("填空题", "填空", "fill blank", "fill_blank"),
+        "short_answer": ("简答题", "简答", "short answer", "short_answer"),
+    }
+    if any(term in lower for terms in type_patterns.values() for term in terms):
+        selected = []
+        for qtype, terms in type_patterns.items():
+            excluded = any(
+                re.search(rf"(?:不要|不含|排除)\s*[^，。；;]*{re.escape(term)}", lower)
+                for term in terms
+            )
+            included = any(term in lower for term in terms)
+            if included and not excluded:
+                selected.append(qtype)
+        if selected:
+            req.question_types = selected
+        else:
+            req.question_types = [
+                qtype for qtype in req.question_types
+                if qtype in type_patterns and not any(
+                    re.search(
+                        rf"(?:不要|不含|排除)\s*[^，。；;]*{re.escape(term)}",
+                        lower,
+                    )
+                    for term in type_patterns[qtype]
+                )
+            ] or ["short_answer"]
+
+    if any(term in lower for term in ("基础", "简单", "basic")):
+        req.difficulty = "basic"
+    elif any(term in lower for term in ("理解", "understanding")):
+        req.difficulty = "understanding"
+    elif any(term in lower for term in ("应用", "计算", "案例", "application")):
+        req.difficulty = "application"
+
+    if not req.title:
+        req.title = re.sub(r"\s+", " ", prompt)[:60]
+    return req
+
+
+def _natural_search_query(prompt: str | None) -> str:
+    """Extract the topical part of a natural-language generation request."""
+    text = (prompt or "").strip()
+    if not text:
+        return text
+    match = re.search(
+        r"(?:关于|有关|针对|围绕)\s*([^，。；;,.?？!！]{2,60}?)(?:的)?(?:题|题目|测试题|应用题|基础题|内容|方面)",
+        text,
+    )
+    return match.group(1).strip() if match else text
 
 
 def _resolve_kc_id(project_id: str, related: str, nodes: list[dict] | None = None) -> str:
@@ -308,30 +423,64 @@ def _wiki_coverage(project_id: str, limit: int = 30) -> list[dict]:
 
 
 def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[TestQuestion], str]:
-    allowed_types = set(req.question_types or []) & QUESTION_TYPES or QUESTION_TYPES
-    pages = list_wiki_pages(project_id=project_id)
     extracted: list[TestQuestion] = []
-    context_parts: list[str] = []
+    eligible: list[dict] = []
 
-    for summary in pages:
+    for summary in list_wiki_pages(project_id=project_id):
         page = read_wiki_page(summary["path"], project_id=project_id)
         if not page:
             continue
         if req.scope == "source" and req.source and req.source not in (page.get("sources", []) or []):
             continue
-        # Exercise pages are no longer lifted verbatim into the new test — the
-        # generator now produces fresh questions from the concept/formula/principle
-        # Treat every non-derived page as a knowledge source. Derived types
-        # (inquiry, guide) are intentionally skipped because lifting their
-        # content back into the LLM context tends to regenerate identical
-        # items below. Pages missing a `page_type` (legacy "unknown") are
-        # still included as a last-resort fallback so projects whose ingest
-        # didn't yield concept / formula / principle pages (e.g. 888, which
-        # only has inquiry + guide) can still produce a test.
-        if page.get("page_type") not in {"inquiry", "guide"} and len(context_parts) < 24:
-            context_parts.append(
-                f"### {page['title']} ({page['page_type'] or 'unknown'})\n路径：{page['path']}\n来源：{', '.join(page.get('sources', []) or [])}\n{page.get('content', '')[:1800]}"
-            )
+        if req.page_path and page.get("path") != req.page_path:
+            continue
+        eligible.append(page)
+
+    if req.page_path and not eligible:
+        raise HTTPException(404, f"Wiki page not found: {req.page_path}")
+
+    # Natural-language topics often name a concept rather than a file. Rank
+    # keyword-search hits first, then fill the context with the remaining
+    # knowledge pages.
+    rank: dict[str, int] = {}
+    search_query = _natural_search_query(req.natural_prompt)
+    if search_query and not req.page_path:
+        try:
+            for index, result in enumerate(keyword_search(
+                search_query,
+                top_k=18,
+                project_id=project_id,
+            )):
+                rank[str(result.get("path"))] = index
+        except Exception:
+            rank = {}
+
+    eligible.sort(key=lambda page: (
+        0 if page.get("path") in rank else 1,
+        rank.get(page.get("path", ""), 999),
+        page.get("path", ""),
+    ))
+
+    context_parts: list[str] = []
+    has_knowledge_pages = any(
+        page.get("page_type") not in {"inquiry", "guide"} for page in eligible
+    )
+    for page in eligible:
+        if len(context_parts) >= 24:
+            break
+        # Exercise/derived pages can recreate near-duplicate questions. Skip
+        # them when real knowledge pages exist, but keep them as a fallback
+        # for projects that only contain inquiry/guide pages.
+        is_derived = page.get("page_type") in {"inquiry", "guide"}
+        if is_derived and has_knowledge_pages and not req.page_path:
+            continue
+        context_parts.append(
+            f"### {page['title']} ({page['page_type'] or 'unknown'})\n"
+            f"路径：{page['path']}\n"
+            f"来源：{', '.join(page.get('sources', []) or [])}\n"
+            f"{page.get('content', '')[:1800]}"
+        )
+
     return extracted[: req.question_count], "\n\n".join(context_parts)
 
 
@@ -352,6 +501,8 @@ source: {req.source or "全部"}
 requested_types: {", ".join(req.question_types)}
 difficulty: {req.difficulty}
 seed: {seed}
+target_page: {req.page_path or "未指定"}
+natural_language_requirements: {req.natural_prompt or "无"}
 
 Wiki 覆盖历史（按已考次数升序，越靠前越优先出题）：
 {coverage_block}
@@ -532,6 +683,7 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
         sessions.append(TestSummary(
             id=session.id,
             title=session.title,
+            folder=session.folder,
             status=session.status,
             question_count=len(session.questions),
             score=session.score,
@@ -546,6 +698,7 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
 
 @router.post("", response_model=TestSession)
 async def create_test(req: TestCreateRequest, project_id: str = Query("default")) -> TestSession:
+    _apply_natural_prompt(req)
     extracted, context = _candidate_context(req, project_id)
     coverage = _wiki_coverage(project_id)
     generated = await _generate_questions(req, project_id, len(extracted), context, coverage)
@@ -559,6 +712,7 @@ async def create_test(req: TestCreateRequest, project_id: str = Query("default")
     session = TestSession(
         id=uuid.uuid4().hex[:12],
         title=req.title or f"测试 {datetime.now().strftime('%m-%d %H:%M')}",
+        folder=_normalize_folder(req.folder),
         scope=req.scope,
         source=req.source,
         mode=req.mode,
@@ -573,6 +727,25 @@ async def create_test(req: TestCreateRequest, project_id: str = Query("default")
 @router.get("/{session_id}", response_model=TestSession)
 async def get_test(session_id: str, project_id: str = Query("default")) -> TestSession:
     return _read_session(session_id, project_id)
+
+
+@router.patch("/{session_id}", response_model=TestSession)
+async def update_test(
+    session_id: str,
+    req: TestUpdateRequest,
+    project_id: str = Query("default"),
+) -> TestSession:
+    """Rename a test and/or move it to a user-defined folder."""
+    session = _read_session(session_id, project_id)
+    if req.title is not None:
+        title = req.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="测试标题不能为空")
+        session.title = title[:120]
+    if req.folder is not None:
+        session.folder = _normalize_folder(req.folder)
+    _write_session(session, project_id)
+    return session
 
 
 @router.post("/{session_id}/regenerate-from-wrong", response_model=TestSession)
@@ -598,6 +771,7 @@ async def regenerate_from_wrong(
     new_session = TestSession(
         id=new_id,
         title=f"{old.title} · 重做错题",
+        folder=old.folder,
         scope=old.scope,
         source=old.source,
         mode=old.mode,

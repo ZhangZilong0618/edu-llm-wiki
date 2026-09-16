@@ -5,6 +5,16 @@ class TestCreateRequest(BaseModel):
     title: str | None = None
     scope: str = "wiki"
     source: str | None = None
+    # Free-form teacher/learner instruction, e.g. “出10道关于疲劳断裂的
+    # 应用题，只要选择题和简答题”. The backend parses concrete constraints
+    # and passes the full instruction to the generator.
+    natural_prompt: str | None = None
+    # Optional user-defined folder such as “期末复习/第二章”. Tests can be
+    # moved between folders after generation.
+    folder: str | None = None
+    # Optional page-scoped generation. When present, context is restricted to
+    # this wiki page instead of the whole project.
+    page_path: str | None = None
     question_count: int = Field(default=5, ge=1, le=30)
     question_types: list[str] = ["multiple_choice", "fill_blank", "short_answer"]
     difficulty: str = "mixed"
@@ -14,6 +24,11 @@ class TestCreateRequest(BaseModel):
     # suffix; the backend echoes it into the prompt and may fall back to a
     # server-side UUID when missing.
     seed: str | None = None
+
+
+class TestUpdateRequest(BaseModel):
+    title: str | None = None
+    folder: str | None = None
 
 
 class TestAnswerRequest(BaseModel):
@@ -54,6 +69,7 @@ class TestAttempt(BaseModel):
 class TestSession(BaseModel):
     id: str
     title: str
+    folder: str | None = None
     scope: str = "wiki"
     source: str | None = None
     mode: str = "practice"
@@ -70,6 +86,7 @@ class TestSession(BaseModel):
 class TestSummary(BaseModel):
     id: str
     title: str
+    folder: str | None = None
     status: str
     question_count: int
     score: float | None = None

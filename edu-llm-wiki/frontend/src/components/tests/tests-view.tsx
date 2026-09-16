@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react"
-import { FileSearch, Download } from "lucide-react"
+import { FileSearch, Download, Folder as FolderIcon } from "lucide-react"
 import { api, type TestCreateRequest, type TestQuestion, type TestSession, type TestSummary } from "@/lib/api"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { ConfidenceSlider } from "@/components/learning/confidence-slider"
@@ -152,6 +152,8 @@ export function TestsView() {
   const [form, setForm] = useState<TestCreateRequest>({
     scope: "wiki",
     source: null,
+    natural_prompt: "",
+    folder: "",
     question_count: 5,
     question_types: ["multiple_choice", "fill_blank", "short_answer"],
     difficulty: "mixed",
@@ -170,6 +172,33 @@ export function TestsView() {
   }, [pendingTestPagePath, setPendingTestPagePath])
 
   const currentQuestion = activeSession?.questions[currentIndex] || null
+  const existingFolders = useMemo(() => {
+    const folders = new Set<string>()
+    for (const session of sessions) {
+      if (session.folder) folders.add(session.folder)
+    }
+    return Array.from(folders).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+  }, [sessions])
+
+  const filteredSessions = useMemo(
+    () => sessions.filter((session) => statusFilter === "all" || session.status === statusFilter),
+    [sessions, statusFilter],
+  )
+
+  const folderGroups = useMemo(() => {
+    const groups = new Map<string, TestSummary[]>()
+    for (const session of filteredSessions) {
+      const key = session.folder || "未分类"
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push(session)
+    }
+    return Array.from(groups.entries()).sort(([a], [b]) => {
+      if (a === "未分类") return 1
+      if (b === "未分类") return -1
+      return a.localeCompare(b, "zh-Hans-CN")
+    })
+  }, [filteredSessions])
+
   const attemptsById = useMemo(() => {
     const map = new Map<string, TestSession["attempts"][number]>()
     for (const attempt of activeSession?.attempts || []) map.set(attempt.question_id, attempt)
@@ -256,12 +285,30 @@ export function TestsView() {
     loadData()
   }, [])
 
+  const moveSessionFolder = async (sessionId: string, nextFolder: string) => {
+    let folder = nextFolder
+    if (folder === "__new__") {
+      folder = typeof window === "undefined" ? "" : window.prompt("输入新的测试目录，可用 / 表示层级，例如：期末复习/第二章") || ""
+      if (!folder.trim()) return
+    }
+    try {
+      const updated = await api.updateTest(sessionId, { folder: folder.trim() || null })
+      setSessions((prev) => prev.map((item) => (item.id === updated.id ? { ...item, folder: updated.folder } : item)))
+      if (activeSession?.id === updated.id) setActiveSession(updated)
+      toast({ type: "success", message: updated.folder ? `已移动到「${updated.folder}」` : "已移回未分类" })
+    } catch (e: any) {
+      toast({ type: "error", message: `移动测试失败：${e?.message || e}` })
+    }
+  }
+
   const createTest = async () => {
     beginOperation("tests:create", "生成测试中")
     try {
       const session = await api.createTest({
         ...form,
         title: form.title?.trim() || undefined,
+        natural_prompt: form.natural_prompt?.trim() || undefined,
+        folder: form.folder?.trim() || undefined,
         source: form.scope === "source" ? form.source : null,
         // Auto-inject a fresh seed each time so the backend can drive
         // diversity instead of returning a near-identical question set.
@@ -540,6 +587,36 @@ export function TestsView() {
               </label>
 
               <label className="block">
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">自然语言出题</span>
+                <textarea
+                  value={form.natural_prompt || ""}
+                  onChange={(e) => setForm((prev) => ({ ...prev, natural_prompt: e.target.value }))}
+                  placeholder="例如：出 10 道关于疲劳断裂的应用题，只要选择题和简答题"
+                  rows={3}
+                  className="w-full resize-none rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                />
+                <span className="mt-1 block text-[10px] text-[var(--muted-foreground)]">
+                  题量、题型、难度和主题会传给后端；下面的高级设置作为默认值。
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">测试目录</span>
+                <input
+                  value={form.folder || ""}
+                  onChange={(e) => setForm((prev) => ({ ...prev, folder: e.target.value }))}
+                  placeholder="可选：期末复习/第二章"
+                  list="test-folder-options"
+                  className="w-full rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                />
+                <datalist id="test-folder-options">
+                  {existingFolders.map((folder) => (
+                    <option key={folder} value={folder} />
+                  ))}
+                </datalist>
+              </label>
+
+              <label className="block">
                 <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">范围</span>
                 <select
                   value={form.scope}
@@ -668,11 +745,18 @@ export function TestsView() {
                 )
               })}
             </div>
-            <div className="space-y-2">
+            <div className="space-y-4">
               {sessions.length === 0 && (
                 <p className="rounded-md border border-dashed px-3 py-5 text-center text-sm text-[var(--muted-foreground)]">暂无测试记录</p>
               )}
-              {sessions.filter((s) => statusFilter === "all" || s.status === statusFilter).map((session) => (
+              {folderGroups.map(([folder, folderSessions]) => (
+                <div key={folder} className="space-y-2">
+                  <div className="flex items-center gap-2 px-1">
+                    <FolderIcon size={12} className="text-[var(--muted-foreground)]" />
+                    <span className="text-[11px] font-semibold text-[var(--muted-foreground)]">{folder}</span>
+                    <span className="text-[10px] text-[var(--muted-foreground)]">({folderSessions.length})</span>
+                  </div>
+                  {folderSessions.map((session) => (
                 <div
                   key={session.id}
                   className={`group relative overflow-hidden rounded-lg border bg-[var(--background)] transition-colors hover:border-[var(--primary)]/60 hover:bg-[var(--accent)]/30 ${
@@ -734,6 +818,27 @@ export function TestsView() {
                   >
                     <Trash2 size={12} />
                   </button>
+                  <div className="flex items-center gap-2 border-t bg-[var(--muted)]/20 px-3 py-2">
+                    <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">目录</span>
+                    <select
+                      value={session.folder || ""}
+                      disabled={loading}
+                      onChange={(e) => void moveSessionFolder(session.id, e.target.value)}
+                      className="min-w-0 flex-1 rounded border bg-[var(--background)] px-1.5 py-1 text-[11px]"
+                      title="移动到自建目录"
+                    >
+                      <option value="">未分类</option>
+                      {(existingFolders.includes(session.folder || "") || !session.folder
+                        ? existingFolders
+                        : [session.folder || "", ...existingFolders]
+                      ).map((folder) => (
+                        <option key={folder} value={folder}>{folder}</option>
+                      ))}
+                      <option value="__new__">＋ 新建目录…</option>
+                    </select>
+                  </div>
+                </div>
+                  ))}
                 </div>
               ))}
             </div>

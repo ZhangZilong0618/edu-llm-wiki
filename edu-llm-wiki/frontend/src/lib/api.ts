@@ -366,6 +366,11 @@ export const api = {
         body: JSON.stringify({ answers, confidences }),
       },
     ),
+  updateTest: (id: string, data: { title?: string; folder?: string | null }) =>
+    request<TestSession>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   deleteTest: (id: string) =>
     request<{ status: string; id: string }>(`${BASE}/tests/${encodeURIComponent(id)}?${p()}`, { method: "DELETE" }),
 
@@ -492,6 +497,8 @@ export interface TestCreateRequest {
   title?: string
   scope: "wiki" | "source"
   source?: string | null
+  natural_prompt?: string | null
+  folder?: string | null
   question_count: number
   question_types: string[]
   difficulty: string
@@ -532,6 +539,7 @@ export interface TestAttempt {
 export interface TestSession {
   id: string
   title: string
+  folder?: string | null
   scope: string
   source: string | null
   mode: string
@@ -548,6 +556,7 @@ export interface TestSession {
 export interface TestSummary {
   id: string
   title: string
+  folder?: string | null
   status: "active" | "submitted"
   question_count: number
   score: number | null
