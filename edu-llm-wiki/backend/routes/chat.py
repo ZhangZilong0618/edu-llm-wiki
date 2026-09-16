@@ -183,12 +183,48 @@ def _extract_cited_numbers(response: str) -> tuple[str, set[int]]:
 
 def _filter_actual_citations(response: str, cited: list[dict]) -> tuple[str, list[dict]]:
     cleaned, numbers = _extract_cited_numbers(response)
-    if numbers:
-        return cleaned, [c for i, c in enumerate(cited, start=1) if i in numbers]
-    bracket_numbers = {int(n) for n in re.findall(r"\[(\d+)\]", cleaned)}
-    if bracket_numbers:
-        return cleaned, [c for i, c in enumerate(cited, start=1) if i in bracket_numbers]
-    return cleaned, []
+    if not numbers:
+        numbers = {int(n) for n in re.findall(r"\[(\d+)\]", cleaned)}
+    if not numbers:
+        return cleaned, []
+
+    # Keep the cited pages in the order in which their citation numbers first
+    # appear in the response. This makes the returned page list align with the
+    # renumbered [1], [2], ... markers in the visible answer.
+    ordered_numbers: list[int] = []
+    seen: set[int] = set()
+    for match in re.finditer(r"\[(\d+)\]", cleaned):
+        number = int(match.group(1))
+        if number in numbers and number not in seen:
+            ordered_numbers.append(number)
+            seen.add(number)
+    # Hidden comments may cite a number without a visible bracket; append those
+    # at the end so the page is still returned.
+    for number in sorted(numbers):
+        if number not in seen:
+            ordered_numbers.append(number)
+
+    page_by_number = {
+        index: page for index, page in enumerate(cited, start=1) if index in numbers
+    }
+    actual_cited = [page_by_number[number] for number in ordered_numbers if number in page_by_number]
+
+    # Renumber visible citations so they match the returned page list. Without
+    # this, a response could cite [7] while only four filtered pages are
+    # returned, making the citation impossible for the client to resolve.
+    number_map = {
+        original_number: new_number
+        for new_number, original_number in enumerate(ordered_numbers, start=1)
+        if original_number in page_by_number
+    }
+    if number_map:
+        cleaned = re.sub(
+            r"\[(\d+)\]",
+            lambda match: f"[{number_map.get(int(match.group(1)), match.group(1))}]",
+            cleaned,
+        )
+
+    return cleaned, actual_cited
 
 
 @router.post("/image-ocr")
