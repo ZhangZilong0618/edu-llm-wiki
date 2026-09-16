@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     # Embedding (for vector search — uses local sentence-transformers)
     embedding_enabled: bool = True
     embedding_model: str = "all-MiniLM-L6-v2"  # local model, ~80MB, 384-dim
+    embedding_endpoint: str = "http://localhost:11434/v1/embeddings"
+    embedding_api_key: str = ""
 
     # Document Parsing (PaddleOCR-VL via Baidu AI Studio)
     paddleocr_token: str = ""
