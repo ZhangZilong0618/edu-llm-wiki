@@ -2,10 +2,16 @@
 
 from config import settings
 from fastapi.testclient import TestClient
+from routes import chat as chat_routes
 
 
 def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+
+    async def fake_chat_complete(**kwargs):
+        return "mocked chat response"
+
+    monkeypatch.setattr(chat_routes, "chat_complete", fake_chat_complete)
     from main import app
     return TestClient(app)
 
