@@ -274,6 +274,7 @@ export function GraphView() {
           nodeScale={nodeScale}
           spacing={spacing}
           showWeakLinks={showWeakLinks}
+          layoutKey={`${projectId}:${previewingMaterials ? articlePath : "all"}`}
           onSelect={(id: string) => {
             const node = nodesById[id] || null;
             setSelected(node ? { node, degree: 0 } : null);

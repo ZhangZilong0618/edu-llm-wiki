@@ -29,6 +29,7 @@ export interface GraphCanvasProps {
   nodeScale: number;
   spacing: number;
   showWeakLinks: boolean;
+  layoutKey: string;
   onSelect: (nodeId: string) => void;
   onHover: (state: GraphHoverState) => void;
 }
@@ -36,6 +37,8 @@ export interface GraphCanvasProps {
 type RuntimeNode = GraphNode & {
   x: number;
   y: number;
+  fx?: number;
+  fy?: number;
   degree: number;
 };
 
@@ -119,6 +122,7 @@ function buildVisibleGraph(
   hiddenTypes: Set<string>,
   showWeakLinks: boolean,
   positions: Map<string, { x: number; y: number }>,
+  pinned: Set<string>,
 ): RuntimeGraph {
   const clean = sanitizeGraphData(data);
   const visibleNodeIds = new Set(
@@ -153,10 +157,12 @@ function buildVisibleGraph(
     .map<RuntimeNode>((node, index) => {
       const cached = positions.get(node.id);
       const start = cached || initial(index, node.id);
+      const isPinned = pinned.has(node.id) && cached;
       return {
         ...node,
         x: start.x,
         y: start.y,
+        ...(isPinned ? { fx: start.x, fy: start.y } : {}),
         degree: degree.get(node.id) || 0,
       };
     });
@@ -217,6 +223,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
     nodeScale,
     spacing,
     showWeakLinks,
+    layoutKey,
     onSelect,
     onHover,
   } = props;
@@ -226,8 +233,32 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
   const dragMovedRef = useRef(false);
   const fitOnStopRef = useRef(true);
   const positionsRef = useRef(new Map<string, { x: number; y: number }>());
+  const pinnedRef = useRef(new Set<string>());
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(1);
+  const [layoutVersion, setLayoutVersion] = useState(0);
+
+  useEffect(() => {
+    positionsRef.current = new Map();
+    pinnedRef.current = new Set();
+    try {
+      const raw = window.localStorage.getItem(`edu-llm-wiki.graph-layout.${layoutKey}`);
+      if (raw) {
+        const saved = JSON.parse(raw) as {
+          positions?: Record<string, { x: number; y: number }>;
+          pinned?: string[];
+        };
+        positionsRef.current = new Map(
+          Object.entries(saved.positions || {}).map(([id, point]) => [id, point]),
+        );
+        pinnedRef.current = new Set(saved.pinned || []);
+      }
+    } catch {
+      // Corrupt layout data must never break the graph; fall back to a fresh
+      // force layout.
+    }
+    setLayoutVersion((version) => version + 1);
+  }, [layoutKey]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -242,8 +273,14 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
   }, []);
 
   const graph = useMemo(
-    () => buildVisibleGraph(data, hiddenTypes, showWeakLinks, positionsRef.current),
-    [data, hiddenTypes, showWeakLinks],
+    () => buildVisibleGraph(
+      data,
+      hiddenTypes,
+      showWeakLinks,
+      positionsRef.current,
+      pinnedRef.current,
+    ),
+    [data, hiddenTypes, showWeakLinks, layoutVersion],
   );
 
   const search = useMemo(() => buildSearchState(graph, searchQuery), [graph, searchQuery]);
@@ -305,6 +342,20 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
     fitOnStopRef.current = true;
   }, [graph]);
 
+  const persistLayout = useCallback(() => {
+    try {
+      window.localStorage.setItem(
+        `edu-llm-wiki.graph-layout.${layoutKey}`,
+        JSON.stringify({
+          positions: Object.fromEntries(positionsRef.current),
+          pinned: Array.from(pinnedRef.current),
+        }),
+      );
+    } catch {
+      // Storage quota/private mode is non-fatal; in-memory pinning still works.
+    }
+  }, [layoutKey]);
+
   const cachePositions = useCallback(() => {
     const map = positionsRef.current;
     for (const node of graph.nodes) {
@@ -312,7 +363,8 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
         map.set(node.id, { x: node.x, y: node.y });
       }
     }
-  }, [graph.nodes]);
+    persistLayout();
+  }, [graph.nodes, persistLayout]);
 
   // Persisting positions keeps pan/zoom-friendly layout stable when the user
   // only toggles filters or a hover state causes React to re-render.
@@ -481,8 +533,13 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
           node.fy = node.y;
         }}
         onNodeDragEnd={(node) => {
-          node.fx = undefined as any;
-          node.fy = undefined as any;
+          // Keep fx/fy set after drag. Clearing them lets the force simulation
+          // immediately pull the node back to its old position.
+          node.fx = node.x;
+          node.fy = node.y;
+          pinnedRef.current.add(node.id);
+          positionsRef.current.set(node.id, { x: node.x, y: node.y });
+          persistLayout();
         }}
         onNodeClick={(node) => {
           if (dragMovedRef.current) {
