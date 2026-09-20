@@ -402,6 +402,32 @@ def _sr_due_today(project_id: str, user_id: str, now: float | None = None) -> li
     ]
 
 
+def _sr_all(project_id: str, user_id: str) -> list[dict]:
+    """Full SR table for a user — used by decay risk, not by the due queue.
+
+    ``_sr_due_today`` filters to rows already due within 24h. Feeding that
+    filtered set to ``_decay_risk`` made its numerator equal its denominator,
+    so decay risk was pinned at 1.0 for any learner with a due card.
+    """
+    with _connect(project_id) as conn:
+        rows = conn.execute(
+            """
+            SELECT kc_id,ef,interval_days,reps,due_at
+            FROM sr_schedule
+            WHERE project_id=? AND user_id=?
+            """,
+            (project_id, user_id),
+        ).fetchall()
+    return [
+        {
+            "kc_id": r[0], "ef": float(r[1]),
+            "interval_seconds": float(r[2]) * 86400.0,
+            "reps": int(r[3]), "due_at": float(r[4]),
+        }
+        for r in rows
+    ]
+
+
 def _confidence_rows(project_id: str, user_id: str) -> list[dict]:
     with _connect(project_id) as conn:
         rows = conn.execute(
@@ -543,7 +569,10 @@ def learner_state_summary(project_id: str, user_id: str = "default") -> dict:
         "overconfidence_gap": _overconfidence_gap(confidence),
         "readiness": _readiness_summary(project_id, bkt),
         "sr_due_today": len(sr),
-        "decay_risk": _decay_risk(sr),
+        # Decay risk needs the whole SR table. Feeding it the already-filtered
+        # due-today rows made the numerator equal the denominator, so the value
+        # was pinned at 1.0 for any learner with a single due card.
+        "decay_risk": _decay_risk(_sr_all(project_id, user_id)),
         "n_kcs_tracked": len(bkt),
         "n_kcs_mastered": sum(1 for r in bkt if r["p_known"] >= 0.85),
         "n_attempts": sum(int(r.get("obs_n") or 0) for r in bkt),

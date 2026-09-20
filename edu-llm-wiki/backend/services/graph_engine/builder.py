@@ -25,7 +25,9 @@ from services.graph_store import (
     apply_diff,
     clear_derived_graph,
     ensure_initialised,
+    get_communities,
     get_edges,
+    get_insights,
     get_nodes,
     store_communities,
     store_insights,
@@ -56,8 +58,22 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
     ensure_initialised(project_id)
     cached_nodes = get_nodes(project_id)
     cached_edges = get_edges(project_id)
-    if cached_nodes and cached_edges and not force:
-        return _shape_response(cached_nodes, cached_edges)
+    if cached_nodes and not force:
+        # Cache on nodes alone. Gating this on `cached_edges` as well meant a
+        # project whose graph legitimately has no edges — every page written
+        # without cross-references — never reached its cache and re-ran the
+        # full O(N^2) parse on every request, including every
+        # /api/graph/neighborhood/{id} call.
+        #
+        # Communities and insights are persisted on the miss path below, so
+        # they must be read back here; returning empty lists made them vanish
+        # from the UI on every load after the first.
+        return _shape_response(
+            cached_nodes,
+            cached_edges,
+            communities=get_communities(project_id),
+            insights=get_insights(project_id),
+        )
     if force:
         clear_derived_graph(project_id)
 
@@ -182,6 +198,14 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
     # so the cache-miss read-path sees them.
     if edges:
         upsert_edges(project_id, edges)
+    else:
+        # A rebuild that derives no edges must still clear the previous ones.
+        # Otherwise deleting the cross-references from a wiki page leaves its
+        # phantom edges in the graph forever, because clear_derived_graph above
+        # only runs on force.
+        from services.graph_store import execute
+
+        execute(project_id, "DELETE FROM graph_edges WHERE project_id=?", (project_id,))
 
     # apply_diff sets degree_in/out to 0 because it runs before the new
     # edges are written (they live in a separate SQLite write). Recompute

@@ -46,6 +46,21 @@ async def startup():
     _ensure_vector_indices()
 
 
+@app.on_event("shutdown")
+async def shutdown():
+    # SQLite only checkpoints a WAL database when the *last* connection to it
+    # closes. graph_store caches one connection per project for the lifetime of
+    # the process, so nothing ever triggered that checkpoint: the -wal file kept
+    # growing past the main database and every read replayed it. Closing here
+    # also flushes anything still un-checkpointed before the process exits.
+    try:
+        from services import graph_store
+
+        graph_store.close_all()
+    except Exception as exc:  # never block shutdown on cleanup
+        print(f"[shutdown] graph_store.close_all failed: {exc}")
+
+
 def _ensure_vector_indices():
     """Build vector index for any project that doesn't have one yet."""
 

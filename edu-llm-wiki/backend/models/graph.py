@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Allowed values are intentionally documented here. Keeping the comments in
@@ -28,7 +28,24 @@ class GraphNode(BaseModel):
     metadata: dict = Field(default_factory=dict)
     # Learning-semantic fields (optional; older clients won't send these)
     bloom_level: str | None = None
-    difficulty: int | None = Field(default=None, ge=1, le=5)
+    # Clamped rather than constrained: `difficulty` comes straight from page
+    # frontmatter, so one page writing 0 or 7 used to fail validation for every
+    # object in the payload at once and took the whole /api/graph response to a
+    # 500. Clamping one node's displayed difficulty is a far better failure
+    # mode than an outage of the entire graph view.
+    difficulty: int | None = Field(default=None)
+
+    @field_validator("difficulty", mode="before")
+    @classmethod
+    def _clamp_difficulty(cls, value: object) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            level = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(1, min(5, level))
+
     estimated_minutes: float | None = None
     parent_concept: str | None = None
     tags: list[str] = Field(default_factory=list)

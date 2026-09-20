@@ -46,16 +46,25 @@ def observe(
 
     # Prior probabilities of correct / incorrect
     p_correct = expected_correct(p_known, p_g, p_s)
+    # P(correct) is 0 whenever the model is certain and wrong — p_known=0 with
+    # p_g=0, or p_known=1 with p_s=1. Only the incorrect branch guarded that
+    # division, so the correct branch raised ZeroDivisionError for a learner
+    # starting from zero against a knowledge component with no guess rate.
+    guard = max(1e-9, p_correct)
 
     if correct:
         # Posterior that learner knew, given correct response.
-        p_known_given = (p_known * (1.0 - p_s)) / p_correct
+        p_known_given = (p_known * (1.0 - p_s)) / guard
         # Apply learning transition.
         p_known_next = p_known_given + (1.0 - p_known_given) * p_t
     else:
         p_known_given = (p_known * p_s) / max(1e-9, 1.0 - p_correct)
         p_known_next = p_known_given * (1.0 - p_t)
 
+    # The docstring leaves clamping to the caller, but the mastery layer writes
+    # this straight into SQLite; clamp here so one run cannot persist a value
+    # outside [0, 1] and poison every later read.
+    p_known_next = min(1.0, max(0.0, p_known_next))
     return p_known_next, p_t, p_g, p_s
 
 
