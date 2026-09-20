@@ -4,7 +4,16 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # ``extra="ignore"``: BaseSettings defaults to "forbid", which turns any
+    # key in .env that this class does not declare into an import-time
+    # ValidationError — one stale line in .env takes the whole process down
+    # before a single route is registered. Deployment .env files legitimately
+    # carry keys this version no longer reads.
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     # Project
     data_dir: str = str(Path(__file__).parent.parent / "data")
