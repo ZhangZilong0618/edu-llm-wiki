@@ -1,9 +1,9 @@
 """Multi-stage educational wiki ingest engine.
 
-Stage 1: plan source summary and core concept/formula/principle pages.
-Stage 2: generate the core wiki pages.
-Stage 3: derive synthesis, Q&A, and study-guide structures from the core pages.
-Stage 4: assemble, validate, write, index, and sync generated wiki pages.
+Stage 1: 知识单元抽取(本体驱动,见 services/extraction.py)——
+        从文档抽取 concept/fact/formula/principle 四类原子。
+Stage 2: 按批生成知识单元 Wiki 页面。
+Stage 3: 组装补全、引用校验、写入、索引与向量同步。
 
 Supports concurrent processing with configurable concurrency limit.
 """
@@ -14,8 +14,9 @@ import re
 from pathlib import Path
 
 from services.file_parser import parse_file
+from services.extraction import extract_knowledge_units, load_llm_json
 from services.language import language_instruction
-from services.llm_client import chat_complete, stream_chat
+from services.llm_client import chat_complete
 from storage.wiki_store import (
     compute_source_hash,
     ensure_dirs,
@@ -91,95 +92,6 @@ def _sync_vectors(pages: list[dict], *, project_id: str = "default"):
 
 
 
-CORE_PLANNING_PROMPT = """You are an expert educational planner. Your task is to analyze a parsed source document and produce a structured **core page plan** covering ALL FIVE A-stage page types: source, concept, formula, principle, procedure. Output a single JSON object the downstream wiki writer will use.
-
-## Source
-- title: {source_title}
-- total_pages: {page_count}
-
-## Parsed pages (truncated to {max_chars} chars)
-{content}
-
-## Output schema (JSON object)
-For each **concept**:
-- "name": concept name (short, 2-8 字). Definition, glossary term, or named idea.
-- "definition": one-sentence definition in the output language (cite "p.5" for page number)
-- "related": list of other concept names from this plan
-- "page_refs": integer pages where this concept is defined or explained (1-indexed)
-
-For each **formula**:
-- "name": human-readable formula name (NOT raw equation)
-- "latex": the LaTeX equation, $...$ delimiters optional
-- "variables": brief description of each variable
-- "applications": one-sentence note on when to use
-- "page_refs": integer pages
-
-For each **principle**:
-- "name": principle name
-- "statement": one-sentence core claim
-- "conditions": when this principle applies
-- "page_refs": integer pages
-
-For each **procedure**:
-- "name": procedure name
-- "goal": one-sentence outcome
-- "input": what the procedure takes
-- "output": what it produces
-- "page_refs": integer pages
-
-"source" entry:
-- "summary": 2-3 sentence summary in the output language
-- "topic_tags": list of 3-6 keyword tags
-- "page_count_estimate": integer
-
-CRITICAL RULES:
-1. Cover at least 2-3 items per type (if the document supports it). Empty arrays are allowed ONLY for types that genuinely have no content in the source.
-2. Use ONLY pages that appear in the source. Do not invent page numbers; omit page_refs if unsure.
-3. Output a SINGLE JSON object with these top-level keys: source, concepts, formulas, principles, procedures. No markdown fences, no commentary.
-
-## Output Language
-{language_instruction}
-"""
-
-
-CHUNK_PLANNING_PROMPT = """You are an expert educational planner. Analyze ONE page-range chunk of a materials-science course document and extract only the most teaching-relevant knowledge atoms.
-
-## Source
-- title: {source_title}
-- chunk pages: {start_page}-{end_page}
-
-## Chunk content
-{content}
-
-## Output JSON schema
-{{
-  "chunk_summary": "2-sentence summary of this chunk",
-  "topic_tags": ["3-6 tags"],
-  "concepts": [
-    {{"name": "short concept name", "definition": "one concise sentence", "related": ["names"], "page_refs": [1]}}
-  ],
-  "formulas": [
-    {{"name": "human-readable formula name", "latex": "LaTeX", "variables": "brief variables", "applications": "one sentence", "page_refs": [1]}}
-  ],
-  "principles": [
-    {{"name": "principle name", "statement": "one concise claim", "conditions": "when it applies", "page_refs": [1]}}
-  ],
-  "procedures": [
-    {{"name": "procedure name", "goal": "one sentence", "input": "required input", "output": "produced output", "page_refs": [1]}}
-  ]
-}}
-
-Rules:
-- Extract 4-10 concepts, 0-3 formulas, 2-6 principles, and 0-3 procedures when supported.
-- Use ONLY page numbers in this chunk. Do not invent page numbers.
-- Prefer compact, high-value atoms over exhaustive slide headings.
-- Return ONLY one valid JSON object; no markdown fences or commentary.
-
-## Output Language
-{language_instruction}
-"""
-
-
 CORE_PAGE_BATCH_PROMPT = """You are an expert educational wiki writer. Generate concise core wiki pages for the provided knowledge-atom batch.
 
 ## Source
@@ -195,7 +107,7 @@ CORE_PAGE_BATCH_PROMPT = """You are an expert educational wiki writer. Generate 
 Return a JSON array. Each object must contain:
 - path
 - title
-- page_type: concept | formula | principle | procedure
+- page_type: concept | fact | formula | principle
 - content: 120-350 Chinese characters, with required section headings
 - sources: ["{source_title}"]
 - tags
@@ -204,9 +116,9 @@ Return a JSON array. Each object must contain:
 
 Section requirements:
 - concept: "## 定义", "## 解释", "## 相关知识"
+- fact: "## 陈述", "## 出处"
 - formula: "## 公式", "## 变量说明", "## 适用场景"
 - principle: "## 陈述", "## 适用条件", "## 应用"
-- procedure: "## 目标", "## 输入", "## 输出", "## 步骤"
 
 Citation rule:
 Every substantive source-backed sentence must end with:
@@ -216,7 +128,7 @@ Use only page numbers supplied in the batch.
 Rules:
 - Generate exactly one page for every item in the batch.
 - Keep each page concise and teaching-oriented.
-- Do not generate source, synthesis, inquiry, guide, example, or misconception pages.
+- Do not generate any page types other than concept, fact, formula, principle.
 - Return ONLY the JSON array; no markdown fences or commentary.
 
 ## Output Language
@@ -224,241 +136,6 @@ Rules:
 """
 
 
-CORE_PAGE_GENERATION_PROMPT = """You are an expert educational wiki writer. Your task is to generate only the core wiki pages from an approved page plan.
-
-## Core Page Plan
-{plan}
-
-## Purpose (Educational Goals)
-{purpose}
-
-## Schema (Page Structure Rules)
-{schema}
-
-## Output Language
-{language_instruction}
-
-## Instructions
-Generate wiki pages only for the A-stage (core) page types in the plan: source, concept, formula, principle, procedure. Do NOT create example, misconception, synthesis, learning_path, learning_objective, or rubric pages in this stage — those are generated on demand from later stages.
-
-For each page, output a JSON object with:
-- path: relative path within wiki/ (e.g., "concepts/quantum_state.md")
-- title: page title
-- page_type: source | concept | formula | principle | procedure
-- frontmatter (all keys required, no omissions):
-  - sources: list of source file references this page draws on
-  - tags: list of relevant tags (use lowercase, hyphenated for multi-word)
-  - prerequisites: list of page paths that must be understood before this page (only paths that exist in the plan or current wiki)
-  - related: list of page paths that this page connects to (sibling concepts, see-also)
-  - common_misconceptions: list of concise strings naming what learners commonly get wrong about this page
-  - worked_example_ref: list of page paths that are worked examples for this content
-  - difficulty: integer 1-5 (1 = introductory recall, 5 = requires synthesis or advanced application)
-  - last_reviewed: ISO 8601 datetime stamp set to the current generation moment (do not invent historical dates)
-- content: full markdown body with [[wikilinks]] to other wiki pages and $...$ inline LaTeX for math
-
-Page rules:
-- Concept pages should define, explain, and connect the concept to related core pages.
-- Formula pages must contain sections "## 公式", "## 变量说明", and "## 适用场景".
-- Principle pages must contain sections "## 陈述", "## 适用条件", "## 推导/说明", and "## 应用".
-- Procedure pages must contain sections "## 目标", "## 输入", "## 输出", "## 步骤", "## 检查清单".
-- Source pages summarize the source file structure and list candidate citations.
-- Formula titles must be semantic human-readable names, not raw equations.
-- Do not invent new knowledge not supported by the plan.
-- Use [[page/path]] links only for pages that are in the plan or existing wiki context.
-- All math should use lightweight inline LaTeX delimiters $...$; do not force double-dollar display blocks.
-
-### Citation marker (REQUIRED for every non-trivial claim)
-Every substantive sentence that draws from the source MUST end with an inline citation marker in this exact form:
-  [ref:<filename>#p=N]
-where <filename> is the source file's exact name (e.g. "第三章第四节.pdf") and N is the page number.
-- If a sentence is grounded in multiple pages of the same file, use a comma-separated page list:
-  [ref:第三章第四节.pdf#p=5, 8]
-- If a sentence cites multiple files, write a separate marker after the sentence for each file.
-- Do NOT invent page numbers. If you are not certain, omit the marker.
-- Definitions, principle statements, formula applicability conditions, and procedure step goals all require markers.
-- Do not put markers inside math expressions or code blocks.
-
-Return a JSON array of page objects.
-CRITICAL: Output ONLY the JSON array, no markdown fences or explanation.
-"""
-
-DERIVED_LEARNING_PROMPT = """You are an expert educational designer. Your task is to create advanced learning materials from already planned/generated core wiki pages.
-
-## Core Page Plan
-{plan}
-
-## Generated Core Pages
-{core_pages}
-
-## Output Language
-{language_instruction}
-
-## Instructions
-Create derived learning structures from the core concept/formula/principle pages. Do not add new core knowledge pages, and do not generate exercises — exercises are produced on demand from the Tests view, not at import time.
-
-Output a JSON object with this shape:
-
-```json
-{{
-  "synthesis": [
-    {{
-      "title": "Synthesis page title",
-      "focus": "What cross-page understanding this helps build",
-      "key_points": ["comparison, connection, or misconception"],
-      "connections": ["titles of existing core pages"],
-      "open_questions": ["follow-up questions or limitations"]
-    }}
-  ],
-  "inquiry": [
-    {{
-      "title": "Inquiry page title",
-      "thesis": "A high-value learner question phrased as a one-line thesis",
-      "perspectives": ["distinct angle or sub-question that the inquiry should cover"],
-      "answer": "Clear answer grounded in existing core pages",
-      "why_it_matters": "Why this question is useful",
-      "related_items": ["titles of existing core pages"]
-    }}
-  ],
-  "guide": [
-    {{
-      "title": "Learning/navigation guide title",
-      "purpose": "How this note improves learning or wiki maintenance",
-      "learning_order": ["ordered titles of existing core pages"],
-      "review_strategies": ["specific review action a learner can take"],
-      "quality_warnings": ["things to verify against the source"]
-    }}
-  ]
-}}
-```
-
-Naming note: the key `inquiry` supersedes the legacy `q_and_a`; the key `guide` supersedes the legacy `system_notes`. Use the new keys in your output.
-
-Return a single JSON object.
-CRITICAL: Output ONLY the JSON object, no markdown fences or explanation.
-"""
-
-
-def _repair_json(text: str) -> str:
-    """Repair malformed JSON from LLM output — markdown fences, trailing text, truncation."""
-    import re
-
-    # 1. Strip markdown code fences
-    text = text.strip()
-    if text.startswith("```"):
-        parts = text.split("```")
-        text = parts[1] if len(parts) > 1 else text
-        if text.startswith("json"):
-            text = text[4:]
-
-    # 2. Find the outermost JSON object/array by tracking brace depth
-    # This handles LLMs that add explanatory text after the JSON
-    json_start = -1
-    json_end = -1
-    depth = 0
-    in_string = False
-    escape_next = False
-    opener = None
-
-    for i, ch in enumerate(text):
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\" and in_string:
-            escape_next = True
-            continue
-        if ch == '"' and not in_string:
-            in_string = True
-            if json_start < 0:
-                json_start = i  # might be start of a string, reset below
-            continue
-        if ch == '"' and in_string:
-            in_string = False
-            continue
-        if in_string:
-            continue
-        if ch in "{[" and depth == 0:
-            json_start = i
-            opener = ch
-            depth += 1
-            continue
-        if ch in "{[" and depth > 0:
-            depth += 1
-            continue
-        if (ch == "}" and opener == "{") or (ch == "]" and opener == "["):
-            depth -= 1
-            if depth == 0:
-                json_end = i + 1
-                break
-
-    if json_start >= 0 and json_end > json_start:
-        text = text[json_start:json_end]
-
-    # 3. Remove trailing commas before closing brackets/braces
-    text = re.sub(r",\s*([}\]])", r"\1", text)
-
-    # 4. Close unterminated strings
-    if text.count('"') % 2 != 0:
-        text += '"'
-
-    # 5. Close unclosed brackets/braces in reverse order (stack-based)
-    stack: list[str] = []
-    in_str = False
-    esc = False
-    for ch in text:
-        if esc:
-            esc = False
-            continue
-        if ch == "\\" and in_str:
-            esc = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch in "{[":
-            stack.append(ch)
-        elif ch in "}]":
-            if stack and ((ch == "}" and stack[-1] == "{") or (ch == "]" and stack[-1] == "[")):
-                stack.pop()
-    for opener in reversed(stack):
-        text += "}" if opener == "{" else "]"
-
-    # 6. Replace invalid JSON values that LLMs sometimes emit
-    text = re.sub(r':\s*NaN\b', ': null', text)
-    text = re.sub(r':\s*Infinity\b', ': null', text)
-    text = re.sub(r':\s*-Infinity\b', ': null', text)
-
-    return text
-
-
-async def _load_llm_json(raw: str, *, expected: str) -> object:
-    """Parse LLM JSON output, asking the LLM to repair malformed JSON once if needed."""
-    repaired = _repair_json(raw)
-    try:
-        return json.loads(repaired)
-    except json.JSONDecodeError as first_error:
-        fixed = await chat_complete(
-            system_prompt=(
-                "You repair malformed JSON. Return ONLY valid JSON. "
-                "Do not add markdown fences, comments, explanations, or new content."
-            ),
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"The following should be a valid JSON {expected}, but parsing failed with:\n"
-                    f"{first_error}\n\n"
-                    "Repair syntax only. Preserve all keys, values, language, and structure as much as possible.\n\n"
-                    f"{repaired[:60000]}"
-                ),
-            }],
-            temperature=0,
-            max_tokens=8192,
-        )
-        try:
-            return json.loads(_repair_json(fixed))
-        except json.JSONDecodeError as second_error:
-            raise ValueError(f"LLM returned malformed JSON and auto-repair failed: {second_error}") from second_error
 
 
 def _slugify_title(title: str) -> str:
@@ -577,34 +254,19 @@ def _formula_title_from_latex(latex: str, *, variables: str = "", applications: 
 
 def _page_path_for(page_type: str, title: str) -> str:
     folder_by_type = {
-        # A 组基础页（import 时生成）
+        # 知识单元页（import 时生成）— 与前端 lib/page-type.tsx 对齐
         "concept": "concepts",
+        "fact": "facts",
         "formula": "formulas",
         "principle": "principles",
-        "procedure": "procedures",
-        # B 组应用页（按需生成）
-        "example": "examples",
-        "misconception": "misconceptions",
-        # C 组整合 / 评价页（按需生成）
-        "synthesis": "synthesis",
-        "learning_path": "learning_paths",
-        "learning_objective": "objectives",
-        "rubric": "rubrics",
-        # 源页（A 组 0 号）
-        "source": "sources",
-        # v2 历史 / 兼容
-        "inquiry": "inquiries",
-        "guide": "guides",
     }
     folder = folder_by_type.get(page_type, f"{page_type}s")
     return f"{folder}/{_slugify_title(title)}.md"
 
 
-# Stage 分组常量 — 跟前端 lib/page-type.tsx 的 STAGE_GROUPS 对齐
-A_STAGE_TYPES = ("source", "concept", "principle", "formula", "procedure")
-B_STAGE_TYPES = ("example", "misconception")
-C_STAGE_TYPES = ("synthesis", "learning_path", "learning_objective", "rubric")
-ALL_PAGE_TYPES = A_STAGE_TYPES + B_STAGE_TYPES + C_STAGE_TYPES
+# 页面类型常量 — 跟前端 lib/page-type.tsx 的 PAGE_TYPE_ORDER 对齐
+A_STAGE_TYPES = ("concept", "fact", "formula", "principle")
+ALL_PAGE_TYPES = A_STAGE_TYPES
 
 
 def _as_list(value) -> list:
@@ -853,6 +515,22 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
         )
         add_page("concept", title, content, ["concept"], prereqs, related)
 
+    for item in analysis.get("facts", []) or []:
+        if not isinstance(item, dict):
+            continue
+        title = _clean_item_title(str(item.get("name") or item.get("title") or ""))
+        if not title:
+            continue
+        statement = str(item.get("statement") or item.get("value") or "").strip()
+        page_refs = [str(r) for r in _as_list(item.get("page_refs"))]
+        refs_text = "、".join(f"第 {r} 页" for r in page_refs) or "见来源文档"
+        content = (
+            f"# {title}\n\n"
+            f"## 陈述\n\n{statement or f'{title} 是来源文档中记录的具体事实。'}\n\n"
+            f"## 出处\n\n{refs_text}\n"
+        )
+        add_page("fact", title, content, ["fact"])
+
     for item in analysis.get("formulas", []) or []:
         if not isinstance(item, dict):
             continue
@@ -935,357 +613,12 @@ def _ensure_pages_from_analysis(analysis: dict, pages: object, source_relative_p
             )
             add_page("principle", title, content, ["principle", "generated-fallback"], [])
 
-    for idx, item in enumerate(_as_list(analysis.get("synthesis")), start=1):
-        if not isinstance(item, dict):
-            continue
-        title = _clean_item_title(str(item.get("title") or item.get("focus") or f"综合分析 {idx}"))
-        focus = str(item.get("focus") or analysis.get("summary") or "").strip()
-        key_points = _as_list(item.get("key_points"))
-        connections = _as_list(item.get("connections"))
-        open_questions = _as_list(item.get("open_questions"))
-        content = (
-            f"# {title}\n\n"
-            f"## 核心综合\n\n{focus or _bullet_list(key_points)}\n\n"
-            f"## 关联知识\n\n{_bullet_list(connections or all_knowledge_names)}\n\n"
-            f"## 易混点/对比\n\n{_bullet_list(key_points, '请对照相关概念、公式和原理理解它们的边界。')}\n\n"
-            f"## 进一步问题\n\n{_bullet_list(open_questions or _as_list(analysis.get('knowledge_gaps')))}\n"
-        )
-        add_page("synthesis", title, content, ["synthesis", "imported"], [], all_knowledge_names)
-
-    for idx, item in enumerate(_as_list(analysis.get("inquiry")), start=1):
-        if not isinstance(item, dict):
-            continue
-        question = _clean_item_title(str(item.get("question") or f"关键问题 {idx}"))
-        answer = str(item.get("answer") or "").strip()
-        why = str(item.get("why_it_matters") or "").strip()
-        related = _as_list(item.get("related_items"))
-        title = question[:48] or f"关键问题 {idx}"
-        content = (
-            f"# {title}\n\n"
-            f"## 问题\n\n{question}\n\n"
-            f"## 回答\n\n{answer or '请结合来源文档中的定义、公式和原理回答。'}\n\n"
-            f"## 为什么重要\n\n{why or '这个问题有助于检查是否真正理解文档的核心知识。'}\n\n"
-            f"## 相关知识\n\n{_bullet_list(related or all_knowledge_names[:5])}\n"
-        )
-        add_page("inquiry", title, content, ["qa", "imported"], [], all_knowledge_names[:5])
-
-    for idx, item in enumerate(_as_list(analysis.get("guide")), start=1):
-        if not isinstance(item, dict):
-            continue
-        title = _clean_item_title(str(item.get("title") or f"{source_relative_path} 学习指引 {idx}"))
-        purpose = str(item.get("purpose") or "").strip()
-        learning_order = _as_list(item.get("learning_order"))
-        # New prompt uses `review_strategies`; legacy `study_strategy` is still
-        # accepted so older analyses keep rendering.
-        review_strategies = _as_list(item.get("review_strategies")) or _as_list(item.get("study_strategy"))
-        quality_warnings = _as_list(item.get("quality_warnings"))
-        content = (
-            f"# {title}\n\n"
-            f"## 用途\n\n{purpose or f'整理 {source_relative_path} 的学习路径、复习方式和维护提醒。'}\n\n"
-            f"## 推荐学习顺序\n\n{_bullet_list(learning_order or all_knowledge_names)}\n\n"
-            f"## 复习策略\n\n{_bullet_list(review_strategies or ['先看概念和原理；如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
-            f"## 质量提醒\n\n{_bullet_list(quality_warnings or _as_list(analysis.get('review_items')) or ['如原文 OCR、公式或表格解析异常，请回到来源文档复核。'])}\n"
-        )
-        add_page("guide", title, content, ["guide", "imported"], [], learning_order or all_knowledge_names)
-
-    has_educational_content = bool(concepts or formulas or principles)
-    if has_educational_content and not any((p.get("page_type") == "synthesis") for p in normalized_pages):
-        title = f"{source_relative_path} 综合学习图谱"
-        content = (
-            f"# {title}\n\n"
-            f"## 核心综合\n\n{analysis.get('summary') or '本页综合导入文档中的核心知识结构。'}\n\n"
-            f"## 关联知识\n\n{_bullet_list(all_knowledge_names)}\n\n"
-            f"## 易混点/对比\n\n"
-            f"{_bullet_list(_as_list(analysis.get('knowledge_gaps')), '重点比较概念、公式和原理之间的适用边界。')}\n\n"
-            f"## 进一步问题\n\n{_bullet_list(_as_list(analysis.get('review_items')), '哪些公式可以用于解决哪些练习？哪些概念是后续内容的前提？')}\n"
-        )
-        add_page("synthesis", title, content, ["synthesis", "imported"], [], all_knowledge_names)
-
-    if has_educational_content and not any((p.get("page_type") == "inquiry") for p in normalized_pages):
-        title = f"{source_relative_path} 关键问答"
-        content = (
-            f"# {title}\n\n"
-            f"## 问题\n\n这份文档最需要先理解什么？\n\n"
-            f"## 回答\n\n需要先把核心概念、公式和原理串起来：{', '.join(all_knowledge_names[:6]) or '见来源摘要'}。\n\n"
-            f"## 为什么重要\n\n这个问题能帮助学习者从被动阅读转向主动检索和自测。\n\n"
-            f"## 相关知识\n\n{_bullet_list(all_knowledge_names[:6])}\n"
-        )
-        add_page("inquiry", title, content, ["qa", "imported"], [], all_knowledge_names[:5])
-
-    if has_educational_content and not any((p.get("page_type") == "guide") for p in normalized_pages):
-        title = f"{source_relative_path} 导入学习指引"
-        content = (
-            f"# {title}\n\n"
-            f"## 用途\n\n为本次导入的文档建立学习顺序、复习方式和质量检查入口。\n\n"
-            f"## 推荐学习顺序\n\n{_bullet_list(all_knowledge_names)}\n\n"
-            f"## 复习策略\n\n{_bullet_list(['阅读每个概念页后，回到对应公式和原理进行自测。', '如需练习，到 Tests 视图按范围生成测试题。'])}\n\n"
-            f"## 质量提醒\n\n{_bullet_list(_as_list(analysis.get('review_items')) or ['如果公式或表格来自 OCR，请对照原始文档复核。'])}\n"
-        )
-        add_page("guide", title, content, ["guide", "imported"], [], all_knowledge_names)
 
     return normalized_pages
 
 
 def _analysis_is_empty(analysis: dict) -> bool:
     return not any(analysis.get(key) for key in ("concepts", "formulas", "principles"))
-
-
-def _build_page_chunks(
-    content: str,
-    *,
-    source_title: str,
-    project_id: str = "default",
-    max_chars: int = 18_000,
-    max_pages: int = 18,
-) -> list[dict] | None:
-    """Build page-aware chunks from parsed.json when available."""
-    from services.parsed_index import build_parsed_index, load_parsed_index
-    from storage.wiki_store import sources_path
-
-    sources_root = sources_path(project_id)
-    parsed = load_parsed_index(sources_root, source_title)
-    if parsed is None:
-        try:
-            parsed = build_parsed_index(sources_root, source_title)
-        except Exception:
-            parsed = None
-    if not parsed or not parsed.get("pages"):
-        return None
-
-    pages = parsed["pages"]
-    if len(pages) <= 8 and len(content) <= 24_000:
-        return None
-
-    chunks: list[dict] = []
-    current_pages: list[dict] = []
-    current_chars = 0
-
-    def flush() -> None:
-        nonlocal current_pages, current_chars
-        if not current_pages:
-            return
-        chunks.append({
-            "start_page": int(current_pages[0].get("page", 1)),
-            "end_page": int(current_pages[-1].get("page", len(current_pages))),
-            "content": "\n\n---\n\n".join(
-                f"## Page {page.get('page', idx + 1)}\n\n{_strip_images(str(page.get('md') or ''))}"
-                for idx, page in enumerate(current_pages)
-            ),
-        })
-        current_pages = []
-        current_chars = 0
-
-    for page in pages:
-        text = _strip_images(str(page.get("md") or ""))
-        if current_pages and (
-            current_chars + len(text) > max_chars or len(current_pages) >= max_pages
-        ):
-            flush()
-        current_pages.append(page)
-        current_chars += len(text)
-
-    flush()
-    return chunks or None
-
-
-def _merge_chunk_plans(plans: list[dict], *, source_title: str, page_count: int) -> dict:
-    """Deterministically merge chunk plans and deduplicate knowledge atoms."""
-    def merge_items(items: list[dict], fields: tuple[str, ...]) -> list[dict]:
-        merged: dict[str, dict] = {}
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            name = _clean_item_title(str(item.get("name") or item.get("title") or ""))
-            if not name:
-                continue
-            k = name.lower()
-            if k not in merged:
-                merged[k] = {**item, "name": name}
-                continue
-            target = merged[k]
-            for field in fields:
-                old = str(target.get(field) or "").strip()
-                new = str(item.get(field) or "").strip()
-                if new and (not old or len(new) > len(old)):
-                    target[field] = new
-            for field in ("related", "page_refs"):
-                values = target.setdefault(field, [])
-                for value in item.get(field, []) or []:
-                    if value not in values:
-                        values.append(value)
-        return list(merged.values())
-
-    concepts: list[dict] = []
-    formulas: list[dict] = []
-    principles: list[dict] = []
-    procedures: list[dict] = []
-    summaries: list[str] = []
-    tags: list[str] = []
-
-    for plan in plans:
-        if not isinstance(plan, dict):
-            continue
-        concepts.extend([x for x in plan.get("concepts", []) or [] if isinstance(x, dict)])
-        formulas.extend([x for x in plan.get("formulas", []) or [] if isinstance(x, dict)])
-        principles.extend([x for x in plan.get("principles", []) or [] if isinstance(x, dict)])
-        procedures.extend([x for x in plan.get("procedures", []) or [] if isinstance(x, dict)])
-        summary = str(plan.get("chunk_summary") or "").strip()
-        if summary:
-            summaries.append(summary)
-        for tag in plan.get("topic_tags", []) or []:
-            tag = str(tag).strip()
-            if tag and tag not in tags:
-                tags.append(tag)
-
-    return {
-        "source": {
-            "summary": " ".join(summaries[:4]) or f"{source_title} 的分块知识抽取结果。",
-            "topic_tags": tags[:8],
-            "page_count_estimate": page_count,
-        },
-        "concepts": merge_items(concepts, ("definition",)),
-        "formulas": merge_items(formulas, ("latex", "variables", "applications")),
-        "principles": merge_items(principles, ("statement", "conditions")),
-        "procedures": merge_items(procedures, ("goal", "input", "output")),
-    }
-
-
-async def _generate_chunk_plan(
-    chunk: dict,
-    *,
-    source_title: str,
-    language: str,
-) -> dict:
-    prompt = CHUNK_PLANNING_PROMPT.format(
-        source_title=source_title,
-        start_page=chunk["start_page"],
-        end_page=chunk["end_page"],
-        content=chunk["content"],
-        language_instruction=language,
-    )
-    raw = await chat_complete(
-        system_prompt=(
-            "You are an expert educational planner for materials science. "
-            "Output only valid JSON."
-        ),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.15,
-        max_tokens=12_000,
-    )
-    try:
-        plan = await _load_llm_json(raw, expected="object")
-    except Exception:
-        return {}
-    return plan if isinstance(plan, dict) else {}
-
-
-async def _generate_core_plan_llm(
-    content: str,
-    source_title: str,
-    page_count: int,
-    *,
-    project_id: str = "default",
-    emit=None,
-    source_relative_path: str = "",
-) -> dict:
-    """Generate a core plan with page-aware chunk extraction for long documents."""
-    from services.language import language_instruction as _li
-
-    chunks = _build_page_chunks(
-        content,
-        source_title=source_title,
-        project_id=project_id,
-    )
-    if not chunks:
-        max_chars = 24_000
-        snippet = content if len(content) <= max_chars else content[:max_chars] + "\n\n[... truncated ...]"
-        user_prompt = CORE_PLANNING_PROMPT.format(
-            source_title=source_title,
-            page_count=page_count,
-            max_chars=max_chars,
-            content=snippet,
-            language_instruction=_li(),
-        )
-        raw = await _chat_complete_progress(
-            system_prompt="You are an expert educational planner. Output ONLY valid JSON.",
-            user_prompt=user_prompt,
-            temperature=0.25,
-            max_tokens=16_000,
-            emit=emit,
-            source=source_relative_path,
-            stage="plan",
-        )
-        try:
-            plan = await _load_llm_json(raw, expected="object")
-        except Exception:
-            return {}
-        return plan if isinstance(plan, dict) else {}
-
-    await _emit_optional(
-        emit,
-        "info",
-        source=source_relative_path,
-        message=f"长文档分块抽取: {len(chunks)} 个页面块",
-    )
-
-    language = _li()
-    semaphore = asyncio.Semaphore(3)
-
-    async def bounded(chunk: dict) -> dict:
-        async with semaphore:
-            return await _generate_chunk_plan(
-                chunk,
-                source_title=source_title,
-                language=language,
-            )
-
-    chunk_plans = await asyncio.gather(
-        *(bounded(chunk) for chunk in chunks),
-        return_exceptions=True,
-    )
-    valid_plans = [plan for plan in chunk_plans if isinstance(plan, dict)]
-    merged = _merge_chunk_plans(
-        valid_plans,
-        source_title=source_title,
-        page_count=page_count,
-    )
-
-    await _emit_optional(
-        emit,
-        "info",
-        source=source_relative_path,
-        message=(
-            f"分块抽取完成: {len(valid_plans)}/{len(chunks)} 块成功; "
-            f"{len(merged.get('concepts', []))} 概念, "
-            f"{len(merged.get('formulas', []))} 公式, "
-            f"{len(merged.get('principles', []))} 原理"
-        ),
-    )
-    return merged
-
-
-def _llm_plan_to_core_plan(plan: dict, source_title: str, page_count: int = 0) -> dict:
-    """把 LLM 的 5 类规划 normalize 成 ingest engine 用的 core_plan。
-
-    core_plan 历史上用 _knowledge_counts() 数 {concepts, formulas, principles, synthesis, inquiry, guide}。
-    5 类 A 组里 synthesis/inquiry/guide 是 C 组，不在 plan 里——初始化为空。
-    """
-    source = plan.get("source") or {}
-    return {
-        "summary": source.get("summary", "") or f"文档：{source_title}",
-        "tags": source.get("topic_tags", []) or [],
-        "concepts": plan.get("concepts", []) or [],
-        "formulas": plan.get("formulas", []) or [],
-        "principles": plan.get("principles", []) or [],
-        "procedures": plan.get("procedures", []) or [],
-        # C 组 — planning 阶段不规划，按需生成
-        "synthesis": [],
-        "inquiry": [],
-        "guide": [],
-        # 元信息
-        "page_count_estimate": source.get("page_count_estimate", page_count),
-        "planning_source": "llm",
-    }
 
 
 def _fallback_analysis_from_text(content: str) -> dict:
@@ -1420,65 +753,28 @@ async def _emit_optional(emit, event: str, **kwargs):
         await emit(event, **kwargs)
 
 
-async def _chat_complete_progress(
-    *,
-    system_prompt: str,
-    user_prompt: str,
-    temperature: float,
-    max_tokens: int,
-    emit=None,
-    source: str = "",
-    stage: str = "",
-) -> str:
-    chunks: list[str] = []
-    async for chunk in stream_chat(
-        system_prompt=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-    ):
-        chunks.append(chunk)
-        await _emit_optional(emit, "llm_delta", source=source, stage=stage, text=chunk)
-    return "".join(chunks)
-
-
 def _knowledge_counts(analysis: dict) -> dict[str, int]:
     return {
         "concepts": len(_as_list(analysis.get("concepts"))),
+        "facts": len(_as_list(analysis.get("facts"))),
         "formulas": len(_as_list(analysis.get("formulas"))),
         "principles": len(_as_list(analysis.get("principles"))),
-        "synthesis": len(_as_list(analysis.get("synthesis"))),
-        "inquiry": len(_as_list(analysis.get("inquiry"))),
-        "guide": len(_as_list(analysis.get("guide"))),
     }
 
 
 def _analysis_details(analysis: dict) -> dict:
     return {
         "concepts": [c.get("name", "") for c in _as_list(analysis.get("concepts"))[:10] if isinstance(c, dict)],
+        "facts": [f.get("name", "") for f in _as_list(analysis.get("facts"))[:5] if isinstance(f, dict)],
         "formulas": [f.get("name", "") for f in _as_list(analysis.get("formulas"))[:5] if isinstance(f, dict)],
         "principles": [p.get("name", "") for p in _as_list(analysis.get("principles"))[:5] if isinstance(p, dict)],
-        "synthesis": [s.get("title", "") for s in _as_list(analysis.get("synthesis"))[:5] if isinstance(s, dict)],
-        "inquiry": [q.get("thesis", q.get("question", ""))[:40] for q in _as_list(analysis.get("inquiry"))[:5] if isinstance(q, dict)],
-        "guide": [s.get("title", "") for s in _as_list(analysis.get("guide"))[:5] if isinstance(s, dict)],
     }
-
-
-def _merge_derived_analysis(core_plan: dict, derived: object) -> dict:
-    analysis = dict(core_plan)
-    if isinstance(derived, dict):
-        for key in ("synthesis", "inquiry", "guide"):
-            analysis[key] = _as_list(derived.get(key))
-    else:
-        for key in ("synthesis", "inquiry", "guide"):
-            analysis.setdefault(key, [])
-    return analysis
 
 
 def _build_core_plan_batches(core_plan: dict, *, batch_size: int = 8) -> list[dict]:
     """Split a normalized core plan into compact, type-aware generation batches."""
     batches: list[dict] = []
-    for page_type in ("concepts", "formulas", "principles", "procedures"):
+    for page_type in ("concepts", "facts", "formulas", "principles"):
         items = [item for item in core_plan.get(page_type, []) or [] if isinstance(item, dict)]
         for start in range(0, len(items), batch_size):
             batch = items[start : start + batch_size]
@@ -1512,7 +808,7 @@ async def _generate_core_page_batch(
         max_tokens=16_000,
     )
     try:
-        pages = await _load_llm_json(raw, expected="array")
+        pages = await load_llm_json(raw, expected="array")
     except Exception:
         return []
     return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
@@ -1568,219 +864,12 @@ async def _generate_core_pages(core_plan: dict, *, project_id: str, source_relat
     )
 
 
-async def _generate_derived_analysis(core_plan: dict, core_pages: list[dict], *, emit=None, source_relative_path: str = "") -> dict:
-    core_page_summaries = [
-        {
-            "path": page.get("path"),
-            "title": page.get("title"),
-            "page_type": page.get("page_type"),
-            "content": str(page.get("content") or "")[:1200],
-        }
-        for page in core_pages
-        if page.get("page_type") in {"concept", "formula", "principle"}
-    ]
-    raw = await _chat_complete_progress(
-        system_prompt="You are an expert educational designer. Output ONLY valid JSON.",
-        user_prompt=DERIVED_LEARNING_PROMPT.format(
-            plan=json.dumps(core_plan, ensure_ascii=False, indent=2),
-            core_pages=json.dumps(core_page_summaries, ensure_ascii=False, indent=2),
-            language_instruction=language_instruction(),
-        ),
-        temperature=0.35,
-        max_tokens=8192,
-        emit=emit,
-        source=source_relative_path,
-        stage="derive",
-    )
-    return await _load_llm_json(raw, expected="object")
 
 
-# --------------------------------------------------------------------------------------
-# B / C 阶段：按需触发，独立函数
-# --------------------------------------------------------------------------------------
-
-B_STAGE_PROMPT = """You are an expert educational wiki writer. Generate B-stage (applied) wiki pages from an existing core wiki page.
-
-## Anchor Page
-{anchor}
-
-## Source file (parsed)
-{source_summary}
-
-## Requested page types
-{page_types}
-
-## Extra context
-{extra_context}
-
-## Schema
-Each page is a JSON object with:
-- path: relative path within wiki/ (e.g. "examples/foo.md")
-- title: page title
-- page_type: example | misconception
-- content: full markdown body, with sections:
-    - example → "## 题目", "## 步骤", "## 答案", "## 变式"
-    - misconception → "## 错误说法", "## 正确理解", "## 诊断题"
-- frontmatter (all keys required):
-    - sources, tags, prerequisites, related, difficulty, last_reviewed
-- INCLUDE inline citations: whenever a sentence is grounded in a specific page of the source, append a marker `[ref:<source_filename>#p=<page>]` (multiple sources: comma-separated within one `[ref:...]` block). Do NOT invent page numbers; omit the marker if unsure. Multi-page same file is allowed: `[ref:file.pdf#p=5, 8]`.
-
-## Output
-Return a JSON array of page objects. CRITICAL: Output ONLY the JSON array, no fences or explanation.
-"""
-
-
-async def _generate_b_stage_pages(
-    anchor_page: dict,
-    *,
-    page_types: list[str],
-    source_file: str,
-    extra_context: str = "",
-    project_id: str = "default",
-    emit=None,
-) -> list[dict]:
-    """按需生成 B 组应用页。anchor_page 是触发页（已存在的 A 组页）。"""
-    from storage.wiki_store import read_wiki_page
-
-    pages: list[dict] = []
-    for ptype in page_types:
-        if ptype not in B_STAGE_TYPES:
-            continue
-        # 给 LLM 一个精简的源页摘要，避免 prompt 爆炸
-        try:
-            parsed = load_parsed_index(sources_path(project_id), source_file)
-        except Exception:
-            parsed = None
-        if parsed and parsed.get("pages"):
-            # 找 anchor_page 提到的页 + 邻居几页作上下文
-            source_summary = "\n\n---\n\n".join(
-                p["md"][:600] for p in parsed["pages"][:3]
-            )
-        else:
-            source_summary = "(未解析的源文件)"
-
-        user_prompt = B_STAGE_PROMPT.format(
-            anchor=json.dumps({
-                "path": anchor_page.get("path"),
-                "title": anchor_page.get("title"),
-                "page_type": anchor_page.get("page_type"),
-                "content": str(anchor_page.get("content") or "")[:1500],
-            }, ensure_ascii=False, indent=2),
-            source_summary=source_summary[:4000],
-            page_types=ptype,
-            extra_context=extra_context or "(无)",
-            language_instruction=language_instruction(),
-        )
-        raw = await _chat_complete_progress(
-            system_prompt="You are an expert educational wiki writer. Output ONLY valid JSON.",
-            user_prompt=user_prompt,
-            temperature=0.3,
-            max_tokens=4096,
-            emit=emit,
-            source=source_file,
-            stage=f"b_stage_{ptype}",
-        )
-        try:
-            arr = await _load_llm_json(raw, expected="array")
-        except Exception:
-            arr = []
-        if isinstance(arr, list):
-            for p in arr:
-                if isinstance(p, dict):
-                    p.setdefault("page_type", ptype)
-                    p.setdefault("sources", [source_file])
-                    pages.append(p)
-    return pages
-
-
-C_STAGE_PROMPT = """You are an expert educational designer. Generate a single C-stage wiki page from the provided context.
-
-## Page type
-{page_type}
-
-## Target pages (anchor content)
-{targets}
-
-## Source files (parsed excerpts)
-{sources}
-
-## Extra context
-{extra_context}
-
-## Schema
-- path, title, page_type ∈ {synthesis, learning_path, learning_objective, rubric}
-- content: full markdown body, with sections:
-    - synthesis → "## 综合论点", "## 关联知识" (use [[wikilinks]])
-    - learning_path → "## 先修知识", "## 推荐顺序", "## 检测点" (use [[wikilinks]])
-    - learning_objective → "## 行为动词", "## 认知层级", "## 达成证据"
-    - rubric → "## 掌握等级", "## 表现描述", "## 评分规则"
-- frontmatter (all keys required)
-- INCLUDE inline citations `[ref:<file>#p=<page>]` ONLY for synthesis pages. For other C types, omit citations.
-
-## Output
-Return ONE JSON object. CRITICAL: Output ONLY the JSON object, no fences or explanation.
-"""
-
-
-async def _generate_c_stage_page(
-    *,
-    page_type: str,
-    target_pages: list[dict],
-    source_files: list[str],
-    extra_context: str = "",
-    project_id: str = "default",
-    emit=None,
-) -> dict | None:
-    """按需生成 C 组整合 / 评价页。"""
-    if page_type not in C_STAGE_TYPES:
-        return None
-    sp = sources_path(project_id)
-    source_excerpts: list[str] = []
-    for src in source_files:
-        parsed = load_parsed_index(sp, src)
-        if parsed and parsed.get("pages"):
-            source_excerpts.append(
-                f"### {src}\n\n" + "\n\n---\n\n".join(p["md"][:400] for p in parsed["pages"][:3])
-            )
-    sources_text = "\n\n".join(source_excerpts)[:5000] or "(未提供源文件)"
-
-    user_prompt = C_STAGE_PROMPT.format(
-        page_type=page_type,
-        targets=json.dumps(
-            [{"path": t.get("path"), "title": t.get("title"),
-              "page_type": t.get("page_type"),
-              "content": str(t.get("content") or "")[:1200]}
-             for t in target_pages],
-            ensure_ascii=False, indent=2,
-        ),
-        sources=sources_text,
-        extra_context=extra_context or "(无)",
-        language_instruction=language_instruction(),
-    )
-    raw = await _chat_complete_progress(
-        system_prompt="You are an expert educational designer. Output ONLY valid JSON.",
-        user_prompt=user_prompt,
-        temperature=0.3,
-        max_tokens=4096,
-        emit=emit,
-        source=(source_files[0] if source_files else ""),
-        stage=f"c_stage_{page_type}",
-    )
-    try:
-        obj = await _load_llm_json(raw, expected="object")
-    except Exception:
-        return None
-    if isinstance(obj, dict):
-        obj.setdefault("page_type", page_type)
-        if not obj.get("sources"):
-            obj["sources"] = list(source_files)
-        return obj
-    return None
 
 
 def _write_ingest_outputs(
     pages: list[dict],
-    analysis: dict,
     source_relative_path: str,
     *,
     project_id: str,
@@ -1814,23 +903,11 @@ def _write_ingest_outputs(
         except Exception:
             continue
 
-    source_summary_path = f"sources/{source_relative_path.rsplit('.', 1)[0].replace('/', '_')}.md"
-    write_wiki_page(
-        relative_path=source_summary_path,
-        title=source_relative_path,
-        page_type="source",
-        content=analysis.get("summary", f"# {source_relative_path}\n\nContent analysis pending."),
-        sources=[source_relative_path],
-        project_id=project_id,
-    )
-    created.append(source_summary_path)
-
     generated_paths = [p["path"] for p in pages if p.get("path")]
-    record_source_pages(source_relative_path, generated_paths + [source_summary_path], project_id=project_id)
+    record_source_pages(source_relative_path, generated_paths, project_id=project_id)
 
     all_new = [{"path": p["path"], "title": p["title"], "type": p.get("page_type", "concept")}
                for p in pages]
-    all_new.append({"path": source_summary_path, "title": source_relative_path, "type": "source"})
     update_index(all_new, project_id=project_id)
 
     _sync_vectors(pages, project_id=project_id)
@@ -1839,7 +916,6 @@ def _write_ingest_outputs(
         "created": created,
         "updated": updated,
         "concepts": concepts,
-        "source_summary_path": source_summary_path,
     }
 
 
@@ -1880,10 +956,10 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
                          message=f"解析完成: {len(content):,} 字符 ({parse_method})" + (" (已截断)" if truncated else ""))
 
     await _emit_optional(emit, "stage", source=source_relative_path,
-                         stage="plan", message="Step 1/4: 调用大模型规划 A 组 5 类核心知识页面...")
+                         stage="plan", message="Step 1/3: 调用大模型规划四类知识单元页面...")
     try:
-        # Primary: LLM 规划 5 类 (source/concept/formula/principle/procedure)
-        plan_llm = await _generate_core_plan_llm(
+        # Primary: 第一阶段——本体驱动的知识单元抽取(services/extraction.py)
+        plan_llm = await extract_knowledge_units(
             content,
             source_title=source_relative_path,
             page_count=0,
@@ -1891,8 +967,8 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
             emit=emit,
             source_relative_path=source_relative_path,
         )
-        if plan_llm and any(plan_llm.get(k) for k in ("concepts", "formulas", "principles", "procedures", "source")):
-            core_plan = _llm_plan_to_core_plan(plan_llm, source_title=source_relative_path)
+        if plan_llm and any(plan_llm.get(k) for k in ("concepts", "facts", "formulas", "principles")):
+            core_plan = plan_llm
             await _emit_optional(emit, "info", source=source_relative_path,
                                  message="LLM 规划成功；回退启发式未启用。")
         else:
@@ -1906,14 +982,33 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
     counts = _knowledge_counts(core_plan)
     await _emit_optional(emit, "stage_done", source=source_relative_path,
                          stage="plan",
-                         message=f"规划完成: {counts['concepts']} 个概念, {counts['formulas']} 个公式, {counts['principles']} 个原理"
-                                 + (f", {len(core_plan.get('procedures', []))} 个方法" if core_plan.get('procedures') else ""),
+                         message=f"规划完成: {counts['concepts']} 个概念, {counts['facts']} 个事实, "
+                                 f"{counts['formulas']} 个公式, {counts['principles']} 个原理",
                          details=_analysis_details(core_plan))
+
+    # Stage 1b: 本体关系抽取(原子清单 → relations.json;失败不阻塞导入)
+    try:
+        from services.relation_extraction import run_relation_extraction
+        plan_atoms = [
+            {"name": item.get("name"), "type": cls, "statement": item.get("definition") or item.get("statement") or ""}
+            for key, cls in (("concepts", "Concept"), ("facts", "Fact"), ("formulas", "Formula"), ("principles", "Principle"))
+            for item in core_plan.get(key, []) or []
+            if isinstance(item, dict) and item.get("name")
+        ]
+        rel_payload = await run_relation_extraction(
+            plan_atoms, source_title=source_relative_path, project_id=project_id,
+        )
+        await _emit_optional(emit, "info", source=source_relative_path,
+                             message=f"Stage 1b 关系抽取完成: {len(rel_payload.get('relations', []))} 条本体关系")
+    except Exception as e:
+        await _emit_optional(emit, "warn", source=source_relative_path,
+                             message=f"关系抽取失败(不阻塞导入): {e}")
 
     await _emit_optional(emit, "stage", source=source_relative_path,
                          stage="generate_core",
-                         message=f"Step 2/4: LLM 正在生成主干 Wiki 页面..."
-                                 f"({counts['concepts']} 概念 + {counts['formulas']} 公式 + {counts['principles']} 原理)")
+                         message=f"Step 2/3: LLM 正在生成知识单元 Wiki 页面..."
+                                 f"({counts['concepts']} 概念 + {counts['facts']} 事实 + "
+                                 f"{counts['formulas']} 公式 + {counts['principles']} 原理)")
     try:
         core_pages = await _generate_core_pages(
             core_plan,
@@ -1921,7 +1016,7 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
             source_relative_path=source_relative_path,
             emit=emit,
         )
-        core_pages = [p for p in core_pages if p.get("page_type") in {"concept", "formula", "principle"}]
+        core_pages = [p for p in core_pages if p.get("page_type") in A_STAGE_TYPES]
     except Exception as e:
         await _emit_optional(emit, "error", source=source_relative_path, message=f"主干页面生成失败: {e}")
         return {"source": source_relative_path, "status": "error", "error": f"Core generation error: {e}"}
@@ -1930,30 +1025,9 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
                          stage="generate_core", message=f"主干页面生成完成: {len(core_pages)} 个页面")
 
     await _emit_optional(emit, "stage", source=source_relative_path,
-                         stage="derive", message="Step 3/4: LLM 正在基于主干页面生成综合、问答和学习指引...")
+                         stage="generate_derived", message="Step 3/3: 正在组装 Wiki 页面并校验补全...")
     try:
-        derived = await _generate_derived_analysis(
-            core_plan,
-            core_pages,
-            emit=emit,
-            source_relative_path=source_relative_path,
-        )
-        analysis = _merge_derived_analysis(core_plan, derived)
-    except Exception as e:
-        await _emit_optional(emit, "error", source=source_relative_path, message=f"进阶内容生成失败: {e}")
-        return {"source": source_relative_path, "status": "error", "error": f"Derived generation error: {e}"}
-
-    counts = _knowledge_counts(analysis)
-    await _emit_optional(emit, "stage_done", source=source_relative_path,
-                         stage="derive",
-                         message=f"进阶内容生成完成: {counts['synthesis']} 个综合, "
-                                 f"{counts['inquiry']} 个问答, {counts['guide']} 个学习指引",
-                         details=_analysis_details(analysis))
-
-    await _emit_optional(emit, "stage", source=source_relative_path,
-                         stage="generate_derived", message="Step 4/4: 正在组装派生 Wiki 页面并校验补全...")
-    try:
-        pages = _ensure_pages_from_analysis(analysis, core_pages, source_relative_path)
+        pages = _ensure_pages_from_analysis(core_plan, core_pages, source_relative_path)
     except Exception as e:
         await _emit_optional(emit, "error", source=source_relative_path, message=f"页面组装失败: {e}")
         return {"source": source_relative_path, "status": "error", "error": f"Page assembly error: {e}"}
@@ -1963,7 +1037,7 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
 
     await _emit_optional(emit, "stage", source=source_relative_path,
                          stage="verify_refs",
-                         message="Step 3.5/4: 校验引用 [ref:…] 标号并反查原页 offset...")
+                         message="校验引用 [ref:…] 标号并反查原页 offset...")
     try:
         _verify_cite_refs(pages, project_id)
     except Exception as e:
@@ -1988,7 +1062,7 @@ async def _run_ingest_pipeline(source_relative_path: str, force: bool = False, *
                              page_type=page.get("page_type", "concept"),
                              action=action)
 
-    outputs = _write_ingest_outputs(pages, analysis, source_relative_path, project_id=project_id)
+    outputs = _write_ingest_outputs(pages, source_relative_path, project_id=project_id)
     created = outputs["created"]
     updated = outputs["updated"]
     await _emit_optional(emit, "stage_done", source=source_relative_path,

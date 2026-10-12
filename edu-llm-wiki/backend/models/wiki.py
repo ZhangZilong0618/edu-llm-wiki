@@ -21,7 +21,7 @@ class UnverifiedRef(BaseModel):
 class WikiPage(BaseModel):
     path: str  # relative path within wiki/
     title: str
-    page_type: str  # 12 types: source|concept|principle|formula|procedure|example|misconception|synthesis|learning_path|learning_objective|rubric
+    page_type: str  # 4 knowledge-unit types: concept|fact|formula|principle
     content: str
     sources: list[str] = []  # source file references
     tags: list[str] = []
@@ -85,26 +85,4 @@ class IngestResult(BaseModel):
     wiki_pages_created: list[str] = []
     wiki_pages_updated: list[str] = []
     concepts_extracted: list[str] = []
-    error: str = ""
-
-
-# ---------- Stage 触发（B/C 组按需生成）----------
-
-class BStageRequest(BaseModel):
-    """B 组应用页（example / misconception）按需生成请求。"""
-    source_file: str
-    page_types: list[str] = ["example", "misconception"]  # 默认两种都生成
-    extra_context: str = ""
-
-
-class CStageRequest(BaseModel):
-    """C 组整合 / 评价页按需生成请求。"""
-    page_type: str  # synthesis | learning_path | learning_objective | rubric
-    target_pages: list[str] = []  # paths that anchor the generation
-    extra_context: str = ""
-
-
-class StageGenerateResult(BaseModel):
-    pages_created: list[str] = []
-    pages_updated: list[str] = []
     error: str = ""

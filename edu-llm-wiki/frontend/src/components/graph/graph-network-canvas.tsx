@@ -5,8 +5,8 @@ import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import { Maximize, ZoomIn, ZoomOut } from "lucide-react";
 
 import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki";
-import type { ColorMode } from "./constants";
-import { edgeLabel, isStrongEdge, mixColor, nodeColorByMode, readableLabel } from "./utils";
+import { EDGE_COLORS, type ColorMode } from "./constants";
+import { DIRECTIONAL_EDGE_TYPES, edgeLabel, isStrongEdge, mixColor, nodeColorByMode, readableLabel } from "./utils";
 
 export type GraphSelection = {
   node: GraphNode;
@@ -29,6 +29,7 @@ export interface GraphCanvasProps {
   nodeScale: number;
   spacing: number;
   showWeakLinks: boolean;
+  hiddenEdgeTypes: Set<string>;
   layoutKey: string;
   onSelect: (nodeId: string) => void;
   onHover: (state: GraphHoverState) => void;
@@ -220,6 +221,7 @@ function buildVisibleGraph(
   data: GraphData,
   hiddenTypes: Set<string>,
   showWeakLinks: boolean,
+  hiddenEdgeTypes: Set<string>,
   positions: Map<string, { x: number; y: number }>,
   pinned: Set<string>,
   canvasSize: { width: number; height: number },
@@ -237,7 +239,8 @@ function buildVisibleGraph(
       (edge) =>
         visibleNodeIds.has(edge.source) &&
         visibleNodeIds.has(edge.target) &&
-        (showWeakLinks || isStrongEdge(edge)),
+        (showWeakLinks || isStrongEdge(edge)) &&
+        !hiddenEdgeTypes.has(edge.edge_type),
     )
     .map<RuntimeLink>((edge) => ({
       ...edge,
@@ -332,6 +335,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
     nodeScale,
     spacing,
     showWeakLinks,
+    hiddenEdgeTypes,
     layoutKey,
     onSelect,
     onHover,
@@ -387,12 +391,13 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
       data,
       hiddenTypes,
       showWeakLinks,
+      hiddenEdgeTypes,
       positionsRef.current,
       pinnedRef.current,
       size,
       cellTargetsRef.current,
     ),
-    [data, hiddenTypes, showWeakLinks, layoutVersion, size.width, size.height],
+    [data, hiddenTypes, showWeakLinks, hiddenEdgeTypes, layoutVersion, size.width, size.height],
   );
 
   const search = useMemo(() => buildSearchState(graph, searchQuery), [graph, searchQuery]);
@@ -559,16 +564,48 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
       const target = rawLink.target as RuntimeNode;
       if (!source || !target || !Number.isFinite(source.x) || !Number.isFinite(target.x)) return;
 
-      const strong = rawLink.edge_type === "prerequisite";
+      const strong = rawLink.edge_type === "prerequisite" || rawLink.edge_type === "prerequisiteOf";
+      const directional = DIRECTIONAL_EDGE_TYPES.has(rawLink.edge_type);
       const highlighted = highlightedLinkKeys.has(rawLink.key);
       const dimmed = (hover || searchQuery.trim()) && !highlighted;
-      const color = strong ? "#2563eb" : "#64748b";
+      const color = EDGE_COLORS[rawLink.edge_type] || "#64748b";
+
+      // 有向边(prerequisite/teaches):线段止于目标节点边界外,终点画箭头
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const length = Math.hypot(dx, dy) || 1;
+      let endX = target.x;
+      let endY = target.y;
+      if (directional) {
+        const gap = nodeRadius(target, nodeScale, globalScale) + 4.5 / globalScale;
+        endX = target.x - (dx / length) * gap;
+        endY = target.y - (dy / length) * gap;
+      }
+
       ctx.beginPath();
       ctx.moveTo(source.x, source.y);
-      ctx.lineTo(target.x, target.y);
+      ctx.lineTo(endX, endY);
       ctx.strokeStyle = dimmed ? hexAlpha(color, 0.08) : hexAlpha(color, strong ? 0.52 : 0.28);
       ctx.lineWidth = (highlighted ? 2.1 : strong ? 1.25 : 0.68) / globalScale;
       ctx.stroke();
+
+      if (directional) {
+        const angle = Math.atan2(dy, dx);
+        const arrowSize = (highlighted ? 8.5 : strong ? 6.5 : 5) / globalScale;
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+          endX - arrowSize * Math.cos(angle - Math.PI / 7),
+          endY - arrowSize * Math.sin(angle - Math.PI / 7),
+        );
+        ctx.lineTo(
+          endX - arrowSize * Math.cos(angle + Math.PI / 7),
+          endY - arrowSize * Math.sin(angle + Math.PI / 7),
+        );
+        ctx.closePath();
+        ctx.fillStyle = dimmed ? hexAlpha(color, 0.1) : hexAlpha(color, strong ? 0.75 : 0.45);
+        ctx.fill();
+      }
 
       const shouldShowEdgeLabel =
         highlighted ||
@@ -580,15 +617,15 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
       ctx.font = `${fontSize}px Inter, ui-sans-serif, system-ui, -apple-system, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      const mx = (source.x + target.x) / 2;
-      const my = (source.y + target.y) / 2;
+      const mx = (source.x + endX) / 2;
+      const my = (source.y + endY) / 2;
       ctx.strokeStyle = "rgba(255,255,255,0.88)";
       ctx.lineWidth = 2.8 / globalScale;
       ctx.strokeText(text, mx, my);
-      ctx.fillStyle = dimmed ? "rgba(100,116,139,0.45)" : strong ? "rgba(37,99,235,0.82)" : "rgba(71,85,105,0.72)";
+      ctx.fillStyle = dimmed ? "rgba(100,116,139,0.45)" : color;
       ctx.fillText(text, mx, my);
     },
-    [graph.links.length, highlightedLinkKeys, hover, searchQuery],
+    [graph.links.length, highlightedLinkKeys, hover, nodeScale, searchQuery],
   );
 
   const handleHover = useCallback(

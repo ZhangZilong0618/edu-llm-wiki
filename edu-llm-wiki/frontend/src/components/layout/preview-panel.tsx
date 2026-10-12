@@ -9,16 +9,9 @@ import type { WikiPage } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
 import { COMMON_RESEARCH_ACTIONS, PageTypeBadge, TYPE_RESEARCH_ACTIONS, type PageType, type ResearchAction } from "@/lib/page-type"
 import { ConceptView } from "@/components/preview/ConceptView"
+import { FactView } from "@/components/preview/FactView"
 import { FormulaView } from "@/components/preview/FormulaView"
 import { PrincipleView } from "@/components/preview/PrincipleView"
-import { SynthesisView } from "@/components/preview/SynthesisView"
-import { SourceView } from "@/components/preview/SourceView"
-import { ProcedureView } from "@/components/preview/ProcedureView"
-import { ExampleView } from "@/components/preview/ExampleView"
-import { MisconceptionView } from "@/components/preview/MisconceptionView"
-import { LearningPathView } from "@/components/preview/LearningPathView"
-import { LearningObjectiveView } from "@/components/preview/LearningObjectiveView"
-import { RubricView } from "@/components/preview/RubricView"
 
 type ResearchResult = {
   title: string
@@ -501,16 +494,9 @@ function PageBodyDispatch({ page, onEdit, onPractice }: { page: WikiPage; onEdit
   let body: ReactNode
   switch (page.page_type) {
     case "concept":            body = <ConceptView page={page} />; break
+    case "fact":               body = <FactView page={page} />; break
     case "formula":            body = <FormulaView page={page} />; break
     case "principle":          body = <PrincipleView page={page} />; break
-    case "procedure":          body = <ProcedureView page={page} />; break
-    case "example":            body = <ExampleView page={page} />; break
-    case "misconception":      body = <MisconceptionView page={page} />; break
-    case "synthesis":          body = <SynthesisView page={page} />; break
-    case "learning_path":      body = <LearningPathView page={page} />; break
-    case "learning_objective": body = <LearningObjectiveView page={page} />; break
-    case "rubric":             body = <RubricView page={page} />; break
-    case "source":             body = <SourceView page={page} />; break
     default:                   body = <Markdown>{page.content || "*No content*"}</Markdown>
   }
   return (

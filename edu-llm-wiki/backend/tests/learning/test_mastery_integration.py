@@ -95,9 +95,9 @@ def test_generated_related_sections_become_graph_edges(tmp_path, monkeypatch):
         project_id=project_id,
     )
     write_wiki_page(
-        "synthesis/overview.md",
+        "formulas/overview.md",
         title="Overview",
-        page_type="synthesis",
+        page_type="formula",
         content="# Overview\n\n## 相关知识\n\n- Conductivity\n",
         project_id=project_id,
     )

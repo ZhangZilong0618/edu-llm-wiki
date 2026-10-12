@@ -149,14 +149,7 @@ function buildStages(data: GraphData, statuses: Record<string, ItemStatus>): Lea
     let reason = "This is part of the main conceptual spine.";
     let actions: LearningItem["actions"] = ["read", "ask"];
 
-    if (type === "source" || type === "synthesis") {
-      stage = "overview";
-      reason =
-        type === "source"
-          ? "Use this to understand where the material came from."
-          : "Use this synthesis as a map before details.";
-      actions = ["read", "ask"];
-    } else if (isGap) {
+    if (isGap) {
       stage = "review";
       reason = "This item has weak graph connections, so it is worth checking deliberately.";
       actions = ["read", "ask", "review"];

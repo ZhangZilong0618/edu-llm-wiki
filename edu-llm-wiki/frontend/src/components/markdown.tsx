@@ -672,7 +672,15 @@ const components: any = {
   a({ href, children, ...props }: any) {
     const selectPage = useAppStore.getState().selectPage
     if (href?.startsWith("/wiki/")) {
-      const pagePath = href.replace("/wiki/", "")
+      // react-markdown 会把 href 里的非 ASCII 百分号编码(/wiki/%E5..%);
+      // 取出后先解码,否则 api.getPage 会二次编码导致 404。
+      // 解码失败(畸形 %)回退原文。
+      let pagePath = href.replace("/wiki/", "")
+      try {
+        pagePath = decodeURIComponent(pagePath)
+      } catch {
+        // keep raw
+      }
       return (
         <button
           onClick={() => selectPage(pagePath)}

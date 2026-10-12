@@ -7,11 +7,12 @@ import { Search, Filter, Layers, Tag, RotateCcw } from "lucide-react"
 import {
   COMMUNITY_COLORS,
   DEFAULT_HIDDEN_TYPES,
+  EDGE_COLORS,
   TYPE_COLORS,
   TYPE_LABELS,
   type ColorMode,
 } from "./constants"
-import { readableLabel } from "./utils"
+import { edgeLabel, readableLabel } from "./utils"
 import type { GraphData, GraphNode } from "@/types/wiki"
 
 interface Props {
@@ -20,6 +21,8 @@ interface Props {
   setHiddenTypes: (next: Set<string>) => void
   showWeakLinks: boolean
   setShowWeakLinks: (next: boolean) => void
+  hiddenEdgeTypes: Set<string>
+  setHiddenEdgeTypes: (next: Set<string>) => void
   colorMode: ColorMode
   setColorMode: (next: ColorMode) => void
   query: string
@@ -34,6 +37,8 @@ export function GraphFilterPanel(props: Props) {
     setHiddenTypes,
     showWeakLinks,
     setShowWeakLinks,
+    hiddenEdgeTypes,
+    setHiddenEdgeTypes,
     colorMode,
     setColorMode,
     query,
@@ -42,6 +47,15 @@ export function GraphFilterPanel(props: Props) {
   } = props
 
   const types = Array.from(new Set(data.nodes.map((n) => n.node_type || "unknown")))
+  const edgeTypeCounts = Array.from(
+    data.edges.reduce((acc, e) => {
+      const t = e.edge_type || "related"
+      acc.set(t, (acc.get(t) || 0) + 1)
+      return acc
+    }, new Map<string, number>()),
+  )
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count)
   const visibleNodes = data.nodes.filter((n) => !hiddenTypes.has(n.node_type || "unknown"))
   const matchedNodes = query
     ? data.nodes.filter((n) => {
@@ -109,6 +123,46 @@ export function GraphFilterPanel(props: Props) {
           />
           <span>Show non-strongly-connected edges (weight &lt; 8)</span>
         </label>
+      </div>
+
+      <div>
+        <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
+          Edge types
+        </div>
+        <div className="space-y-1">
+          {edgeTypeCounts.map(({ type, count }) => {
+            const visible = !hiddenEdgeTypes.has(type)
+            return (
+              <label
+                key={type}
+                className="flex cursor-pointer items-center gap-2 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={visible}
+                  onChange={() => {
+                    const next = new Set(hiddenEdgeTypes)
+                    if (visible) {
+                      next.add(type)
+                    } else {
+                      next.delete(type)
+                    }
+                    setHiddenEdgeTypes(next)
+                  }}
+                />
+                <span
+                  className="inline-block h-2 w-2 shrink-0 rounded-full border border-black/10"
+                  style={{ backgroundColor: EDGE_COLORS[type] || "#94a3b8" }}
+                  aria-hidden
+                />
+                <span className="truncate">{edgeLabel(type)}</span>
+                <span className="ml-auto shrink-0 text-[10px] text-[var(--muted-foreground)]">
+                  {count}
+                </span>
+              </label>
+            )
+          })}
+        </div>
       </div>
 
       <div>

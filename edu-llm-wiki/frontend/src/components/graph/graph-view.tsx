@@ -16,7 +16,7 @@ import { GraphMasteryBadge } from "./graph-mastery-badge";
 import { MaterialsGraphPanel, type MaterialsPageOption } from "./materials-graph-panel";
 import { useGraphData, type MasteryMap } from "./use-graph-data";
 import { useGraphEvents } from "./use-graph-events";
-import { DEFAULT_HIDDEN_TYPES, COMMUNITY_COLORS, type ColorMode } from "./constants";
+import { DEFAULT_HIDDEN_EDGE_TYPES, DEFAULT_HIDDEN_TYPES, COMMUNITY_COLORS, type ColorMode } from "./constants";
 import { groupNeighborsByNode, readableLabel } from "./utils";
 
 export function GraphView() {
@@ -40,6 +40,9 @@ export function GraphView() {
   const [search, setSearch] = useState("");
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set(DEFAULT_HIDDEN_TYPES));
   const [showWeakLinks, setShowWeakLinks] = useState(true);
+  const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(
+    () => new Set(DEFAULT_HIDDEN_EDGE_TYPES),
+  );
   const [colorMode, setColorMode] = useState<ColorMode>("type");
   const [nodeScale, setNodeScale] = useState(1);
   const [spacing, setSpacing] = useState(1);
@@ -69,7 +72,6 @@ export function GraphView() {
           (current) =>
             current ||
             options.find((page) => page.path.includes("Environmentally Assisted Cracking"))?.path ||
-            options.find((page) => page.type === "synthesis")?.path ||
             options[0]?.path ||
             "",
         );
@@ -274,6 +276,7 @@ export function GraphView() {
           nodeScale={nodeScale}
           spacing={spacing}
           showWeakLinks={showWeakLinks}
+          hiddenEdgeTypes={hiddenEdgeTypes}
           layoutKey={`${projectId}:${previewingMaterials ? articlePath : "all"}`}
           onSelect={(id: string) => {
             const node = nodesById[id] || null;
@@ -342,6 +345,8 @@ export function GraphView() {
             setHiddenTypes={setHiddenTypes}
             showWeakLinks={showWeakLinks}
             setShowWeakLinks={setShowWeakLinks}
+            hiddenEdgeTypes={hiddenEdgeTypes}
+            setHiddenEdgeTypes={setHiddenEdgeTypes}
             colorMode={colorMode}
             setColorMode={setColorMode}
             query={search}
@@ -349,6 +354,7 @@ export function GraphView() {
             onReset={() => {
               setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES));
               setShowWeakLinks(previewingMaterials);
+              setHiddenEdgeTypes(new Set(DEFAULT_HIDDEN_EDGE_TYPES));
               setColorMode("type");
               setSearch("");
               setNodeScale(1);

@@ -81,6 +81,28 @@ export function isStrongEdge(edge: { edge_type: string; weight: number }): boole
   );
 }
 
+/** 语义上有方向的边类型:画布上渲染为带箭头的有向边(source → target)。
+ *  本体的 14 个知识单元关系全部有向(名称与后端 RELATION_SPECS 一致)。 */
+export const DIRECTIONAL_EDGE_TYPES = new Set([
+  "prerequisite",
+  "teaches",
+  // 本体关系(Stage 1b)
+  "isA",
+  "partOf",
+  "prerequisiteOf",
+  "explains",
+  "appliesTo",
+  "exemplifies",
+  "supports",
+  "challenges",
+  "operationalizedBy",
+  "usesVariable",
+  "formalizes",
+  "derivedFrom",
+  "providesInputTo",
+  "calculates",
+]);
+
 export function mixColor(color: string, mix: string, ratio: number): string {
   if (!/^#[0-9a-f]{6}$/i.test(color)) color = "#94a3b8";
   if (!/^#[0-9a-f]{6}$/i.test(mix)) mix = "#e2e8f0";

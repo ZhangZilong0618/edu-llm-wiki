@@ -160,8 +160,14 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
             "evidence": cand.get("evidence", ""),
         })
 
-    edges = _break_prerequisite_cycles(edges)
     edges = prune_edges(edges, max_degree=MAX_GRAPH_DEGREE)
+
+    # 本体关系边(Stage 1b 抽取,relations.json):权威边,不过剪枝与
+    # 启发式打分——edge_type 即本体关系名(isA/partOf/prerequisiteOf/…),
+    # 前端按 DIRECTIONAL_EDGE_TYPES 渲染为有向箭头。graph_edges_for 已
+    # 按 title_to_id 解析,对不上的名字自动跳过。
+    from services.relation_extraction import graph_edges_for
+    edges.extend(graph_edges_for(project_id, title_to_id))
 
     nodes = []
     # Pre-compute degree so node radius reflects how central each concept
@@ -218,49 +224,6 @@ def build_graph(*, project_id: str = "default", force: bool = False) -> dict:
     store_insights(project_id, insights)
     return _shape_response(nodes, edges, communities=communities, insights=insights)
 
-
-def _break_prerequisite_cycles(edges: list[dict]) -> list[dict]:
-    """Downgrade prerequisite edges that participate in a directed cycle.
-
-    A prerequisite graph must be acyclic. LLM-extracted and wikilink-derived
-    prerequisites can occasionally contain cycles; rather than dropping the
-    connection, keep it as an undirected ``related`` edge.
-    """
-    graph: dict[str, set[str]] = defaultdict(set)
-    for edge in edges:
-        if edge.get("edge_type") == "prerequisite":
-            graph[edge["source"]].add(edge["target"])
-
-    state: dict[str, int] = {}
-    cyclic_nodes: set[str] = set()
-
-    def visit(node: str) -> None:
-        if state.get(node) == 1:
-            cyclic_nodes.add(node)
-            return
-        if state.get(node) == 2:
-            return
-        state[node] = 1
-        for nxt in graph.get(node, set()):
-            visit(nxt)
-        state[node] = 2
-
-    for node in list(graph):
-        visit(node)
-
-    if not cyclic_nodes:
-        return edges
-
-    out: list[dict] = []
-    for edge in edges:
-        if (
-            edge.get("edge_type") == "prerequisite"
-            and edge["source"] in cyclic_nodes
-            and edge["target"] in cyclic_nodes
-        ):
-            edge = {**edge, "edge_type": "related", "weight": min(0.8, edge.get("weight", 1.0))}
-        out.append(edge)
-    return out
 
 
 def get_node_neighborhood(node_id: str, depth: int = 1, *, project_id: str = "default") -> dict:

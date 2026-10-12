@@ -24,20 +24,16 @@ def sources_path(project_id: str = "default") -> Path:
 
 _INDEX_SECTION_NAMES: dict[str, str] = {
     "concept": "## 概念 (Concepts)",
+    "fact": "## 事实 (Facts)",
     "formula": "## 公式 (Formulas)",
     "principle": "## 原理 (Principles)",
-    "source": "## 来源 (Sources)",
-    "synthesis": "## 综合分析 (Synthesis)",
-    "inquiry": "## 问答记录 (Inquiries)",
-    "guide": "## 学习指引 (Guides)",
 }
 
 
 def ensure_dirs(project_id: str = "default"):
     """Create wiki directory structure."""
     dirs = [
-        "concepts", "formulas", "principles", "sources",
-        "synthesis", "inquiries", "guides", "media"
+        "concepts", "facts", "formulas", "principles", "media"
     ]
     wp = wiki_path(project_id)
     for d in dirs:
@@ -74,19 +70,15 @@ type: guide
 
 ## 页面类型
 - **concept**: 概念定义，包含定义、解释、示例
+- **fact**: 事实，单点为真的具体陈述（常数、具体物质数据、约定阈值）
 - **formula**: 数学公式，包含公式、变量说明、推导
 - **principle**: 原理/定理，包含陈述、条件、证明/推导
-- **source**: 来源摘要，对原始文档的总结
-- **synthesis**: 综合分析，跨来源的对比和综合
-- **inquiry**: 问答记录，保存的有价值问答
-- **guide**: 学习指引、质量提醒、维护规则和导入策略
 
 ## 命名规范
 - 概念页: `concepts/{概念名}.md`
+- 事实页: `facts/{事实名}.md`
 - 公式页: `formulas/{公式名}.md`
-- 综合页: `synthesis/{主题}.md`
-- 问答页: `inquiries/{问题标题}.md`
-- 指引页: `guides/{指引标题}.md`
+- 原理页: `principles/{原理名}.md`
 
 ## 链接语法
 使用 `[[页面路径]]` 语法进行交叉引用。
@@ -104,17 +96,11 @@ updated: ""
 
 ## 概念 (Concepts)
 
+## 事实 (Facts)
+
 ## 公式 (Formulas)
 
 ## 原理 (Principles)
-
-## 来源 (Sources)
-
-## 综合分析 (Synthesis)
-
-## 问答记录 (Inquiries)
-
-## 学习指引 (Guides)
 """, encoding="utf-8")
 
 

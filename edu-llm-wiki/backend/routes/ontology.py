@@ -16,7 +16,6 @@ from pydantic import BaseModel
 
 from services.ontology import PAGE_TEMPLATES, RELATION_SPECS, VERSION
 from services.ontology.abox import OntologyViolation, get_abox
-from services.ontology.derive import generate_tree
 from services.ontology.edu_onto import KNOWLEDGE_CLASS_NAMES
 from services.ontology.reasoning import build_learner_view
 
@@ -64,6 +63,14 @@ def reason(req: ReasonRequest, project_id: str = Query("default")):
 @router.get("/tree")
 def tree(project_id: str = Query("default"), learner: str | None = Query(None)):
     """五区目录树;带 learner 时附学习区(就绪/迁移/已掌握/预警)。"""
+    # derive 模块(S3)尚未实现,惰性导入避免阻塞整个后端启动
+    try:
+        from services.ontology.derive import generate_tree
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="derive.py 未实现:目录树派生器(v1.1 S3)待完成",
+        ) from exc
     try:
         abox = get_abox(project_id)
         return generate_tree(abox, learner=learner)
