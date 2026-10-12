@@ -30,7 +30,7 @@ export function GraphView() {
   useEffect(() => {
     if (error && toastShown.current !== error) {
       toastShown.current = error
-      toast({ type: "error", message: `图谱加载失败：${error}` })
+      toast({ type: "error", message: `Failed to load graph: ${error}` })
     }
   }, [error])
   const events = useGraphEvents(projectId);
@@ -68,7 +68,7 @@ export function GraphView() {
         setArticlePath(
           (current) =>
             current ||
-            options.find((page) => page.path.includes("环境敏感开裂"))?.path ||
+            options.find((page) => page.path.includes("Environmentally Assisted Cracking"))?.path ||
             options.find((page) => page.type === "synthesis")?.path ||
             options[0]?.path ||
             "",
@@ -99,11 +99,11 @@ export function GraphView() {
       setSelected(null);
       setPath(null);
       setShowWeakLinks(true);
-      toast({ type: "success", message: "文章关系图谱抽取完成" });
+      toast({ type: "success", message: "Article relationship graph extraction complete" });
     } catch (e: any) {
       const message = e?.message || String(e);
       setMaterialsError(message);
-      toast({ type: "error", message: `文章图谱抽取失败：${message}` });
+      toast({ type: "error", message: `Article graph extraction failed: ${message}` });
     } finally {
       setMaterialsLoading(false);
     }
@@ -160,7 +160,7 @@ export function GraphView() {
 
     const pagePath = typeof node.metadata?.path === "string" ? node.metadata.path : null;
     if (!pagePath) {
-      setNodeDetail({ text: "暂无节点描述。", loading: false });
+      setNodeDetail({ text: "No node description yet.", loading: false });
       return;
     }
 
@@ -171,7 +171,7 @@ export function GraphView() {
         if (!cancelled) setNodeDetail({ text: cleanNodeDescription(page.content), loading: false });
       })
       .catch(() => {
-        if (!cancelled) setNodeDetail({ text: "暂无节点描述。", loading: false });
+        if (!cancelled) setNodeDetail({ text: "No node description yet.", loading: false });
       });
     return () => { cancelled = true; };
   }, [selectedNodeData]);
@@ -217,20 +217,20 @@ export function GraphView() {
   if ((loading || materialsLoading) && !displayData) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
-        正在加载知识图谱…
+        Loading knowledge graph...
       </div>
     );
   }
   if (error && !displayData) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-rose-500">
-        <p>加载失败：{error}</p>
+        <p>Failed to load: {error}</p>
         <button
           type="button"
           onClick={reload}
           className="rounded-md border px-3 py-1 text-xs"
         >
-          重试
+          Retry
         </button>
       </div>
     );
@@ -240,15 +240,15 @@ export function GraphView() {
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-[var(--muted-foreground)]">
         <GitFork size={36} className="opacity-25" />
         <div>
-          <p className="font-medium text-foreground">还没有图谱数据</p>
-          <p className="mt-1 text-xs">先到 Import 上传文档并完成 ingest，节点和边会自动构建出来。</p>
+          <p className="font-medium text-foreground">No graph data yet</p>
+          <p className="mt-1 text-xs">First go to Import to upload documents and complete ingest; nodes and edges will be built automatically.</p>
         </div>
         <button
           type="button"
           onClick={() => setActiveView("sources")}
           className="mt-1 inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)]"
         >
-          去导入资料 →
+          Import Materials →
         </button>
       </div>
     )
@@ -285,13 +285,13 @@ export function GraphView() {
           <button
             onClick={reload}
             className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-[var(--background)] px-2 py-1 text-xs shadow-sm"
-            title="重新加载图谱"
+            title="Reload Graph"
           >
             <RefreshCw size={12} />
-            刷新
+            Refresh
           </button>
           <span className="min-w-0 rounded-md border bg-[var(--background)] px-2 py-1 text-[10px] text-[var(--muted-foreground)] shadow-sm">
-            {previewingMaterials ? "文章图谱" : "全库图谱"} · 节点 {visibleNodes.length}/{displayData.nodes.length} · 边 {displayData.edges.length}
+            {previewingMaterials ? "Article graph" : "Full Library Graph"} · {visibleNodes.length} nodes/{displayData.nodes.length} · {displayData.edges.length} edges
           </span>
         </div>
 
@@ -301,19 +301,19 @@ export function GraphView() {
               <div className="min-w-0">
                 <h3 className="truncate text-sm font-semibold">{selectedNodeData.node.label}</h3>
                 <p className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
-                  {selectedNodeData.node.node_type} · 邻居 {selectedNodeData.degree}
+                  {selectedNodeData.node.node_type} · {selectedNodeData.degree} neighbors
                 </p>
               </div>
               <button
                 onClick={() => setSelected(null)}
                 className="rounded p-1 text-slate-500 hover:bg-slate-100"
-                title="关闭"
+                title="Close"
               >
                 <X size={14} />
               </button>
             </div>
             <div className="max-h-40 overflow-y-auto px-3 py-2 text-[12px] leading-5 text-slate-700">
-              {nodeDetail?.loading ? "正在加载描述…" : nodeDetail?.text || "暂无节点描述。"}
+              {nodeDetail?.loading ? "Loading description…" : nodeDetail?.text || "No node description yet."}
             </div>
             {typeof selectedNodeData.node.metadata?.path === "string" && (
               <div className="border-t px-3 py-2">
@@ -322,7 +322,7 @@ export function GraphView() {
                   className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
                 >
                   <BookOpen size={12} />
-                  在 Wiki 中打开
+                  Open in Wiki
                 </button>
               </div>
             )}
@@ -387,7 +387,7 @@ export function GraphView() {
                 )}
               </div>
               <p className="text-[10px] text-[var(--muted-foreground)]">
-                {selectedNodeData.node.node_type} · 邻居 {selectedNodeData.degree}
+                {selectedNodeData.node.node_type} · {selectedNodeData.degree} neighbors
               </p>
               {selectedNodeData.neighbors.length > 0 && (
                 <ul className="space-y-0.5 text-[11px]">
@@ -417,10 +417,10 @@ export function GraphView() {
           {selected && (
             <section className="mt-4 space-y-2 border-t pt-3">
               <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-                <GitFork size={10} /> 学习路径
+                <GitFork size={10} /> Learning Path
               </div>
               {pathLoading ? (
-                <p className="text-[11px] text-[var(--muted-foreground)]">计算中…</p>
+                <p className="text-[11px] text-[var(--muted-foreground)]">Calculating…</p>
               ) : path && path.steps.length > 0 ? (
                 <ol className="space-y-1 text-[11px]">
                   {path.steps.map((step, i) => (
@@ -436,11 +436,11 @@ export function GraphView() {
                     </li>
                   ))}
                   <li className="block pt-1 text-[10px] text-[var(--muted-foreground)]">
-                    预计 {path.estimated_total_minutes.toFixed(0)} 分钟
+                    ≈ {path.estimated_total_minutes.toFixed(0)} min
                   </li>
                 </ol>
               ) : (
-                <p className="text-[11px] text-[var(--muted-foreground)]">无前置路径</p>
+                <p className="text-[11px] text-[var(--muted-foreground)]">No prerequisite path</p>
               )}
             </section>
           )}
@@ -448,7 +448,7 @@ export function GraphView() {
           {events.length > 0 && (
             <section className="mt-4 space-y-1 border-t pt-3">
               <div className="text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-                实时事件
+                Real-time events
               </div>
               <ul className="space-y-0.5 text-[10px] text-[var(--muted-foreground)]">
                 {events.slice(0, 5).map((e) => (
@@ -525,13 +525,13 @@ function cleanNodeDescription(content: string): string {
     .replace(/\{\{[^}]+\}\}/g, "")
     .trim();
 
-  const definitionMatch = withoutRefs.match(/^##\s*定义\s*\n?([\s\S]*?)(?=\n##\s|$)/im);
-  const explanationMatch = withoutRefs.match(/^##\s*(?:解释|说明)\s*\n?([\s\S]*?)(?=\n##\s|$)/im);
+  const definitionMatch = withoutRefs.match(/^##\s*(?:定义|Definition)\s*\n?([\s\S]*?)(?=\n##\s|$)/im);
+  const explanationMatch = withoutRefs.match(/^##\s*(?:解释|说明|Explanation|How it works)\s*\n?([\s\S]*?)(?=\n##\s|$)/im);
   const paragraph = (definitionMatch?.[1] || explanationMatch?.[1] || withoutRefs)
     .replace(/^#+\s*/gm, "")
     .replace(/\n+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  return paragraph.length > 360 ? `${paragraph.slice(0, 360)}…` : paragraph || "暂无节点描述。";
+  return paragraph.length > 360 ? `${paragraph.slice(0, 360)}…` : paragraph || "No node description yet.";
 }

@@ -181,7 +181,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateIngestProgress: (fn) => set((s) => ({ ingestProgress: fn(s.ingestProgress) })),
 
   operations: {},
-  beginOperation: (key, label = "处理中") => set((s) => ({
+  beginOperation: (key, label = "Processing") => set((s) => ({
     operations: {
       ...s.operations,
       [key]: { label, startedAt: Date.now() },

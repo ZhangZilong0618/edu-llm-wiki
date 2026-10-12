@@ -18,19 +18,19 @@ const TYPE_COLORS: Record<string, string> = {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  concept: "概念",
-  formula: "公式",
-  principle: "原理",
-  source: "来源",
-  synthesis: "综合",
-  unknown: "其他",
+  concept: "Concept",
+  formula: "Formula",
+  principle: "Principle",
+  source: "Source",
+  synthesis: "Comprehensive",
+  unknown: "Other",
 }
 
 const EDGE_LABELS: Record<string, string> = {
-  prerequisite: "前置知识",
-  direct: "直接引用",
-  source: "同一来源",
-  related: "相关",
+  prerequisite: "Prerequisite Knowledge",
+  direct: "Direct Citation",
+  source: "Same Source",
+  related: "Related",
 }
 
 const COMMUNITY_COLORS = [
@@ -58,7 +58,7 @@ function typeLabel(type: string): string {
 }
 
 function edgeLabel(type: string): string {
-  return EDGE_LABELS[type] || "相关"
+  return EDGE_LABELS[type] || "Related"
 }
 
 function readableLabel(label: string, max = 22): string {
@@ -702,7 +702,7 @@ export function GraphView() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--muted-foreground)]">
         <RefreshCw className="h-8 w-8 animate-spin opacity-50" />
-        <p className="text-sm">正在整理知识图谱...</p>
+        <p className="text-sm">Organizing the knowledge graph...</p>
       </div>
     )
   }
@@ -720,8 +720,8 @@ export function GraphView() {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
         <div className="text-center">
-          <p className="text-lg mb-2">还没有图谱数据</p>
-          <p>导入文献并生成 wiki 后，这里会显示知识点之间的关系。</p>
+          <p className="text-lg mb-2">No graph data yet</p>
+          <p>After importing literature and generating the wiki, the relationships between knowledge points will be shown here.</p>
         </div>
       </div>
     )
@@ -734,7 +734,7 @@ export function GraphView() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Network className="h-4 w-4 text-[var(--muted-foreground)]" />
-            <span className="text-sm font-medium">知识图谱</span>
+            <span className="text-sm font-medium">Knowledge Graph</span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
             <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">
@@ -750,7 +750,7 @@ export function GraphView() {
             )}
             {!showWeakLinks && weakHidden > 0 && (
               <span className="rounded bg-slate-500/10 px-1.5 py-0.5">
-                弱关系已收起
+                Weak relationships collapsed
               </span>
             )}
           </div>
@@ -767,7 +767,7 @@ export function GraphView() {
                 onChange={(e) => setGraphSearch(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Escape") { setGraphSearch(""); setSearchOpen(false) } }}
                 className="h-7 w-full rounded-md border bg-[var(--background)] pl-7 pr-7 text-xs outline-none focus:border-[var(--primary)]"
-                placeholder="搜索知识点..."
+                placeholder="Search knowledge points..."
               />
               <button
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -785,7 +785,7 @@ export function GraphView() {
           {/* Filter toggle */}
           <button
             onClick={() => setShowFilters((v) => !v)}
-            title="筛选显示内容"
+            title="Filter Displayed Content"
             className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${showFilters ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
           >
             <Filter className="h-3 w-3" />
@@ -795,7 +795,7 @@ export function GraphView() {
           {filtersActive && (
             <button
               onClick={() => { setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES)); setShowWeakLinks(false); setNodeScale(1); setSpacing(1) }}
-              title="恢复默认视图"
+              title="Restore Default View"
               className="h-7 px-2 text-xs rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] flex items-center gap-1"
             >
               <RotateCcw className="h-3 w-3" />
@@ -805,14 +805,14 @@ export function GraphView() {
           {/* Color mode */}
           <button
             onClick={() => setColorMode("type")}
-            title="按知识类型着色"
+            title="Color by Knowledge Type"
             className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${colorMode === "type" ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
           >
             <Tag className="h-3 w-3" />
           </button>
           <button
             onClick={() => setColorMode("community")}
-            title="按知识簇着色"
+            title="Color by Knowledge Cluster"
             className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${colorMode === "community" ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
           >
             <Layers className="h-3 w-3" />
@@ -822,7 +822,7 @@ export function GraphView() {
           {hasInsights && (
             <button
               onClick={() => setShowInsights((v) => !v)}
-              title="查看图谱诊断"
+              title="View Graph Diagnostics"
               className={`h-7 px-2 text-xs rounded flex items-center gap-1 ${showInsights ? "bg-[var(--muted)]" : "hover:bg-[var(--accent)] text-[var(--muted-foreground)]"}`}
             >
               {data.insights.length}
@@ -837,7 +837,7 @@ export function GraphView() {
           {!visibleData || visibleData.nodes.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-[var(--muted-foreground)]">
               <Search className="h-8 w-8 opacity-40" />
-              <p className="text-sm">{searchActive ? "没有匹配的知识点" : "当前筛选下没有可见节点"}</p>
+              <p className="text-sm">{searchActive ? "No matching knowledge points" : "No visible nodes under the current filter"}</p>
             </div>
           ) : (
             <SigmaContainer
@@ -883,7 +883,7 @@ export function GraphView() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1 font-semibold">
                   <Filter className="h-3 w-3" />
-                  图谱筛选
+                  Graph Filters
                 </div>
               </div>
 
@@ -894,15 +894,15 @@ export function GraphView() {
                   onChange={(e) => setShowWeakLinks(e.target.checked)}
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block font-medium">显示弱关系</span>
-                  <span className="block text-[10px] text-[var(--muted-foreground)]">默认收起来源相同、相关度较低的边</span>
+                  <span className="block font-medium">Show weak relations</span>
+                  <span className="block text-[10px] text-[var(--muted-foreground)]">By default, collapse edges with the same source and lower relevance</span>
                 </span>
               </label>
 
               {/* Node scale slider */}
               <label className="block space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-[var(--muted-foreground)]">节点大小</span>
+                  <span className="text-[var(--muted-foreground)]">Node Size</span>
                   <span>{Math.round(nodeScale * 100)}%</span>
                 </div>
                 <input
@@ -916,7 +916,7 @@ export function GraphView() {
               {/* Spacing slider */}
               <label className="block space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-[var(--muted-foreground)]">间距</span>
+                  <span className="text-[var(--muted-foreground)]">Spacing</span>
                   <span>{Math.round(spacing * 100)}%</span>
                 </div>
                 <input
@@ -929,7 +929,7 @@ export function GraphView() {
 
               {/* Type toggles */}
               <div className="space-y-1">
-                <div className="font-medium text-[var(--muted-foreground)]">知识类型</div>
+                <div className="font-medium text-[var(--muted-foreground)]">Knowledge Type</div>
                 {Object.entries(typeCounts).map(([type, count]) => (
                   <label key={type} className="flex items-center gap-1.5">
                     <input
@@ -956,7 +956,7 @@ export function GraphView() {
           <div className="absolute bottom-3 left-3 rounded-lg border bg-[var(--background)]/90 backdrop-blur-sm px-2.5 py-1.5 text-xs shadow-sm max-w-[220px]">
             <div className="flex items-center gap-1 mb-1">
               <span className="font-semibold text-xs">
-                {colorMode === "type" ? "知识类型" : "知识簇"}
+                {colorMode === "type" ? "Knowledge Type" : "Knowledge cluster"}
               </span>
             </div>
             {colorMode === "type"
@@ -993,7 +993,7 @@ export function GraphView() {
         {showInsights && hasInsights && (
           <div className="w-72 shrink-0 border-l bg-[var(--background)] overflow-y-auto">
             <div className="flex items-center justify-between px-3 py-2 border-b">
-              <span className="text-sm font-medium">图谱诊断</span>
+              <span className="text-sm font-medium">Graph Diagnosis</span>
               <button onClick={() => setShowInsights(false)} className="p-0.5 rounded hover:bg-[var(--muted)]">
                 <X className="h-4 w-4" />
               </button>
@@ -1042,7 +1042,7 @@ export function GraphView() {
                 <span className="text-xs font-medium">{typeLabel(selectedNodeData.node.node_type)}</span>
                 {selectedNodeData.node.community >= 0 && (
                   <span className="text-xs text-[var(--muted-foreground)] ml-auto">
-                    知识簇 {selectedNodeData.node.community + 1}
+                    Knowledge cluster {selectedNodeData.node.community + 1}
                   </span>
                 )}
               </div>
@@ -1051,11 +1051,11 @@ export function GraphView() {
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-md bg-[var(--muted)] p-2 text-center">
                   <div className="text-lg font-semibold">{selectedNodeData.degree}</div>
-                  <div className="text-xs text-[var(--muted-foreground)]">关联</div>
+                  <div className="text-xs text-[var(--muted-foreground)]">Related</div>
                 </div>
                 <div className="rounded-md bg-[var(--muted)] p-2 text-center">
                   <div className="text-lg font-semibold">{selectedNodeData.node.size}</div>
-                  <div className="text-xs text-[var(--muted-foreground)]">引用</div>
+                  <div className="text-xs text-[var(--muted-foreground)]">Citation</div>
                 </div>
               </div>
 
@@ -1068,14 +1068,14 @@ export function GraphView() {
                 className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md border hover:bg-[var(--accent)] transition-colors"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
-                打开页面
+                Open Page
               </button>
 
               {/* Neighbors */}
               {selectedNodeData.neighbors.length > 0 && (
                 <div>
                   <div className="text-xs font-medium text-[var(--muted-foreground)] mb-2">
-                    相关知识点 ({selectedNodeData.neighbors.length})
+                    Related知识点 ({selectedNodeData.neighbors.length})
                   </div>
                   <div className="space-y-1 max-h-60 overflow-y-auto">
                     {selectedNodeData.neighbors.map(({ node: n, edgeType }) => (

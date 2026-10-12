@@ -16,6 +16,9 @@ openpyxl>=3.1.0
 # Graph (Louvain built into networkx >= 3.4)
 networkx>=3.4.0
 
+# Ontology (EDU-ONTO v4; HermiT/Pellet reasoners bundled, need Java runtime)
+owlready2>=0.51
+
 # Vector search
 lancedb>=0.17.0
 sentence-transformers>=3.0.0

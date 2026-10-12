@@ -1,6 +1,6 @@
 /**
- * Short, file-name-only label for a wiki path (`concepts/Seebeck效应.md` →
- * `Seebeck效应`). Used in card lists, chips, and frontmatter footers.
+ * Short, file-name-only label for a wiki path (`concepts/Seebeck-effect.md` →
+ * `Seebeck effect`). Used in card lists, chips, and frontmatter footers.
  */
 export function pathLabel(path: string): string {
   return path.split("/").pop()?.replace(/\.md$/, "") ?? path
@@ -18,22 +18,22 @@ function formulaDisplayTitle(title: string, path: string) {
   const compact = clean.replace(/\s+/g, "")
   const plain = compact.replace(/\\/g, "")
   const patterns: [RegExp, string][] = [
-    [/2d(?:\\sin|sin).*n(?:\\lambda|lambda|λ)/i, "布拉格定律"],
-    [/J=.*(?:\\sigma|sigma|σ).*E/i, "电流密度与电场关系"],
-    [/(?:\\rho|rho|ρ)=?(?:m\/V|\\frac\{m\}\{V\}|frac\{m\}\{V\})|m\/V|frac\{m\}\{V\}/i, "密度"],
-    [/(?:\\DeltaV|DeltaV|ΔV).*?(?:\\alpha|alpha|α).*?(?:\\DeltaT|DeltaT|ΔT)/i, "塞贝克效应"],
-    [/Q=.*C.*(?:\\DeltaT|DeltaT|ΔT)/i, "热容关系"],
-    [/M=.*(?:\\chi|chi|χ).*H/i, "磁化率关系"],
-    [/(?:\\ln|ln).*I\/I_?0.*(?:\\alpha|alpha|α).*x/i, "吸收定律"],
-    [/Kohn-?Sham|H_?\{?\{?K\s*S/i, "Kohn-Sham 方程"],
-    [/a=b=c/i, "立方晶系轴长关系"],
-    [/a=b(?:\\+ne|\\ne|ne|≠|!=)c/i, "四方晶系轴长关系"],
-    [/(?:\\alpha|alpha|α)=(?:\\beta|beta|β)=(?:\\gamma|gamma|γ)=90/i, "晶轴夹角关系"],
+    [/2d(?:\\sin|sin).*n(?:\\lambda|lambda|λ)/i, "Bragg's law"],
+    [/J=.*(?:\\sigma|sigma|σ).*E/i, "Relationship between current density and electric field"],
+    [/(?:\\rho|rho|ρ)=?(?:m\/V|\\frac\{m\}\{V\}|frac\{m\}\{V\})|m\/V|frac\{m\}\{V\}/i, "Density"],
+    [/(?:\\DeltaV|DeltaV|ΔV).*?(?:\\alpha|alpha|α).*?(?:\\DeltaT|DeltaT|ΔT)/i, "Seebeck effect"],
+    [/Q=.*C.*(?:\\DeltaT|DeltaT|ΔT)/i, "Heat Capacity Relation"],
+    [/M=.*(?:\\chi|chi|χ).*H/i, "Susceptibility relation"],
+    [/(?:\\ln|ln).*I\/I_?0.*(?:\\alpha|alpha|α).*x/i, "Absorption Law"],
+    [/Kohn-?Sham|H_?\{?\{?K\s*S/i, "Kohn-Sham equations"],
+    [/a=b=c/i, "Cubic crystal system axis length relationship"],
+    [/a=b(?:\\+ne|\\ne|ne|≠|!=)c/i, "Tetragonal crystal system axis length relationship"],
+    [/(?:\\alpha|alpha|α)=(?:\\beta|beta|β)=(?:\\gamma|gamma|γ)=90/i, "Crystal Axis Angle Relationships"],
   ]
   const matched = patterns.find(([pattern]) => pattern.test(compact) || pattern.test(plain))
   if (matched) return matched[1]
   const fallback = decodeURIComponent(path.split("/").pop()?.replace(/\.md$/, "") || "").replace(/_/g, " ")
-  return looksLikeFormulaTitle(fallback) ? "物理量关系" : fallback
+  return looksLikeFormulaTitle(fallback) ? "Physical quantity relation" : fallback
 }
 
 function looksLikeFormulaTitle(title: string) {

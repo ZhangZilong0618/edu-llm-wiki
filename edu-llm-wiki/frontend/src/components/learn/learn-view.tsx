@@ -276,7 +276,7 @@ export function LearnView() {
         if (!cancelled) setData(graph);
       })
       .catch((e) => {
-        const message = e?.message || "加载图谱失败"
+        const message = e?.message || "Failed to load graph"
         if (!cancelled) {
           setError(message)
           toast({ type: "error", message })
@@ -320,7 +320,7 @@ export function LearnView() {
         {
           id: nextTutorId(),
           role: "assistant",
-          content: `我会围绕 **${item.title}** 辅导你。你可以问“这页怎么学”“给我举例”“我哪里没理解”，也可以直接贴你的困惑。`,
+          content: `I will tutor you on **${item.title}**. Ask things like "how do I study this page", "give me an example", or "here is what I don't get" — or just paste your confusion.`,
         },
       ]);
       setTutorInput("");
@@ -350,12 +350,12 @@ export function LearnView() {
         {
           role: "user",
           content: [
-            `你是学习路径中的 Tutor，当前学习节点是：${tutorItem.title}`,
-            `节点类型：${tutorItem.type}`,
-            `学习原因：${tutorItem.reason}`,
-            tutorItem.prerequisites.length ? `前置知识：${tutorItem.prerequisites.join("、")}` : "",
+            `You are the tutor in the Learning Path. Current node: ${tutorItem.title}`,
+            `Node type: ${tutorItem.type}`,
+            `Reason: ${tutorItem.reason}`,
+            tutorItem.prerequisites.length ? `Prerequisite Knowledge：${tutorItem.prerequisites.join("、")}` : "",
             "",
-            `学生问题：${userText}`,
+            `Student question: ${userText}`,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -459,13 +459,13 @@ export function LearnView() {
         <div>
           <GraduationCap className="h-12 w-12 mx-auto mb-3 opacity-20" />
           <p className="text-sm font-medium">No learning path available</p>
-          <p className="text-xs mt-1">导入资料并完成 ingest，系统会为你构建专属学习路径。</p>
+          <p className="text-xs mt-1">Import materials and complete ingest; the system will build a personalized learning path for you.</p>
           <button
             type="button"
             onClick={() => setActiveView("sources")}
             className="mt-3 inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)]"
           >
-            去导入资料 →
+            Import Materials →
           </button>
         </div>
       </div>

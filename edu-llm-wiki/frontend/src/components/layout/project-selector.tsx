@@ -206,7 +206,7 @@ export function ProjectSelector() {
                   value={name}
                   onChange={handleInputChange}
                   onKeyDown={handleCreateKey}
-                  placeholder="e.g. 课程资料 or course-notes"
+                  placeholder="e.g. course materials or course-notes"
                   className="w-full rounded-md border px-2.5 py-1.5 text-xs bg-[var(--background)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
                 />
                 <div className="flex gap-1.5">

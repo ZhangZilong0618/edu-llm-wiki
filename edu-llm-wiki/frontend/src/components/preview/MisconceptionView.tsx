@@ -1,7 +1,7 @@
 /**
- * Misconception page view (B 组应用页).
+ * Misconception page view (B 组Application page).
  *
- * 错误说法 / 正确理解 / 诊断题 三段对比，遵循 v2 schema 的
+ * Incorrect Statement / Correct Understanding / Diagnostic question 三段对比，遵循 v2 schema 的
  * `common_misconceptions` 字段命名以保证字段复用。
  */
 import { BodyShell } from "./BodyShell"
@@ -10,9 +10,9 @@ import { extractSection } from "@/lib/page-sections"
 import type { WikiPage } from "@/types/wiki"
 
 export function MisconceptionView({ page }: { page: WikiPage }) {
-  const wrong = extractSection(page.content, ["错误说法", "Wrong claim", "Misconception"])
-  const right = extractSection(page.content, ["正确理解", "Correct understanding", "Right"])
-  const diagnostic = extractSection(page.content, ["诊断题", "Diagnostic"])
+  const wrong = extractSection(page.content, ["Incorrect Statement", "Wrong claim", "Misconception"])
+  const right = extractSection(page.content, ["Correct Understanding", "Correct understanding", "Right"])
+  const diagnostic = extractSection(page.content, ["Diagnostic question", "Diagnostic"])
 
   return (
     <BodyShell
@@ -21,17 +21,17 @@ export function MisconceptionView({ page }: { page: WikiPage }) {
     >
       <div className="mb-3 grid gap-3 sm:grid-cols-2">
         {wrong && (
-          <Card title="错误说法 / Wrong claim" accent="text-rose-600" className="sm:col-span-2">
+          <Card title="Wrong claim" accent="text-rose-600" className="sm:col-span-2">
             <MarkdownSlice markdown={wrong} />
           </Card>
         )}
         {right && (
-          <Card title="正确理解 / Correct understanding" accent="text-emerald-600" className="sm:col-span-2">
+          <Card title="Correct understanding" accent="text-emerald-600" className="sm:col-span-2">
             <MarkdownSlice markdown={right} />
           </Card>
         )}
         {diagnostic && (
-          <Card title="诊断题 / Diagnostic" accent="text-rose-600" className="sm:col-span-2">
+          <Card title="Diagnostic" accent="text-rose-600" className="sm:col-span-2">
             <MarkdownSlice markdown={diagnostic} />
           </Card>
         )}

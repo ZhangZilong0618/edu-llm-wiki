@@ -23,16 +23,16 @@ import {
 } from "lucide-react"
 
 const QUESTION_TYPES = [
-  { id: "multiple_choice", label: "选择" },
-  { id: "fill_blank", label: "填空" },
-  { id: "short_answer", label: "简答" },
+  { id: "multiple_choice", label: "Select" },
+  { id: "fill_blank", label: "Fill in the blank" },
+  { id: "short_answer", label: "Short answer" },
 ]
 
 const DIFFICULTIES = [
-  { id: "mixed", label: "混合" },
-  { id: "basic", label: "基础" },
-  { id: "understanding", label: "理解" },
-  { id: "application", label: "应用" },
+  { id: "mixed", label: "Mixed" },
+  { id: "basic", label: "Basic" },
+  { id: "understanding", label: "Understood" },
+  { id: "application", label: "Apply" },
 ]
 
 function answerToText(value: string | string[] | undefined): string {
@@ -43,7 +43,7 @@ function answerToText(value: string | string[] | undefined): string {
 function questionTypeSummary(session: TestSession): string {
   const counts: Record<string, number> = {}
   for (const q of session.questions) {
-    const label = q.type === "multiple_choice" ? "选择" : q.type === "fill_blank" ? "填空" : "简答"
+    const label = q.type === "multiple_choice" ? "Select" : q.type === "fill_blank" ? "Fill in the blank" : "Short answer"
     counts[label] = (counts[label] || 0) + 1
   }
   return Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(" · ")
@@ -62,7 +62,7 @@ function formatDuration(ms: number): string {
 }
 
 function scoreLabel(session: TestSummary | TestSession): string {
-  if (session.score == null || session.max_score == null) return "未提交"
+  if (session.score == null || session.max_score == null) return "Not submitted"
   return `${session.score}/${session.max_score}`
 }
 
@@ -73,9 +73,9 @@ function levelClass(level: string): string {
 }
 
 function questionTypeLabel(type: string): string {
-  if (type === "multiple_choice") return "选择题"
-  if (type === "fill_blank") return "填空题"
-  return "简答题"
+  if (type === "multiple_choice") return "Multiple choice"
+  if (type === "fill_blank") return "Fill-in-the-Blank"
+  return "Short answer"
 }
 
 function SourceLinks({ question }: { question: TestSession["questions"][number] }) {
@@ -106,7 +106,7 @@ function SourceLinks({ question }: { question: TestSession["questions"][number] 
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-xs">
-      <span className="text-[var(--muted-foreground)]">考察来源</span>
+      <span className="text-[var(--muted-foreground)]">Source Under Test</span>
       {question.related_page && (
         <button
           onClick={() => selectPage(question.related_page!)}
@@ -188,13 +188,13 @@ export function TestsView() {
   const folderGroups = useMemo(() => {
     const groups = new Map<string, TestSummary[]>()
     for (const session of filteredSessions) {
-      const key = session.folder || "未分类"
+      const key = session.folder || "Uncategorized"
       if (!groups.has(key)) groups.set(key, [])
       groups.get(key)!.push(session)
     }
     return Array.from(groups.entries()).sort(([a], [b]) => {
-      if (a === "未分类") return 1
-      if (b === "未分类") return -1
+      if (a === "Uncategorized") return 1
+      if (b === "Uncategorized") return -1
       return a.localeCompare(b, "zh-Hans-CN")
     })
   }, [filteredSessions])
@@ -288,21 +288,21 @@ export function TestsView() {
   const moveSessionFolder = async (sessionId: string, nextFolder: string) => {
     let folder = nextFolder
     if (folder === "__new__") {
-      folder = typeof window === "undefined" ? "" : window.prompt("输入新的测试目录，可用 / 表示层级，例如：期末复习/第二章") || ""
+      folder = typeof window === "undefined" ? "" : window.prompt("Enter a new test directory; use / for hierarchy, e.g. Final Review/Chapter 2") || ""
       if (!folder.trim()) return
     }
     try {
       const updated = await api.updateTest(sessionId, { folder: folder.trim() || null })
       setSessions((prev) => prev.map((item) => (item.id === updated.id ? { ...item, folder: updated.folder } : item)))
       if (activeSession?.id === updated.id) setActiveSession(updated)
-      toast({ type: "success", message: updated.folder ? `已移动到「${updated.folder}」` : "已移回未分类" })
+      toast({ type: "success", message: updated.folder ? `已移动到「${updated.folder}」` : "已移回Uncategorized" })
     } catch (e: any) {
       toast({ type: "error", message: `移动测试失败：${e?.message || e}` })
     }
   }
 
   const createTest = async () => {
-    beginOperation("tests:create", "生成测试中")
+    beginOperation("tests:create", "Generating test")
     try {
       const session = await api.createTest({
         ...form,
@@ -324,7 +324,7 @@ export function TestsView() {
       await loadData()
       toast({ type: "success", message: `已生成 ${session.questions.length} 道测试题` })
     } catch (e: any) {
-      toast({ type: "error", message: `生成测试失败: ${e?.message || e}` })
+      toast({ type: "error", message: `Generate Test失败: ${e?.message || e}` })
     } finally {
       endOperation("tests:create")
     }
@@ -376,7 +376,7 @@ export function TestsView() {
 
   const deleteSession = async (id: string) => {
     const confirmed = typeof window === "undefined"
-      || window.confirm("删除该测试会话将同时清除历史答题记录，确定继续吗？")
+      || window.confirm("Deleting this test session will also clear historical answer records. Are you sure you want to continue?")
     if (!confirmed) return
     try {
       await api.deleteTest(id)
@@ -387,9 +387,9 @@ export function TestsView() {
         setConfidences({})
       }
       await loadData()
-      toast({ type: "success", message: "测试已删除" })
+      toast({ type: "success", message: "Test deleted" })
     } catch (e: any) {
-      toast({ type: "error", message: `删除测试失败: ${e?.message || e}` })
+      toast({ type: "error", message: `Delete Test失败: ${e?.message || e}` })
     }
   }
 
@@ -400,9 +400,9 @@ export function TestsView() {
   const regenerateFromWrong = async () => {
     if (!activeSession) return
     if (typeof window === "undefined") return
-    const confirmed = window.confirm("根据本场测试的错题，生成一份只含错题的新测试？")
+    const confirmed = window.confirm("Generate a new test containing only the wrong answers from this test?")
     if (!confirmed) return
-    beginOperation(`tests:regen:${activeSession.id}`, "生成错题测试")
+    beginOperation(`tests:regen:${activeSession.id}`, "Generate Mistake Test")
     try {
       const session = await api.regenerateFromWrong(activeSession.id, userId)
       setActiveSession(session)
@@ -414,9 +414,9 @@ export function TestsView() {
       setSubmitSummary(null)
       setPendingTestPagePath(null)
       await loadData()
-      toast({ type: "success", message: `已生成错题测试：${session.questions.length} 题` })
+      toast({ type: "success", message: `已Generate Mistake Test：${session.questions.length} 题` })
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || "生成错题测试失败" })
+      toast({ type: "error", message: e?.message || "Failed to generate wrong-answer test" })
     } finally {
       endOperation(`tests:regen:${activeSession.id}`)
     }
@@ -425,7 +425,7 @@ export function TestsView() {
   const resetAnswers = () => {
     if (typeof window === "undefined") return
     if (!activeSession) return
-    const confirmed = window.confirm("清空本场测试的所有答案和把握，重新开始作答？已提交的成绩不会变。")
+    const confirmed = window.confirm("Clear all answers and confidence for this test and start over? Submitted scores will not change.")
     if (!confirmed) return
     setAnswers({})
     setConfidences({})
@@ -434,7 +434,7 @@ export function TestsView() {
     setStartedAt(Date.now())
     setSubmitSummary(null)
     clearDraft(userId, activeSession.id)
-    toast({ type: "success", message: "已清空答案，可以重新作答" })
+    toast({ type: "success", message: "Answer cleared; you can answer again" })
   }
 
   const exportTest = () => {
@@ -461,16 +461,16 @@ export function TestsView() {
       const conf = a?.confidence
       const dur = submitSummary?.perQuestion[i]?.ms
       lines.push(`## Q${i + 1}. ${q.prompt.replace(/\n+/g, " ").slice(0, 200)}`)
-      lines.push(`- 类型: ${q.type}`)
+      lines.push(`- Type: ${q.type}`)
       if (q.options.length > 0) lines.push(`- 选项: ${q.options.join(" | ")}`)
-      lines.push(`- 参考答案: ${q.answer}`)
-      lines.push(`- 学生答案: ${a ? answerToText(a.user_answer) : "(未作答)"}`)
+      lines.push(`- Reference Answer: ${q.answer}`)
+      lines.push(`- 学生Answer: ${a ? answerToText(a.user_answer) : "(Unanswered)"}`)
       if (a) lines.push(`- 得分: ${a.score}/${a.max_score} · 等级: ${a.level}`)
       if (conf != null) lines.push(`- 把握: ${conf}/5`)
       if (dur != null) lines.push(`- 用时: ${formatDuration(dur)}`)
       if (q.explanation) {
         lines.push("")
-        lines.push("**解析**")
+        lines.push("**Analysis**")
         lines.push(q.explanation)
       }
       lines.push("")
@@ -484,13 +484,13 @@ export function TestsView() {
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
-    toast({ type: "success", message: "测试结果已导出" })
+    toast({ type: "success", message: "Test results exported" })
   }
 
   const submit = async () => {
     if (!activeSession) return
     const key = `tests:submit:${activeSession.id}`
-    beginOperation(key, "提交测试中")
+    beginOperation(key, "Submitting test")
     const finishAt = Date.now()
     try {
       const session = await api.submitTest(activeSession.id, answers, confidences, userId)
@@ -516,7 +516,7 @@ export function TestsView() {
       const correctCount = (session.attempts || []).length - wrongCount
       toast({
         type: "success",
-        message: `已提交 ${scoreLabel(session)} · 答对 ${correctCount} · 答错 ${wrongCount}`,
+        message: `Submitted ${scoreLabel(session)} · Correct ${correctCount} · Incorrect ${wrongCount}`,
       })
       // After the auto-refit that runs in submit_test, check whether the
       // user newly mastered any KC and celebrate.
@@ -526,7 +526,7 @@ export function TestsView() {
         if (mastered > 0) {
           toast({
             type: "success",
-            message: `🎉 已掌握 ${mastered} / ${summary?.n_kcs_tracked ?? mastered} 个知识组件`,
+            message: `🎉 Mastered ${mastered} / ${summary?.n_kcs_tracked ?? mastered} 个知识组件`,
           })
         }
       } catch {
@@ -556,14 +556,14 @@ export function TestsView() {
           </div>
           <div>
             <h1 className="text-xl font-semibold">Tests</h1>
-            <p className="text-sm text-[var(--muted-foreground)]">阶段测评、AI 批改和错题诊断</p>
+            <p className="text-sm text-[var(--muted-foreground)]">Stage assessments, AI grading, and mistake diagnostics</p>
           </div>
           <button
             onClick={loadData}
             className="ml-auto inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
           >
             <RefreshCw size={14} />
-            刷新
+            Refresh
           </button>
         </div>
       </header>
@@ -573,39 +573,39 @@ export function TestsView() {
           <section className="rounded-lg border bg-[var(--background)] p-3">
             <div className="mb-3 flex items-center gap-2">
               <Plus size={16} className="text-[var(--primary)]" />
-              <h2 className="text-sm font-semibold">创建测试</h2>
+              <h2 className="text-sm font-semibold">Create Test</h2>
             </div>
             <div className="space-y-3">
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">标题</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Title</span>
                 <input
                   value={form.title || ""}
                   onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
-                  placeholder="可选：材料电学阶段测试"
+                  placeholder="Optional: Materials electricity unit test"
                   className="w-full rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">自然语言出题</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Generate Questions from Natural Language</span>
                 <textarea
                   value={form.natural_prompt || ""}
                   onChange={(e) => setForm((prev) => ({ ...prev, natural_prompt: e.target.value }))}
-                  placeholder="例如：出 10 道关于疲劳断裂的应用题，只要选择题和简答题"
+                  placeholder="e.g. Create 10 applied questions about fatigue fracture, only multiple choice and short answer"
                   rows={3}
                   className="w-full resize-none rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                 />
                 <span className="mt-1 block text-[10px] text-[var(--muted-foreground)]">
-                  题量、题型、难度和主题会传给后端；下面的高级设置作为默认值。
+                  Question count, question types, difficulty, and topic will be sent to the backend; the advanced settings below serve as defaults.
                 </span>
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">测试目录</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Test Catalog</span>
                 <input
                   value={form.folder || ""}
                   onChange={(e) => setForm((prev) => ({ ...prev, folder: e.target.value }))}
-                  placeholder="可选：期末复习/第二章"
+                  placeholder="Optional: Final review / Chapter 2"
                   list="test-folder-options"
                   className="w-full rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                 />
@@ -617,14 +617,14 @@ export function TestsView() {
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">范围</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Range</span>
                 <select
                   value={form.scope}
                   onChange={(e) => setForm((prev) => ({ ...prev, scope: e.target.value as "wiki" | "source" }))}
                   className="w-full rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm"
                 >
-                  <option value="wiki">整个 Wiki</option>
-                  <option value="source">指定文档</option>
+                  <option value="wiki">Entire Wiki</option>
+                  <option value="source">Specified Document</option>
                 </select>
               </label>
 
@@ -632,14 +632,14 @@ export function TestsView() {
                 <div className="rounded-md border border-dashed border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1.5 text-[11px]">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-[var(--muted-foreground)]">
-                      目标页: <span className="font-medium text-[var(--foreground)]">{form.page_path.split("/").pop()?.replace(/\.md$/, "")}</span>
+                      Target Page: <span className="font-medium text-[var(--foreground)]">{form.page_path.split("/").pop()?.replace(/\.md$/, "")}</span>
                     </span>
                     <button
                       type="button"
                       onClick={() => setForm((prev) => ({ ...prev, page_path: null }))}
                       className="shrink-0 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                     >
-                      清除
+                      Clear
                     </button>
                   </div>
                 </div>
@@ -649,13 +649,13 @@ export function TestsView() {
 
               {form.scope === "source" && (
                 <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">文档</span>
+                  <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Document</span>
                   <select
                     value={form.source || ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, source: e.target.value || null }))}
                     className="w-full rounded-md border bg-[var(--background)] px-2.5 py-2 text-sm"
                   >
-                    <option value="">选择来源文件</option>
+                    <option value="">Select source file</option>
                     {sources.map((source) => (
                       <option key={source.name} value={source.name}>{source.name}</option>
                     ))}
@@ -664,7 +664,7 @@ export function TestsView() {
               )}
 
               <div>
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">题量</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Question count</span>
                 <div className="grid grid-cols-4 gap-1.5">
                   {[5, 10, 15, 20].map((count) => (
                     <button
@@ -679,7 +679,7 @@ export function TestsView() {
               </div>
 
               <div>
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">题型</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Question type</span>
                 <div className="grid grid-cols-3 gap-1.5">
                   {QUESTION_TYPES.map((type) => (
                     <button
@@ -694,7 +694,7 @@ export function TestsView() {
               </div>
 
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">难度</span>
+                <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">Difficulty</span>
                 <select
                   value={form.difficulty}
                   onChange={(e) => setForm((prev) => ({ ...prev, difficulty: e.target.value }))}
@@ -712,7 +712,7 @@ export function TestsView() {
                 className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[var(--primary)] px-3 py-2 text-sm font-medium text-[var(--primary-foreground)] disabled:opacity-50"
               >
                 {creatingTest ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-                {creatingTest ? "生成中..." : "生成测试"}
+                {creatingTest ? "Generating..." : "Generate Test"}
               </button>
             </div>
           </section>
@@ -720,11 +720,11 @@ export function TestsView() {
           <section className="mt-4">
             <div className="mb-2 flex items-center gap-2">
               <FileText size={15} className="text-[var(--muted-foreground)]" />
-              <h2 className="text-sm font-semibold">测试历史</h2>
+              <h2 className="text-sm font-semibold">Test History</h2>
             </div>
             <div className="mb-2 flex items-center gap-1.5 text-xs">
               {(["all", "submitted", "active"] as const).map((key) => {
-                const label = key === "all" ? "全部" : key === "submitted" ? "已批改" : "进行中"
+                const label = key === "all" ? "All" : key === "submitted" ? "Graded" : "In Progress"
                 const count = key === "all"
                   ? sessions.length
                   : sessions.filter((s) => s.status === key).length
@@ -747,7 +747,7 @@ export function TestsView() {
             </div>
             <div className="space-y-4">
               {sessions.length === 0 && (
-                <p className="rounded-md border border-dashed px-3 py-5 text-center text-sm text-[var(--muted-foreground)]">暂无测试记录</p>
+                <p className="rounded-md border border-dashed px-3 py-5 text-center text-sm text-[var(--muted-foreground)]">No test records yet</p>
               )}
               {folderGroups.map(([folder, folderSessions]) => (
                 <div key={folder} className="space-y-2">
@@ -772,12 +772,12 @@ export function TestsView() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <p className="truncate text-sm font-medium">{session.title}</p>
-                          {session.title?.includes("重做") ? (
-                            <span className="shrink-0 rounded bg-blue-100 px-1 py-0.5 text-[9px] font-medium text-blue-700">重做</span>
+                          {session.title?.includes("Redo") ? (
+                            <span className="shrink-0 rounded bg-blue-100 px-1 py-0.5 text-[9px] font-medium text-blue-700">Redo</span>
                           ) : null}
                         </div>
                         <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                          {session.question_count} 题 · {session.status === "submitted" ? scoreLabel(session) : "进行中"}
+                          {session.question_count} 题 · {session.status === "submitted" ? scoreLabel(session) : "In Progress"}
                         </p>
                         {(() => {
                           const status = session.status
@@ -797,7 +797,7 @@ export function TestsView() {
                           if (status === "active" && session.question_count > 0) {
                             return (
                               <span className="mt-1 inline-flex rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                                未完成
+                                Incomplete
                               </span>
                             )
                           }
@@ -805,7 +805,7 @@ export function TestsView() {
                         })()}
                       </div>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] ${session.status === "submitted" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}`}>
-                        {openingSessionId === session.id ? "打开中" : session.status === "submitted" ? "已提交" : "进行中"}
+                        {openingSessionId === session.id ? "Opening" : session.status === "submitted" ? "Submitted" : "In Progress"}
                       </span>
                     </div>
                   </button>
@@ -813,28 +813,28 @@ export function TestsView() {
                     onClick={() => deleteSession(session.id)}
                     disabled={loading}
                     className="absolute bottom-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-                    title="删除测试"
-                    aria-label={`删除测试：${session.title}`}
+                    title="Delete Test"
+                    aria-label={`Delete Test：${session.title}`}
                   >
                     <Trash2 size={12} />
                   </button>
                   <div className="flex items-center gap-2 border-t bg-[var(--muted)]/20 px-3 py-2">
-                    <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">目录</span>
+                    <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">Contents</span>
                     <select
                       value={session.folder || ""}
                       disabled={loading}
                       onChange={(e) => void moveSessionFolder(session.id, e.target.value)}
                       className="min-w-0 flex-1 rounded border bg-[var(--background)] px-1.5 py-1 text-[11px]"
-                      title="移动到自建目录"
+                      title="Move to Custom Folder"
                     >
-                      <option value="">未分类</option>
+                      <option value="">Uncategorized</option>
                       {(existingFolders.includes(session.folder || "") || !session.folder
                         ? existingFolders
                         : [session.folder || "", ...existingFolders]
                       ).map((folder) => (
                         <option key={folder} value={folder}>{folder}</option>
                       ))}
-                      <option value="__new__">＋ 新建目录…</option>
+                      <option value="__new__">+ New Folder…</option>
                     </select>
                   </div>
                 </div>
@@ -850,8 +850,8 @@ export function TestsView() {
             <div className="flex h-full items-center justify-center text-center text-[var(--muted-foreground)]">
               <div>
                 <ClipboardCheck className="mx-auto mb-3 h-12 w-12 opacity-25" />
-                <p className="text-base font-medium text-[var(--foreground)]">创建或打开一个测试</p>
-                <p className="mt-1 text-sm">这里会显示独立答题界面、提交结果和知识点诊断。</p>
+                <p className="text-base font-medium text-[var(--foreground)]">Create or open a test</p>
+                <p className="mt-1 text-sm">The standalone answering interface, submission results, and knowledge point diagnostics will be shown here.</p>
               </div>
             </div>
           ) : (
@@ -904,11 +904,11 @@ function groupWrongQuestions(
 ): Array<{ key: string; title: string; questions: TestQuestion[] }> {
   /** Group by related_page (KC), largest first, ordered by pedagogical
    *  difficulty within each group. Questions without a related_page
-   *  fall into a synthetic "其他" bucket so they still surface. */
+   *  fall into a synthetic "Other" bucket so they still surface. */
   const groups = new Map<string, { title: string; questions: TestQuestion[] }>()
   for (const q of wrong) {
     const key = q.related_page || "__no_kc__"
-    const title = q.related_page ? q.related_page.replace(/\.md$/, "") : "其他"
+    const title = q.related_page ? q.related_page.replace(/\.md$/, "") : "Other"
     if (!groups.has(key)) groups.set(key, { title, questions: [] })
     groups.get(key)!.questions.push(q)
   }
@@ -981,8 +981,8 @@ function TestWorkspace({
             <h2 className="truncate text-lg font-semibold">{session.title}</h2>
             <p className="text-sm text-[var(--muted-foreground)]">
               <span className="inline-flex items-center gap-1">
-                {session.title?.includes("重做") ? (
-                  <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">重做</span>
+                {session.title?.includes("Redo") ? (
+                  <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">Redo</span>
                 ) : null}
                 {session.questions.length} 题 · {questionTypeSummary(session)} · 已答 {answeredCount} 题 · 学习者 <span className="font-medium text-[var(--foreground)]">{userId}</span>
               </span>
@@ -992,9 +992,9 @@ function TestWorkspace({
                 type="button"
                 onClick={onExport}
                 className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                title="导出本次测试结果为 Markdown"
+                title="Export test results as Markdown"
               >
-                <Download size={10} /> 导出
+                <Download size={10} /> Export
               </button>
             ) : null}
             {submitted ? (
@@ -1002,9 +1002,9 @@ function TestWorkspace({
                 type="button"
                 onClick={onResetAnswers}
                 className="ml-2 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700 hover:bg-amber-100"
-                title="清空答案和把握，重新作答。已提交的成绩会保留在对话里。"
+                title="Clear answers and confidence and start over. Submitted scores will remain in the conversation."
               >
-                <RotateCcw size={10} /> 重新作答
+                <RotateCcw size={10} /> Retry Answer
               </button>
             ) : null}
             {submitted ? (
@@ -1012,9 +1012,9 @@ function TestWorkspace({
                 type="button"
                 onClick={onRegenerateFromWrong}
                 className="ml-2 inline-flex items-center gap-1 rounded border border-blue-300 bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700 hover:bg-blue-100"
-                title="把本场错题自动组成新一场测试，专注突破薄弱点。"
+                title="Automatically create a new test from this test's wrong answers, focusing on weak points."
               >
-                <RefreshCw size={10} /> 只做错题
+                <RefreshCw size={10} /> Wrong Questions Only
               </button>
             ) : null}
             </p>
@@ -1081,7 +1081,7 @@ function TestWorkspace({
 
           {!submitted && (
             <section className="rounded-lg border p-4">
-              <h3 className="mb-3 text-sm font-semibold">作答把握</h3>
+              <h3 className="mb-3 text-sm font-semibold">Answer confidence</h3>
               <ConfidenceSlider
                 value={confidences[question.id] ?? 3}
                 onChange={(value) =>
@@ -1107,24 +1107,24 @@ function TestWorkspace({
                     title="Confidence vs correctness"
                   >
                     把握 {attempt.confidence}/5
-                    {attempt.score >= 0.7 && attempt.confidence >= 4 ? " · 校准良好" : null}
-                    {attempt.score < 0.5 && attempt.confidence >= 4 ? " · 过度自信" : null}
-                    {attempt.score >= 0.7 && attempt.confidence <= 2 ? " · 保守" : null}
+                    {attempt.score >= 0.7 && attempt.confidence >= 4 ? " · Well calibrated" : null}
+                    {attempt.score < 0.5 && attempt.confidence >= 4 ? " · Overconfident" : null}
+                    {attempt.score >= 0.7 && attempt.confidence <= 2 ? " · Conservative" : null}
                   </span>
                 ) : null}
               </div>
               <p className="text-sm leading-relaxed">{attempt.feedback}</p>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <div>
-                  <p className="mb-1 text-xs font-medium opacity-70">你的答案</p>
+                  <p className="mb-1 text-xs font-medium opacity-70">Your answer</p>
                   <div className="rounded border bg-[var(--background)]/70 p-2 text-sm">
-                    {answerToText(attempt.user_answer) ? <InlineMarkdown>{answerToText(attempt.user_answer)}</InlineMarkdown> : "未作答"}
+                    {answerToText(attempt.user_answer) ? <InlineMarkdown>{answerToText(attempt.user_answer)}</InlineMarkdown> : "Unanswered"}
                   </div>
                 </div>
                 <div>
-                  <p className="mb-1 text-xs font-medium opacity-70">参考答案</p>
+                  <p className="mb-1 text-xs font-medium opacity-70">Reference Answer</p>
                   <div className="rounded border bg-[var(--background)]/70 p-2 text-sm">
-                    {answerToText(attempt.correct_answer) ? <InlineMarkdown>{answerToText(attempt.correct_answer)}</InlineMarkdown> : "见解析"}
+                    {answerToText(attempt.correct_answer) ? <InlineMarkdown>{answerToText(attempt.correct_answer)}</InlineMarkdown> : "See Explanation"}
                   </div>
                 </div>
               </div>
@@ -1133,7 +1133,7 @@ function TestWorkspace({
 
           {submitted && question.explanation && (
             <section className="rounded-lg border p-4">
-              <h3 className="mb-2 text-sm font-semibold">解析</h3>
+              <h3 className="mb-2 text-sm font-semibold">Analysis</h3>
               <Markdown>{question.explanation}</Markdown>
               <div className="mt-3 border-t pt-3">
                 <SourceLinks question={question} />
@@ -1152,11 +1152,11 @@ function TestWorkspace({
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h3
                       className="text-sm font-semibold text-emerald-800"
-                      title="本场模拟中得分 ≥ 70% 的题，表示已能稳定答对"
+                      title="Questions scored ≥ 70% in this simulation indicate stable mastery"
                     >
-                      本场已掌握
+                      Mastered in this session
                     </h3>
-                    <span className="text-[10px] text-emerald-600">{masteredQuestions.length} 题已掌握</span>
+                    <span className="text-[10px] text-emerald-600">{masteredQuestions.length} 题Mastered</span>
                   </div>
                   <ul className="space-y-1.5">
                     {masteredQuestions.map((q) => {
@@ -1195,7 +1195,7 @@ function TestWorkspace({
                 return (
                   <section className="rounded-lg border border-rose-200 bg-rose-50/30 p-4">
                     <div className="mb-3 flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-rose-800">本次错题回顾</h3>
+                      <h3 className="text-sm font-semibold text-rose-800">Review This Session's Mistakes</h3>
                       {(() => {
                         const masteredCount = session.questions.filter((_, i) => {
                           const a = (session.attempts || [])[i]
@@ -1204,7 +1204,7 @@ function TestWorkspace({
                         if (masteredCount === 0) return null
                         return (
                           <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                            本场已掌握 {masteredCount} 题
+                            Mastered in this session {masteredCount} 题
                           </span>
                         )
                       })()}
@@ -1223,10 +1223,10 @@ function TestWorkspace({
                               const a = attemptsById.get(q.id)
                               const origIdx = session.questions.findIndex((x) => x.id === q.id)
                               const difficultyLabel =
-                                q.difficulty === "basic" ? "基础"
-                                  : q.difficulty === "understanding" ? "理解"
-                                  : q.difficulty === "application" ? "应用"
-                                  : "混合"
+                                q.difficulty === "basic" ? "Basic"
+                                  : q.difficulty === "understanding" ? "Understood"
+                                  : q.difficulty === "application" ? "Apply"
+                                  : "Mixed"
                               return (
                                 <li key={q.id}>
                                   <button
@@ -1246,8 +1246,8 @@ function TestWorkspace({
                                     <p className="line-clamp-2 text-foreground">{q.prompt.replace(/\n+/g, " ")}</p>
                                     {a ? (
                                       <p className="line-clamp-1 mt-0.5 text-[11px] text-rose-500">
-                                        <span className="text-rose-700">你答: </span>{answerToText(a.user_answer) || "(未作答)"}
-                                        <span className="ml-2 text-rose-700">正确: </span>{answerToText(a.correct_answer) || "(无)"}
+                                        <span className="text-rose-700">Your answer: </span>{answerToText(a.user_answer) || "(Unanswered)"}
+                                        <span className="ml-2 text-rose-700">Correct: </span>{answerToText(a.correct_answer) || "(无)"}
                                       </p>
                                     ) : null}
                                   </button>
@@ -1273,19 +1273,19 @@ function TestWorkspace({
             className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm disabled:opacity-40"
           >
             <ChevronLeft size={16} />
-            上一题
+            Previous
           </button>
           <button
             onClick={() => setCurrentIndex(Math.min(session.questions.length - 1, currentIndex + 1))}
             disabled={currentIndex === session.questions.length - 1}
             className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm disabled:opacity-40"
           >
-            下一题
+            Next Question
             <ChevronRight size={16} />
           </button>
         </div>
         <p className="mt-2 text-center text-[10px] text-[var(--muted-foreground)]">
-          快捷键：1-9 / A-D 选择 · ← → 切题 · ⌘/Ctrl + Enter 提交
+          Shortcuts: 1-9 / A-D to select · ← → to switch questions · ⌘/Ctrl + Enter to submit
         </p>
       </div>
     </div>
@@ -1307,7 +1307,7 @@ function AnswerInput({
     const current = answerToText(value)
     return (
       <section className="rounded-lg border p-4">
-        <h3 className="mb-3 text-sm font-semibold">作答</h3>
+        <h3 className="mb-3 text-sm font-semibold">Answer</h3>
         <div className="grid gap-2">
           {question.options.map((option) => {
             const key = option.match(/^\s*([A-Ha-h])/)?.[1]?.toUpperCase() || option
@@ -1335,7 +1335,7 @@ function AnswerInput({
     const values = Array.isArray(value) ? value : answerToText(value) ? [answerToText(value)] : []
     return (
       <section className="rounded-lg border p-4">
-        <h3 className="mb-3 text-sm font-semibold">作答</h3>
+        <h3 className="mb-3 text-sm font-semibold">Answer</h3>
         <div className="grid gap-2">
           {Array.from({ length: count }).map((_, index) => (
             <label key={index} className="block">
@@ -1348,7 +1348,7 @@ function AnswerInput({
                   onChange(next)
                 }}
                 disabled={disabled}
-                placeholder="填写答案..."
+                placeholder="Enter your answer..."
                 className="w-full rounded-md border bg-[var(--background)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)] disabled:opacity-70"
               />
             </label>
@@ -1360,12 +1360,12 @@ function AnswerInput({
 
   return (
     <section className="rounded-lg border p-4">
-      <h3 className="mb-3 text-sm font-semibold">作答</h3>
+      <h3 className="mb-3 text-sm font-semibold">Answer</h3>
       <textarea
         value={answerToText(value)}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        placeholder="写下你的解题思路或答案..."
+        placeholder="Write your solution approach or answer..."
         className="min-h-40 w-full resize-y rounded-md border bg-[var(--background)] px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-[var(--primary)] disabled:opacity-70"
       />
     </section>

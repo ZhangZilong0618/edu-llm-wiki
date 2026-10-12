@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from routes import chat, conversations, graph, ingest, materials_graph, projects, research, search, settings_api, tests, wiki
+from routes import chat, conversations, graph, ingest, materials_graph, ontology, projects, research, search, settings_api, tests, wiki
 from storage.wiki_store import ensure_dirs
 
 app = FastAPI(
@@ -36,6 +36,7 @@ app.include_router(conversations.router)
 app.include_router(settings_api.router)
 app.include_router(research.router)
 app.include_router(tests.router)
+app.include_router(ontology.router)
 
 
 @app.on_event("startup")

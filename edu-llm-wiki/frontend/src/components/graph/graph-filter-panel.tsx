@@ -59,14 +59,14 @@ export function GraphFilterPanel(props: Props) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索节点…"
+          placeholder="Search nodes…"
           className="flex-1 bg-transparent text-xs focus:outline-none"
         />
       </div>
 
       <div>
         <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-          <Filter size={10} /> 类型
+          <Filter size={10} /> Type
         </div>
         <div className="flex flex-wrap gap-1">
           {types.map((t) => {
@@ -99,7 +99,7 @@ export function GraphFilterPanel(props: Props) {
 
       <div>
         <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-          弱连接
+          Weak link
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-xs">
           <input
@@ -107,13 +107,13 @@ export function GraphFilterPanel(props: Props) {
             checked={showWeakLinks}
             onChange={(e) => setShowWeakLinks(e.target.checked)}
           />
-          <span>显示非强连接边 (weight &lt; 8)</span>
+          <span>Show non-strongly-connected edges (weight &lt; 8)</span>
         </label>
       </div>
 
       <div>
         <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-          配色
+          Color scheme
         </div>
         <div className="flex gap-1">
           <button
@@ -124,7 +124,7 @@ export function GraphFilterPanel(props: Props) {
                 : ""
             }`}
           >
-            <Tag size={10} className="mr-1 inline" />类型
+            <Tag size={10} className="mr-1 inline" />Type
           </button>
           <button
             onClick={() => setColorMode("community")}
@@ -134,17 +134,17 @@ export function GraphFilterPanel(props: Props) {
                 : ""
             }`}
           >
-            <Layers size={10} className="mr-1 inline" />社区
+            <Layers size={10} className="mr-1 inline" />Community
           </button>
         </div>
       </div>
 
       <div className="flex items-center justify-between border-t pt-2 text-[10px] text-[var(--muted-foreground)]">
         <span>
-          可见 {matchedNodes.length} / {data.nodes.length} 节点
+          {matchedNodes.length} / {data.nodes.length} nodes visible
         </span>
         <button onClick={onReset} className="inline-flex items-center gap-1 hover:text-[var(--foreground)]">
-          <RotateCcw size={10} />重置
+          <RotateCcw size={10} />Reset
         </button>
       </div>
     </div>

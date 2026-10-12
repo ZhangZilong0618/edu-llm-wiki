@@ -159,7 +159,7 @@ function processWikiLinks(text: string): string {
 // <CitationPopover> nodes by `renderTextWithCitations`.
 const CITE_REF_BLOCK_RE = /\[ref:([^\]]+)\]/g
 
-// 容错: LLM 写（p.1） / (p.1, 3) 之类纯括号页码时，前端也当引用处理。
+// 容错: LLM 写（p.1） / (p.1, 3) 之类纯括号页码时，前端也当Citation处理。
 // 升级这些为 [ref:<source>#p=N]，需要 Markdown 接收 defaultSource（页面所在源文件）做兜底。
 const INLINE_PAGE_HINT_RE = /[（(]\s*p\.?\s*([0-9,\s]+)\s*[）)]/gi
 function upgradeInlinePageHints(text: string, defaultSource: string | undefined): string {
@@ -296,9 +296,9 @@ function CitationPopover({
   const triggerClass = `cite-ref${verified === false ? " cite-ref--unverified" : ""}`
   const headBadge =
     verified === false ? (
-      <span className="cite-popover__unverified-badge">未验证</span>
+      <span className="cite-popover__unverified-badge">Unverified</span>
     ) : quote ? (
-      <span className="cite-popover__quote-badge">quote 已定位</span>
+      <span className="cite-popover__quote-badge">Quote located</span>
     ) : null
 
   return (
@@ -329,7 +329,7 @@ function CitationPopover({
             <span className="cite-popover__pages">
               {pages.length === 1
                 ? `第 ${pages[0]} 页`
-                : `第 ${pages.join("、")} 页 · 全部展开`}
+                : `第 ${pages.join("、")} 页 · AllExpand`}
             </span>
             {headBadge}
           </span>
@@ -346,7 +346,7 @@ function CitationPopover({
                     {pages.length > 1 && (
                       <div className="cite-popover__page-label">第 {p} 页</div>
                     )}
-                    <p className="cite-popover__empty">该页暂不可用（文件可能已被删除或重新解析）。</p>
+                    <p className="cite-popover__empty">This page is temporarily unavailable (the file may have been deleted or re-parsed).</p>
                   </div>
                 )
               }
@@ -647,7 +647,7 @@ function headingText(children: any): string {
 const components: any = {
   h1({ children, ...props }: any) {
     const text = headingText(children)
-    const isResearch = text.includes("深入探究")
+    const isResearch = text.includes("Explore Further")
     return (
       <h1 id={nextHeadingId(text)} className={`text-xl font-bold mt-6 mb-3 scroll-mt-20 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
         {isResearch && <span className="mr-1.5">🔬</span>}
@@ -657,7 +657,7 @@ const components: any = {
   },
   h2({ children, ...props }: any) {
     const text = headingText(children)
-    const isResearch = text.includes("深入探究")
+    const isResearch = text.includes("Explore Further")
     return (
       <h2 id={nextHeadingId(text)} className={`text-lg font-semibold mt-5 mb-2 scroll-mt-20 ${isResearch ? "border-l-4 border-purple-500 pl-3 text-purple-700 dark:text-purple-300" : ""}`} {...props}>
         {isResearch && <span className="mr-1.5">🔬</span>}

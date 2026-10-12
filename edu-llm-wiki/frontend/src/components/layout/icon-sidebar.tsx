@@ -47,7 +47,7 @@ export function IconSidebar() {
         <div className="mt-auto rounded-md border bg-[var(--background)] px-2 py-2 text-xs text-[var(--muted-foreground)]">
           <div className="flex items-center gap-2">
             <Loader2 size={13} className="animate-spin text-[var(--primary)]" />
-            <span className="min-w-0 flex-1 truncate">{activeOperation?.label || "处理中"}</span>
+            <span className="min-w-0 flex-1 truncate">{activeOperation?.label || "Processing"}</span>
             {operations.length > 1 && <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">{operations.length}</span>}
           </div>
         </div>

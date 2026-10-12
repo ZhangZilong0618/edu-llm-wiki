@@ -131,7 +131,7 @@ export const api = {
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     })
     if (!res.ok) {
-      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      if (res.status === 401) throw new Error("Admin Token mismatch; please check the settings in Settings → Admin")
       throw new Error(`HTTP ${res.status}`)
     }
     if (!res.body) throw new Error("No response body")
@@ -168,7 +168,7 @@ export const api = {
       body: JSON.stringify({ source_paths: sourcePaths, force }),
     })
     if (!res.ok) {
-      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      if (res.status === 401) throw new Error("Admin Token mismatch; please check the settings in Settings → Admin")
       throw new Error(`HTTP ${res.status}`)
     }
     if (!res.body) throw new Error("No response body")
@@ -255,7 +255,7 @@ export const api = {
       signal,
     })
     if (!res.ok) {
-      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      if (res.status === 401) throw new Error("Admin Token mismatch; please check the settings in Settings → Admin")
       throw new Error(`HTTP ${res.status}`)
     }
     if (!res.body) throw new Error("No response body")
@@ -290,7 +290,7 @@ export const api = {
     })
     if (!res.ok) {
       const text = await res.text()
-      if (res.status === 401) throw new Error("Admin Token 不匹配，请检查 Settings → Admin 中的设置")
+      if (res.status === 401) throw new Error("Admin Token mismatch; please check the settings in Settings → Admin")
       throw new Error(`Image recognition failed: ${res.status} ${text}`)
     }
     return res.json() as Promise<{ filename: string; content_type: string; text: string }>

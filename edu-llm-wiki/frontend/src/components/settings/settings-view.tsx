@@ -107,16 +107,16 @@ export function SettingsView() {
         const p = res.params || {}
         toast({
           type: "success",
-          message: `BKT 拟合完成 (${res.observations} 条记录)：p_known=${p.p_known}, p_t=${p.p_t}`,
+          message: `BKT 拟合Complete (${res.observations} 条记录)：p_known=${p.p_known}, p_t=${p.p_t}`,
         })
       } else {
-        toast({ type: "error", message: "数据不足（至少 5 条 attempt）" })
+        toast({ type: "error", message: "Insufficient data (at least 5 attempts required)" })
       }
     } catch (e: any) {
       if (e?.message?.includes("admin_token") || e?.status === 401) {
-        toast({ type: "error", message: "后端要求 Admin Token，请先在上方配置。" })
+        toast({ type: "error", message: "The backend requires an Admin Token; please configure it above first." })
       } else {
-        toast({ type: "error", message: e?.message || "BKT 拟合失败" })
+        toast({ type: "error", message: e?.message || "BKT fitting failed" })
       }
     } finally {
       setRefitting(false)
@@ -146,22 +146,22 @@ export function SettingsView() {
 
   const needsApiKey = !["ollama"].includes(llm.llm_provider)
   const providerHint: Record<string, string> = {
-    anthropic: "Anthropic 需要原生 base_url 与 claude-* 系列模型名。",
-    google: "Google Gemini 走 OpenAI 兼容端点，需要 base_url 与 gemini-* 模型。",
+    anthropic: "Anthropic requires the native base_url and a claude-* series model name.",
+    google: "Google Gemini uses an OpenAI-compatible endpoint, requiring base_url and a gemini-* model.",
     azure: "Azure OpenAI 必填 base_url（形如 https://<resource>.openai.azure.com/openai/deployments/<dep>）。",
-    ollama: "本地 Ollama 默认 http://localhost:11434/v1，模型名形如 llama3.2，无需 API Key。",
-    custom: "Custom 走任何 OpenAI 兼容服务，请同时填写 base_url 与模型名。",
+    ollama: "Local Ollama defaults to http://localhost:11434/v1, model names look like llama3.2, no API Key needed.",
+    custom: "Custom works with any OpenAI-compatible service; please fill in both base_url and model name.",
   }
   const needsBaseUrl = ["google", "azure", "deepseek", "groq", "together", "openrouter", "ollama", "custom"].includes(
     llm.llm_provider,
   )
   const testLlmOnly = async () => {
     if (needsApiKey && !llm.llm_api_key.trim()) {
-      toast({ type: "error", message: "请先填写 API Key，再测试连接。" })
+      toast({ type: "error", message: "Please enter the API Key before testing the connection." })
       return
     }
     if (!llm.llm_model.trim()) {
-      toast({ type: "error", message: "请填写模型名称后再测试。" })
+      toast({ type: "error", message: "Please enter a model name before testing." })
       return
     }
     setLlmTesting(true)
@@ -173,7 +173,7 @@ export function SettingsView() {
         toast({ type: "error", message: result.message })
       }
     } catch (e: unknown) {
-      toast({ type: "error", message: errorMessage(e, "连接失败") })
+      toast({ type: "error", message: errorMessage(e, "Connection Failed") })
     } finally {
       setLlmTesting(false)
     }
@@ -181,15 +181,15 @@ export function SettingsView() {
 
   const saveLlm = async () => {
     if (needsApiKey && !llm.llm_api_key.trim()) {
-      toast({ type: "error", message: "请先填写 API Key，再保存 LLM 设置。" })
+      toast({ type: "error", message: "Please fill in the API Key before saving LLM settings." })
       return
     }
     if (needsBaseUrl && !llm.llm_base_url.trim()) {
-      toast({ type: "error", message: "该 Provider 必填 Base URL，请补全后再保存。" })
+      toast({ type: "error", message: "Base URL is required for this Provider; please complete it before saving." })
       return
     }
     if (!llm.llm_model.trim()) {
-      toast({ type: "error", message: "请填写模型名称，例如 gpt-4o-mini。" })
+      toast({ type: "error", message: "Please enter the model name, e.g. gpt-4o-mini." })
       return
     }
     setLlmTesting(true)
@@ -211,7 +211,7 @@ export function SettingsView() {
 
   const saveEmb = async () => {
     if (emb.embedding_enabled && !emb.embedding_endpoint.trim()) {
-      toast({ type: "error", message: "请填写 Embedding 接口地址。" })
+      toast({ type: "error", message: "Please enter the Embedding API endpoint." })
       return
     }
     try {
@@ -226,7 +226,7 @@ export function SettingsView() {
   const saveAdminToken = () => {
     if (typeof window === "undefined") return
     window.localStorage.setItem("edu-llm-wiki.adminToken", adminToken.trim())
-    toast({ type: "success", message: adminToken.trim() ? "Admin Token 已保存" : "Admin Token 已清空" })
+    toast({ type: "success", message: adminToken.trim() ? "Admin Token saved" : "Admin Token cleared" })
   }
 
   const savePaddle = async () => {
@@ -309,7 +309,7 @@ export function SettingsView() {
                   onClick={testLlmOnly}
                   disabled={llmTesting}
                   className="rounded-md border px-3 py-1.5 text-xs hover:bg-[var(--accent)] disabled:opacity-50"
-                  title="用当前表单里的设置直接测试，不保存到 .env"
+                  title="Test directly with the current form settings without saving to .env"
                 >
                   {llmTesting ? "Testing..." : "Test Connection"}
                 </button>
@@ -399,7 +399,7 @@ export function SettingsView() {
                   onChange={(e) => updateLlm({ generation_language: e.target.value as "zh" | "en" })}
                   className={inputClass}
                 >
-                  <option value="zh">中文</option>
+                  <option value="zh">Chinese</option>
                   <option value="en">English</option>
                 </select>
               </Field>
@@ -562,23 +562,23 @@ export function SettingsView() {
             id="admin"
             icon={<KeyRound size={16} />}
             title="Admin"
-            summary="本地管理口令；只在后端 .env 配了 api_token 时才需要。"
+            summary="Local admin password; only needed when api_token is configured in the backend .env."
             footer={
               <SaveButton
                 saved={true}
-                label="保存 Admin Token"
-                savedLabel="已保存"
+                label="Save Admin Token"
+                savedLabel="Saved"
                 onClick={saveAdminToken}
               />
             }
           >
-            <Field label="Admin Token (可选)">
+            <Field label="Admin Token (optional)">
               <SecretInput
                 value={adminToken}
                 visible={false}
                 onToggle={() => undefined}
                 onChange={(value) => setAdminToken(value)}
-                placeholder="仅在服务端配置 api_token 时填写"
+                placeholder="Only fill in when api_token is configured on the server"
               />
             </Field>
             <div className="mt-4 flex items-center justify-between gap-2">
@@ -588,14 +588,14 @@ export function SettingsView() {
                 disabled={refitting}
                 className="rounded-md border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-100 disabled:opacity-50"
               >
-                {refitting ? "拟合中..." : "拟合并 BKT"}
+                {refitting ? "Fitting..." : "Fit & Apply BKT"}
               </button>
               {lastRefitAt ? (
                 <span className="text-[10px] text-[var(--muted-foreground)]">
                   上次拟合: {new Date(lastRefitAt * 1000).toLocaleString()}
                 </span>
               ) : (
-                <span className="text-[10px] text-[var(--muted-foreground)]">从未拟合</span>
+                <span className="text-[10px] text-[var(--muted-foreground)]">Never Fitted</span>
               )}
             </div>
           </Section>

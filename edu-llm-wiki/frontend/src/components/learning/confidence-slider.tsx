@@ -9,11 +9,11 @@ export function ConfidenceSlider({
   onChange: (v: number) => void
   value?: number
 }) {
-  const labels = ["完全不确定", "有点把握", "中等", "较有把握", "完全确定"]
+  const labels = ["Completely unsure", "Somewhat Confident", "Medium", "Fairly Confident", "Fully Confident"]
   const current = Math.min(5, Math.max(1, Math.round(value)))
   return (
     <div className="flex flex-col gap-1 text-xs">
-      <label className="text-[10px] text-[var(--muted-foreground)]">我的把握</label>
+      <label className="text-[10px] text-[var(--muted-foreground)]">My Confidence</label>
       <input
         type="range"
         min={1}

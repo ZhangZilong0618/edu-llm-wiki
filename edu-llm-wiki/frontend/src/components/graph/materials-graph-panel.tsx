@@ -50,7 +50,7 @@ export function MaterialsGraphPanel(props: Props) {
   return (
     <section className="mt-4 space-y-2 border-t pt-3">
       <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-        <Network size={10} /> 文章图谱抽取
+        <Network size={10} /> Article Graph Extraction
       </div>
 
       <div className="flex items-center gap-1.5 rounded-md border bg-[var(--background)] px-2 py-1.5">
@@ -58,7 +58,7 @@ export function MaterialsGraphPanel(props: Props) {
         <input
           value={pageFilter}
           onChange={(event) => setPageFilter(event.target.value)}
-          placeholder="过滤文章…"
+          placeholder="Filter articles…"
           className="flex-1 bg-transparent text-xs focus:outline-none"
         />
       </div>
@@ -67,9 +67,9 @@ export function MaterialsGraphPanel(props: Props) {
         value={pagePath}
         onChange={(event) => onPagePathChange(event.target.value)}
         className="w-full rounded-md border bg-[var(--background)] px-2 py-1.5 text-xs"
-        title="选择要抽取材料学关系图谱的 Wiki 文章"
+        title="Select Wiki articles to extract a materials science relationship graph from"
       >
-        <option value="">选择文章…</option>
+        <option value="">Select article…</option>
         {filteredPages.map((page) => (
           <option key={page.path} value={page.path}>
             {page.title || page.path}
@@ -78,7 +78,7 @@ export function MaterialsGraphPanel(props: Props) {
       </select>
 
       <p className="text-[10px] text-[var(--muted-foreground)]">
-        可选文章 {filteredPages.length} / {pages.length}
+        Articles {filteredPages.length} / {pages.length}
       </p>
 
       <div className="flex gap-1">
@@ -89,49 +89,49 @@ export function MaterialsGraphPanel(props: Props) {
           className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-[var(--primary)] px-2 py-1.5 text-[11px] text-[var(--primary-foreground)] disabled:opacity-50"
         >
           {loading ? <Loader2 size={11} className="animate-spin" /> : <FileSearch size={11} />}
-          {loading ? "抽取中…" : "抽取关系图谱"}
+          {loading ? "Extracting…" : "Extract Relationship Graph"}
         </button>
         {graph && (
           <button
             type="button"
             onClick={previewing ? onExitPreview : onPreview}
             className="inline-flex items-center gap-1 rounded-md border px-2 py-1.5 text-[11px]"
-            title={previewing ? "返回全库知识图谱" : "在左侧画布预览文章图谱"}
+            title={previewing ? "Return to the full knowledge graph" : "Preview the article graph on the left canvas"}
           >
             {previewing ? <Undo2 size={11} /> : <Network size={11} />}
-            {previewing ? "返回全库" : "预览"}
+            {previewing ? "Back to Full Library" : "Preview"}
           </button>
         )}
       </div>
 
-      {error && <p className="text-[11px] text-rose-500">抽取失败：{error}</p>}
+      {error && <p className="text-[11px] text-rose-500">Extraction failed: {error}</p>}
 
       {graph && (
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-1 text-[10px]">
             <span className="rounded border px-1.5 py-1">
-              节点 {graph.stats.node_count}
+              {graph.stats.node_count} nodes
             </span>
             <span className="rounded border px-1.5 py-1">
-              关系 {graph.stats.edge_count}
+              {graph.stats.edge_count} relations
             </span>
             <span className="rounded border px-1.5 py-1">
-              候选 {graph.stats.relation_candidate_count ?? graph.relation_candidates?.length ?? 0}
+              {graph.stats.relation_candidate_count ?? graph.relation_candidates?.length ?? 0} candidates
             </span>
             <span className="rounded border px-1.5 py-1">
-              覆盖 {Math.round((graph.stats.relation_candidate_coverage ?? 0) * 100)}%
+              {Math.round((graph.stats.relation_candidate_coverage ?? 0) * 100)}% coverage
             </span>
             <span className="rounded border px-1.5 py-1">
-              连通分量 {graph.stats.connected_components ?? "-"}
+              {graph.stats.connected_components ?? "-"} components
             </span>
             <span className="rounded border px-1.5 py-1">
-              孤立节点 {graph.stats.isolated_node_count ?? "-"}
+              {graph.stats.isolated_node_count ?? "-"} isolated
             </span>
           </div>
 
           <div>
             <p className="mb-1 text-[10px] font-semibold text-[var(--muted-foreground)]">
-              已确认关系
+              Confirmed relation
             </p>
             <ul className="space-y-1 text-[10px]">
               {graph.edges.slice(0, 10).map((edge, index) => (
@@ -140,7 +140,7 @@ export function MaterialsGraphPanel(props: Props) {
                     {label(edge.source)} → {label(edge.target)}
                   </span>
                   <span className="block truncate text-[var(--muted-foreground)]">
-                    {edge.edge_type} · {edge.evidence || "暂无证据"}
+                    {edge.edge_type} · {edge.evidence || "No Evidence Yet"}
                   </span>
                 </li>
               ))}
@@ -149,7 +149,7 @@ export function MaterialsGraphPanel(props: Props) {
 
           <details>
             <summary className="cursor-pointer text-[10px] font-semibold text-[var(--muted-foreground)]">
-              关系候选（{graph.relation_candidates?.length || 0}）
+              Relation candidates ({graph.relation_candidates?.length || 0})
             </summary>
             <ul className="mt-1 space-y-1 text-[10px]">
               {(graph.relation_candidates || []).slice(0, 12).map((candidate, index) => (

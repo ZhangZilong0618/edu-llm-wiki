@@ -75,7 +75,7 @@ export function PageBadges({
     items.push({
       key: "diff",
       el: difficultyDots(d),
-      title: `难度 ${d}/5`,
+      title: `Difficulty ${d}/5`,
     })
   }
 
@@ -83,7 +83,7 @@ export function PageBadges({
     items.push({
       key: "prereq",
       el: <span style={{ fontSize: 9, fontWeight: 600 }}>↑{prereqN}</span>,
-      title: `${prereqN} 个前置知识`,
+      title: `${prereqN} prerequisite${prereqN === 1 ? "" : "s"}`,
     })
   }
 
@@ -91,7 +91,7 @@ export function PageBadges({
     items.push({
       key: "miscon",
       el: <span style={{ fontSize: 9, fontWeight: 600 }}>!{misconN}</span>,
-      title: `${misconN} 个常见误区`,
+      title: `${misconN} misconceptions`,
     })
   }
 
@@ -100,10 +100,10 @@ export function PageBadges({
       key: "review",
       el: (
         <span style={{ fontSize: 9, fontVariantNumeric: "tabular-nums" }}>
-          {days === 0 ? "今日" : days < 30 ? `${days}d` : `${Math.floor(days / 30)}mo`}
+          {days === 0 ? "Today" : days < 30 ? `${days}d` : `${Math.floor(days / 30)}mo`}
         </span>
       ),
-      title: days === 0 ? "今日复习过" : `${days} 天前复习`,
+      title: days === 0 ? "Reviewed today" : `Reviewed ${days}d ago`,
     })
   }
 

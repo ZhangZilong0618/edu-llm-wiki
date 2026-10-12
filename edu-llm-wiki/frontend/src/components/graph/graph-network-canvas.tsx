@@ -40,6 +40,9 @@ type RuntimeNode = GraphNode & {
   fx?: number;
   fy?: number;
   degree: number;
+  // Simulation state injected by d3-force at runtime.
+  vx?: number;
+  vy?: number;
 };
 
 type RuntimeLink = GraphEdge & {
@@ -97,23 +100,119 @@ function sanitizeGraphData(data: GraphData): GraphData {
   return { ...data, nodes, edges };
 }
 
-function makeInitialPositions(count: number) {
-  // A deterministic low-discrepancy start avoids the old "circle of nodes"
-  // and gives d3-force enough separation to form real clusters.
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  const spread = Math.max(280, Math.sqrt(count) * 68);
-  return (index: number, id: string) => {
-    let hash = 0;
-    for (let i = 0; i < id.length; i += 1) {
-      hash = (hash * 31 + id.charCodeAt(i)) % 100003;
+export interface ComponentCell {
+  seed: { x: number; y: number };
+  cx: number;
+  cy: number;
+  size: number;
+}
+
+/**
+ * Connected-component-aware cell layout. Disconnected subgraphs (e.g. two
+ * unrelated course themes) used to be flung to opposite corners by the
+ * many-body force while clumping internally. Assigning every component its
+ * own cell of the canvas and pulling its nodes toward that cell keeps
+ * components side by side and compact.
+ */
+function assignComponentCells(
+  nodeIds: Set<string>,
+  links: RuntimeLink[],
+  width: number,
+  height: number,
+): Map<string, ComponentCell> {
+  const parent = new Map<string, string>();
+  const find = (a: string): string => {
+    const root = parent.get(a);
+    if (root === undefined) {
+      parent.set(a, a);
+      return a;
     }
-    const jitter = ((hash % 97) / 97 - 0.5) * 26;
-    const radius = spread * Math.sqrt((index + 0.65) / Math.max(count, 1)) + jitter;
-    const angle = index * golden + (hash % 1000) / 1000 * 0.22;
-    return {
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
-    };
+    if (root === a) return a;
+    const r = find(root);
+    parent.set(a, r);
+    return r;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  nodeIds.forEach((id) => find(id));
+  for (const link of links) {
+    const s = linkEndpointId(link.source);
+    const t = linkEndpointId(link.target);
+    if (nodeIds.has(s) && nodeIds.has(t)) union(s, t);
+  }
+  const groups = new Map<string, string[]>();
+  nodeIds.forEach((id) => {
+    const r = find(id);
+    const list = groups.get(r);
+    if (list) list.push(id);
+    else groups.set(r, [id]);
+  });
+
+  const comps = Array.from(groups.values()).sort((a, b) => b.length - a.length);
+  const cells = new Map<string, ComponentCell>();
+  const nComp = Math.max(comps.length, 1);
+  const aspect = width / Math.max(height, 1);
+  const cols = Math.max(1, Math.round(Math.sqrt(nComp * aspect)));
+  const rows = Math.max(1, Math.ceil(nComp / cols));
+  const maxSize = comps[0]?.length ?? 1;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+
+  comps.forEach((members, k) => {
+    const col = k % cols;
+    const row = Math.floor(k / cols);
+    // The force-graph viewport is centred on data coordinate (0, 0), so the
+    // cell grid must be centred there too.
+    const cx = (col + 0.5) * (width / cols) - width / 2;
+    const cy = (row + 0.5) * (height / rows) - height / 2;
+    const spread =
+      0.46 * Math.min(width / cols, height / rows) *
+      (0.55 + 0.45 * Math.sqrt(members.length / Math.max(maxSize, 1)));
+    members.forEach((id, i) => {
+      const angle = i * golden;
+      const r = spread * Math.sqrt((i + 0.6) / Math.max(members.length, 1));
+      cells.set(id, {
+        seed: { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r },
+        cx,
+        cy,
+        size: members.length,
+      });
+    });
+  });
+  return cells;
+}
+
+/**
+ * Label-aware collision: a node occupies its circle plus the text drawn to
+ * its right, so overlapping labels are the visual bug this force removes.
+ */
+function makeSeparationForce(nodes: RuntimeNode[], nodeScale: number) {
+  return (alpha: number) => {
+    const radii = nodes.map((n) => {
+      const circle = nodeRadius(n, nodeScale, 1);
+      const labelHalf = Math.min(n.label.length, 26) * 2.9;
+      return Math.max(circle, Math.min(circle + labelHalf * 0.85, 96));
+    });
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const dx = (b.x ?? 0) - (a.x ?? 0);
+        const dy = (b.y ?? 0) - (a.y ?? 0);
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const overlap = radii[i] + radii[j] - dist;
+        if (overlap <= 0) continue;
+        const push = (overlap * 0.5 * alpha) / dist;
+        const ax = dx * push;
+        const ay = dy * push;
+        if (!a.fx) a.vx = (a.vx ?? 0) - ax;
+        if (!a.fy) a.vy = (a.vy ?? 0) - ay;
+        if (!b.fx) b.vx = (b.vx ?? 0) + ax;
+        if (!b.fy) b.vy = (b.vy ?? 0) + ay;
+      }
+    }
   };
 }
 
@@ -123,6 +222,8 @@ function buildVisibleGraph(
   showWeakLinks: boolean,
   positions: Map<string, { x: number; y: number }>,
   pinned: Set<string>,
+  canvasSize: { width: number; height: number },
+  cellTargets: Map<string, ComponentCell>,
 ): RuntimeGraph {
   const clean = sanitizeGraphData(data);
   const visibleNodeIds = new Set(
@@ -151,12 +252,20 @@ function buildVisibleGraph(
     degree.set(link.target as string, (degree.get(link.target as string) || 0) + 1);
   }
 
-  const initial = makeInitialPositions(visibleNodeIds.size);
+  const cells = assignComponentCells(
+    visibleNodeIds,
+    links,
+    Math.max(canvasSize.width, 640),
+    Math.max(canvasSize.height, 480),
+  );
+  cellTargets.clear();
+  cells.forEach((cell, id) => cellTargets.set(id, cell));
   const nodes = clean.nodes
     .filter((node) => visibleNodeIds.has(node.id))
-    .map<RuntimeNode>((node, index) => {
+    .map<RuntimeNode>((node) => {
       const cached = positions.get(node.id);
-      const start = cached || initial(index, node.id);
+      const cell = cells.get(node.id);
+      const start = cached || cell?.seed || { x: 0, y: 0 };
       const isPinned = pinned.has(node.id) && cached;
       return {
         ...node,
@@ -272,6 +381,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
     return () => observer.disconnect();
   }, []);
 
+  const cellTargetsRef = useRef(new Map<string, ComponentCell>());
   const graph = useMemo(
     () => buildVisibleGraph(
       data,
@@ -279,8 +389,10 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
       showWeakLinks,
       positionsRef.current,
       pinnedRef.current,
+      size,
+      cellTargetsRef.current,
     ),
-    [data, hiddenTypes, showWeakLinks, layoutVersion],
+    [data, hiddenTypes, showWeakLinks, layoutVersion, size.width, size.height],
   );
 
   const search = useMemo(() => buildSearchState(graph, searchQuery), [graph, searchQuery]);
@@ -334,13 +446,29 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg) return;
-    const count = graph.nodes.length;
-    fg.d3Force("charge")?.strength(count > 300 ? -320 : -240);
-    fg.d3Force("link")?.distance(count > 300 ? 74 : 66)?.strength?.(0.42);
-    fg.d3Force("center")?.strength(0.06);
+    const targets = cellTargetsRef.current;
+    const compSize = (id: string) => targets.get(id)?.size ?? 1;
+    // Gentle per-component repulsion: enough to spread nodes inside a cell
+    // without flinging disconnected components to opposite corners.
+    fg.d3Force("charge")?.strength((node: { id: string }) =>
+      -26 * Math.sqrt(Math.max(compSize(node.id), 1)) - 14,
+    );
+    fg.d3Force("link")?.distance(50 * Math.max(spacing, 0.6))?.strength?.(0.6);
+    fg.d3Force("center")?.strength(0.05);
+    // Pull every node toward its component's cell.
+    fg.d3Force("cell", (alpha: number) => {
+      for (const n of graph.nodes) {
+        const t = targets.get(n.id);
+        if (!t) continue;
+        if (!n.fx) n.vx = (n.vx ?? 0) + (t.cx - (n.x ?? 0)) * 0.05 * alpha;
+        if (!n.fy) n.vy = (n.vy ?? 0) + (t.cy - (n.y ?? 0)) * 0.05 * alpha;
+      }
+    });
+    // Keep labels from stacking on top of each other.
+    fg.d3Force("separate", makeSeparationForce(graph.nodes, nodeScale));
     fg.d3ReheatSimulation();
     fitOnStopRef.current = true;
-  }, [graph]);
+  }, [graph, spacing, nodeScale]);
 
   const persistLayout = useCallback(() => {
     try {
@@ -478,7 +606,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
   if (graph.nodes.length === 0) {
     return (
       <div className="flex h-full items-center justify-center bg-[var(--background)] text-sm text-[var(--muted-foreground)]">
-        当前筛选下没有可显示的知识点
+        No knowledge points to display under the current filter
       </div>
     );
   }
@@ -556,7 +684,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
           type="button"
           onClick={() => fgRef.current?.zoom(zoom * 1.25, 180)}
           className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
-          title="放大"
+          title="Zoom in"
         >
           <ZoomIn className="h-4 w-4" />
         </button>
@@ -564,7 +692,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
           type="button"
           onClick={() => fgRef.current?.zoom(Math.max(0.08, zoom / 1.25), 180)}
           className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
-          title="缩小"
+          title="Zoom out"
         >
           <ZoomOut className="h-4 w-4" />
         </button>
@@ -572,7 +700,7 @@ export function GraphNetworkCanvas(props: GraphCanvasProps) {
           type="button"
           onClick={() => fgRef.current?.zoomToFit(280, 70)}
           className="rounded p-1.5 text-slate-600 hover:bg-slate-100"
-          title="重置视图"
+          title="Reset View"
         >
           <Maximize className="h-4 w-4" />
         </button>

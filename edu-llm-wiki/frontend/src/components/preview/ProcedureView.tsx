@@ -1,7 +1,7 @@
 /**
- * Procedure page view (A 组基础页).
+ * Procedure page view (A 组Basics page).
  *
- * Surfaces the standard `## 目标 / 输入 / 输出 / 步骤 / 检查清单` sections
+ * Surfaces the standard `## Goal / Input / Output / Steps / Checklist` sections
  * from the body into a structured grid.
  */
 import { BodyShell } from "./BodyShell"
@@ -10,11 +10,11 @@ import { extractSection } from "@/lib/page-sections"
 import type { WikiPage } from "@/types/wiki"
 
 export function ProcedureView({ page }: { page: WikiPage }) {
-  const goal = extractSection(page.content, ["目标", "Goal"])
-  const inputs = extractSection(page.content, ["输入", "Inputs"])
-  const outputs = extractSection(page.content, ["输出", "Outputs"])
-  const steps = extractSection(page.content, ["步骤", "Steps"])
-  const checklist = extractSection(page.content, ["检查清单", "Checklist"])
+  const goal = extractSection(page.content, ["Objective", "Goal"])
+  const inputs = extractSection(page.content, ["Input", "Inputs"])
+  const outputs = extractSection(page.content, ["Output", "Outputs"])
+  const steps = extractSection(page.content, ["Steps", "Steps"])
+  const checklist = extractSection(page.content, ["Checklist", "Checklist"])
 
   return (
     <BodyShell
@@ -23,27 +23,27 @@ export function ProcedureView({ page }: { page: WikiPage }) {
     >
       <div className="mb-3 grid gap-3 sm:grid-cols-2">
         {goal && (
-          <Card title="目标 / Goal" accent="text-emerald-600" className="sm:col-span-2">
+          <Card title="Goal" accent="text-emerald-600" className="sm:col-span-2">
             <MarkdownSlice markdown={goal} />
           </Card>
         )}
         {inputs && (
-          <Card title="输入 / Inputs" accent="text-emerald-600">
+          <Card title="Inputs" accent="text-emerald-600">
             <MarkdownSlice markdown={inputs} />
           </Card>
         )}
         {outputs && (
-          <Card title="输出 / Outputs" accent="text-emerald-600">
+          <Card title="Outputs" accent="text-emerald-600">
             <MarkdownSlice markdown={outputs} />
           </Card>
         )}
         {steps && (
-          <Card title="步骤 / Steps" accent="text-emerald-600" className="sm:col-span-2">
+          <Card title="Steps" accent="text-emerald-600" className="sm:col-span-2">
             <MarkdownSlice markdown={steps} />
           </Card>
         )}
         {checklist && (
-          <Card title="检查清单 / Checklist" accent="text-emerald-600" className="sm:col-span-2">
+          <Card title="Checklist" accent="text-emerald-600" className="sm:col-span-2">
             <MarkdownSlice markdown={checklist} />
           </Card>
         )}

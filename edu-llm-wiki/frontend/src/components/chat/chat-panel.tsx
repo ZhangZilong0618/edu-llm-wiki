@@ -103,6 +103,14 @@ export function ChatPanel() {
 
   // Load conversation when switching
   useEffect(() => {
+    // A convId change triggered by handleSend creating a new conversation
+    // must NOT abort the stream that handleSend just started — the
+    // skipLoadRef flag marks exactly that case, so bail out before touching
+    // the in-flight request.
+    if (skipLoadRef.current) {
+      skipLoadRef.current = false
+      return
+    }
     // Switching conversations should cancel any in-flight stream so the
     // new conversation starts cleanly instead of inheriting stale streaming
     // UI from the previous one.
@@ -114,10 +122,6 @@ export function ChatPanel() {
     setStreaming(null)
     setChatStatus(null)
 
-    if (skipLoadRef.current) {
-      skipLoadRef.current = false
-      return
-    }
     if (!convId) {
       setMessages([])
       setConvTitle("")
@@ -291,7 +295,7 @@ export function ChatPanel() {
     setMessages(newMsgs)
     setInput("")
     setStreaming(assistantId)
-    setChatStatus("正在理解问题...")
+    setChatStatus("Understanding the question...")
     textareaRef.current?.focus()
 
     if (!convTitle && messages.length === 0) {
@@ -342,12 +346,12 @@ export function ChatPanel() {
         } else if (event.type === "error") {
           // Pipeline or LLM stream failed mid-flight; surface a clear error
           // and stop streaming so the UI can recover.
-          toast({ type: "error", message: event.message || "请求失败，请稍后再试" })
+          toast({ type: "error", message: event.message || "Request failed; please try again later" })
           let latest: Message[] = messages
           setMessages((prev) => {
             const next = prev.map((m) =>
               m.id === assistantId && !m.content
-                ? { ...m, content: `Error: ${event.message || "请求失败"}` }
+                ? { ...m, content: `Error: ${event.message || "Request failed"}` }
                 : m
             )
             latest = next
@@ -371,12 +375,12 @@ export function ChatPanel() {
       userStoppedRef.current = false
       if (e?.name === "AbortError") {
         if (!userStopped) {
-          toast({ type: "error", message: "连接已断开，回复已截断。" })
+          toast({ type: "error", message: "Connection lost; the reply was truncated." })
         }
         setStreaming(null)
         return
       }
-      const message = e?.message || "请求失败，请稍后再试"
+      const message = e?.message || "Request failed; please try again later"
       toast({ type: "error", message })
       setMessages((prev) => prev.map((m) =>
         m.id === assistantId && !m.content ? { ...m, content: `Error: ${message}` } : m
@@ -397,7 +401,7 @@ export function ChatPanel() {
     if (!path) {
       // Path-less anchor (e.g. "##my-section") is malformed; refuse to
       // call the wiki API with an empty path which would 404.
-      toast({ type: "error", message: "引用路径缺失，无法打开" })
+      toast({ type: "error", message: "Citation path missing; cannot open" })
       return
     }
     try {
@@ -428,7 +432,7 @@ export function ChatPanel() {
         requestAnimationFrame(tryScroll)
       }
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || `加载页面失败：${path}` })
+      toast({ type: "error", message: e?.message || `Failed to load page: ${path}` })
     }
   }
 
@@ -453,7 +457,7 @@ export function ChatPanel() {
     lastSeenIndex.current = 0
   }
 
-  const copyMessage = async (text: string, label = "已复制") => {
+  const copyMessage = async (text: string, label = "Copied") => {
     if (!text) return
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
@@ -475,7 +479,7 @@ export function ChatPanel() {
       document.execCommand("copy")
       toast({ type: "success", message: label })
     } catch {
-      toast({ type: "error", message: "复制失败，请手动复制" })
+      toast({ type: "error", message: "Copy failed; please copy manually" })
     } finally {
       document.body.removeChild(ta)
     }
@@ -483,7 +487,7 @@ export function ChatPanel() {
 
   const exportConv = () => {
     if (!convId) {
-      toast({ type: "error", message: "当前没有可导出的对话" })
+      toast({ type: "error", message: "No conversation available to export" })
       return
     }
     const md = messages
@@ -505,7 +509,7 @@ export function ChatPanel() {
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
-    toast({ type: "success", message: "对话已导出为 Markdown" })
+    toast({ type: "success", message: "Conversation exported as Markdown" })
   }
 
   const regenerate = useCallback((target: Message) => {
@@ -527,7 +531,7 @@ export function ChatPanel() {
   const handleRenameConv = async (id: string, currentTitle: string) => {
     const next = typeof window === "undefined"
       ? currentTitle
-      : (window.prompt("重命名对话", currentTitle) || "").trim()
+      : (window.prompt("Rename conversation", currentTitle) || "").trim()
     if (!next || next === currentTitle) return
     try {
       const conv = await api.getConversation(id)
@@ -542,15 +546,15 @@ export function ChatPanel() {
       const list = await api.listConversations()
       setConversations(list)
       if (convId === id) setConvTitle(next)
-      toast({ type: "success", message: "对话已重命名" })
+      toast({ type: "success", message: "Conversation renamed" })
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || "重命名失败" })
+      toast({ type: "error", message: e?.message || "Rename failed" })
     }
   }
 
   const handleDeleteConv = async (id: string) => {
     const confirmed = typeof window === "undefined"
-      || window.confirm("删除该对话？该操作无法撤销。")
+      || window.confirm("Delete this conversation? This action cannot be undone.")
     if (!confirmed) return
     try {
       await api.deleteConversation(id)
@@ -560,9 +564,9 @@ export function ChatPanel() {
         setConvTitle("")
       }
       await api.listConversations().then(setConversations).catch(() => {})
-      toast({ type: "success", message: "对话已删除" })
+      toast({ type: "success", message: "Conversation deleted" })
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || "删除对话失败" })
+      toast({ type: "error", message: e?.message || "Failed to delete conversation" })
     }
   }
 
@@ -578,19 +582,19 @@ export function ChatPanel() {
   const handleImageUpload = async (file: File | null | undefined) => {
     if (!file) return
     setRecognizingImage(true)
-    setChatStatus("正在识别图片...")
+    setChatStatus("Recognizing image...")
     try {
       const res = await api.recognizeChatImage(file)
       const extracted = res.text.trim()
       if (!extracted) {
-        toast({ type: "error", message: "没有识别到可用文字" })
+        toast({ type: "error", message: "No usable text recognized" })
         return
       }
-      const block = `我拍照上传了一道题，请先基于识别内容回答。如果识别有误，请指出需要我确认的地方。\n\n## 图片识别结果\n\n${extracted}`
+      const block = `I photographed and uploaded a question. Please answer based on the recognized content, and point out anything I should confirm.\n\n## OCR result\n\n${extracted}`
       setInput((prev) => prev.trim() ? `${prev.trim()}\n\n${block}` : block)
-      toast({ type: "success", message: "图片已识别，结果已填入输入框" })
+      toast({ type: "success", message: "Image recognized; result filled into the input box" })
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || "图片识别失败" })
+      toast({ type: "error", message: e?.message || "Image recognition failed" })
     } finally {
       setRecognizingImage(false)
       setChatStatus(null)
@@ -598,9 +602,9 @@ export function ChatPanel() {
     }
   }
 
-  // The "重试/继续" + "已停止" badge only make sense on the latest
+  // The "Retry/Continue" + "Stopped" badge only make sense on the latest
   // assistant message, since regenerate() acts on the most recent user
-  // turn. Older stopped messages keep their (已停止) badge for context
+  // turn. Older stopped messages keep their (Stopped) badge for context
   // but no longer expose the regenerate button.
   const lastAssistantId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -618,8 +622,8 @@ export function ChatPanel() {
         <div className="p-2 border-b flex gap-1.5">
           <button
             onClick={handleNewConv}
-            aria-label="新建对话"
-            title="新建对话"
+            aria-label="New Conversation"
+            title="New Conversation"
             className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-dashed border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
           >
             <Plus size={12} /> New Chat
@@ -627,8 +631,8 @@ export function ChatPanel() {
           <button
             onClick={exportConv}
             disabled={!convId}
-            aria-label="导出当前对话为 Markdown"
-            title="导出当前对话为 Markdown"
+            aria-label="Export current conversation as Markdown"
+            title="Export current conversation as Markdown"
             className="shrink-0 flex items-center justify-center px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] disabled:opacity-40"
           >
             <Download size={12} />
@@ -637,7 +641,7 @@ export function ChatPanel() {
         <div className="flex-1 overflow-y-auto">
           {loadingConversations ? (
             <div className="flex items-center justify-center gap-1 px-3 py-6 text-xs text-[var(--muted-foreground)]">
-              <Loader2 size={12} className="animate-spin" /> 加载对话…
+              <Loader2 size={12} className="animate-spin" /> Loading conversation…
             </div>
           ) : null}
           {!loadingConversations && conversations.length === 0 ? (
@@ -660,14 +664,14 @@ export function ChatPanel() {
               <button
                 onClick={(e) => { e.stopPropagation(); handleRenameConv(c.id, c.title) }}
                 className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] transition-opacity"
-                title="重命名"
+                title="Rename"
               >
                 <Pencil size={11} />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteConv(c.id) }}
                 className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-500 transition-opacity"
-                title="删除"
+                title="Delete"
               >
                 <Trash2 size={11} />
               </button>
@@ -702,11 +706,11 @@ export function ChatPanel() {
           </span>
           <span className="ml-auto flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
             {llmModel ? (
-              <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title={`当前 LLM 模型: ${llmModel}`}>
+              <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title={`LLM model: ${llmModel}`}>
                 <Bot size={10} /> {llmModel}
               </span>
             ) : null}
-            <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title="当前学习者 ID">
+            <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title="Current learner ID">
               <User size={10} /> {userId}
             </span>
           </span>
@@ -721,14 +725,14 @@ export function ChatPanel() {
                 <p className="text-lg mb-2">Knowledge Wiki Assistant</p>
                 <p>Ask with citations from your selected scope.</p>
                 <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
-                  当前学习者：<span className="font-medium text-[var(--foreground)]">{userId}</span>
+                  Current learner:<span className="font-medium text-[var(--foreground)]">{userId}</span>
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-                  知识库为空？到 <button
+                  Knowledge base empty? Go to <button
                     type="button"
                     onClick={() => useAppStore.getState().setActiveView("sources")}
                     className="font-medium text-[var(--primary)] underline-offset-2 hover:underline"
-                  >导入资料</button> 上传文档后这里会有答案。
+                  >Import Materials</button> Answers will appear here after you upload a document.
                 </p>
               </div>
             </div>
@@ -751,9 +755,9 @@ export function ChatPanel() {
                     {stoppedMessageIds.has(msg.id) ? (
                       <span
                         className="mb-1 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700"
-                        title={(stoppedAt.get(msg.id) ? `你在模型回答完整前手动停止了生成 (${new Date(stoppedAt.get(msg.id) as number).toLocaleTimeString()})` : "你在模型回答完整前手动停止了生成")}
+                        title={(stoppedAt.get(msg.id) ? `You manually stopped generation before the model finished responding (${new Date(stoppedAt.get(msg.id) as number).toLocaleTimeString()})` : "You manually stopped generation before the model finished responding")}
                       >
-                        (已停止)
+                        (Stopped)
                       </span>
                     ) : null}
                     <Markdown>{msg.content || "..."}</Markdown>
@@ -762,9 +766,9 @@ export function ChatPanel() {
                         type="button"
                         onClick={() => regenerate(msg)}
                         className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                        title="重新生成"
+                        title="Regenerate"
                       >
-                        <RefreshCw size={10} /> {msg.content?.startsWith("Error:") ? "重试" : "继续"}
+                        <RefreshCw size={10} /> {msg.content?.startsWith("Error:") ? "Retry" : "Continue"}
                       </button>
                     ) : null}
                     {msg.content && !msg.content.startsWith("Error:") ? (
@@ -772,9 +776,9 @@ export function ChatPanel() {
                         type="button"
                         onClick={() => copyMessage(msg.content)}
                         className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                        title="复制回答"
+                        title="Copy Answer"
                       >
-                        <Copy size={10} /> 复制
+                        <Copy size={10} /> Copy
                       </button>
                     ) : null}
                   </div>
@@ -797,13 +801,13 @@ export function ChatPanel() {
                             type="button"
                             onClick={() => openPage(c.anchor ? `${c.path}#${c.anchor}` : c.path)}
                             className="flex-1 text-left text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                            title={c.anchor ? `打开 ${c.path}（定位到 ${c.anchor}）` : `打开 ${c.path}`}
+                            title={c.anchor ? `Open ${c.path} (at ${c.anchor})` : `Open ${c.path}`}
                           >
                             <span className="font-medium">[{i + 1}] {c.title}</span>
                             {c.anchor ? (
                               <span
                                 className="ml-1 rounded bg-[var(--primary)]/10 px-1 py-0.5 text-[9px] font-medium text-[var(--primary)]"
-                                title={`点击跳转到该章节`}
+                                title={`Click to jump to this section`}
                               >
                                 §{c.anchor}
                               </span>
@@ -813,9 +817,9 @@ export function ChatPanel() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => copyMessage(c.path, "已复制路径")}
+                            onClick={() => copyMessage(c.path, "Path copied")}
                             className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 hover:bg-[var(--background)] hover:text-[var(--foreground)] group-hover:opacity-100"
-                            title="复制引用路径"
+                            title="Copy Citation Path"
                           >
                             <LinkIcon size={11} />
                           </button>
@@ -831,7 +835,7 @@ export function ChatPanel() {
             <div className="flex justify-start">
               <div className="bg-[var(--muted)] rounded-xl px-4 py-2.5 flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
-                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "思考中..."}</span>
+                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "Thinking..."}</span>
               </div>
             </div>
           )}
@@ -846,9 +850,9 @@ export function ChatPanel() {
               setUnreadCount(0)
             }}
             className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-[var(--background)] px-3 py-1 text-[11px] text-[var(--muted-foreground)] shadow hover:text-[var(--foreground)]"
-            title="跳到最新消息"
+            title="Jump to latest message"
           >
-            {unreadCount > 0 ? `${unreadCount} 条新消息 ↓` : "跳到最新 ↓"}
+            {unreadCount > 0 ? `${unreadCount} new messages ↓` : "Jump to Latest ↓"}
           </button>
         ) : null}
 
@@ -867,7 +871,7 @@ export function ChatPanel() {
               onClick={() => imageInputRef.current?.click()}
               disabled={!!streaming || recognizingImage}
               className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] disabled:opacity-50 transition-colors"
-              title="拍照或上传题目图片"
+              title="Take a photo or upload an image of the problem"
             >
               {recognizingImage ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
             </button>
@@ -889,8 +893,8 @@ export function ChatPanel() {
                 <button
                   type="button"
                   onClick={() => setInput("")}
-                  aria-label="清空输入"
-                  title="清空输入"
+                  aria-label="Clear Input"
+                  title="Clear Input"
                   className="absolute right-1.5 top-1.5 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                 >
                   <X size={12} />
@@ -901,15 +905,15 @@ export function ChatPanel() {
               <p
                 className={`mt-1 text-right text-[10px] ${input.length > 1500 ? "text-amber-600" : "text-[var(--muted-foreground)]"}`}
               >
-                {input.length}/4000{input.length > 1500 ? " · 建议拆分后再发" : ""}
+                {input.length}/4000{input.length > 1500 ? " · Suggest splitting before sending" : ""}
               </p>
             ) : null}
             {streaming ? (
               <button
                 onClick={handleStop}
-                aria-label="停止生成"
+                aria-label="Stop Generating"
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"
-                title="停止生成"
+                title="Stop Generating"
               >
                 <Square size={14} />
               </button>
@@ -917,7 +921,7 @@ export function ChatPanel() {
               <button
                 onClick={handleSend}
                 disabled={!input.trim()}
-                aria-label="发送消息"
+                aria-label="Send Message"
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 transition-opacity"
               >
                 <Send size={14} />

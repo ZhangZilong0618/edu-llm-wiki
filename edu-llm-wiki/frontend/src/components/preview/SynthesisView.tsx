@@ -29,14 +29,14 @@ export function SynthesisView({ page }: { page: WikiPage }) {
     >
       {thesis && (
         <div className="mb-3">
-          <Card title="综合论点 / Thesis" accent="text-pink-600">
+          <Card title="Thesis" accent="text-pink-600">
             <p className="text-[13px] italic leading-relaxed">{thesis}</p>
           </Card>
         </div>
       )}
       {evidence.length > 0 && (
         <div className="mb-3">
-          <Card title="证据 / Evidence" accent="text-pink-600">
+          <Card title="Evidence" accent="text-pink-600">
             <div className="flex flex-wrap gap-1.5">
               {evidence.map((path) => {
                 const p = evidenceLookup.get(path)

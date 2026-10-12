@@ -27,12 +27,12 @@ export function UserSelector() {
           type="button"
           onClick={open}
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-[var(--accent)]"
-          aria-label="切换当前学习者"
-          title="当前学习者会用于 BKT/SM-2/聊天画像/复习队列。点此切换。"
+          aria-label="Switch Current Learner"
+          title="The current learner is used for BKT/SM-2/chat profile/review queue. Click to switch."
         >
           <User size={12} className="text-[var(--muted-foreground)]" />
           <span className="flex-1 truncate text-[var(--sidebar-foreground)]">
-            <span className="block text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">当前学习者</span>
+            <span className="block text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">Current learner</span>
             <span className="font-medium">{userId}</span>
           </span>
           <Pencil size={11} className="text-[var(--muted-foreground)]" />
@@ -43,10 +43,10 @@ export function UserSelector() {
 
   return (
     <div className="px-3 py-2 border-b border-[var(--border)]">
-      <label className="block text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">切换学习者</label>
+      <label className="block text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">Switch learner</label>
       <div className="mt-1 flex gap-1">
         <input
-          aria-label="学习者 ID"
+          aria-label="Learner ID"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -59,7 +59,7 @@ export function UserSelector() {
         <button
           type="button"
           onClick={apply}
-          aria-label="确认"
+          aria-label="Confirm"
           className="rounded-md bg-[var(--primary)] px-2 text-white"
         >
           <Check size={12} />
@@ -67,7 +67,7 @@ export function UserSelector() {
         <button
           type="button"
           onClick={cancel}
-          aria-label="取消"
+          aria-label="Cancel"
           className="rounded-md border px-2"
         >
           <X size={12} />

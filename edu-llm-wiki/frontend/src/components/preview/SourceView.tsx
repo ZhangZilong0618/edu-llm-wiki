@@ -2,7 +2,7 @@
  * Source page view.
  *
  * A "source" page is an index/summary of an original document. We surface
- * the first paragraph of the body as a "摘要" summary card. Tags and source
+ * the first paragraph of the body as a "Summary" summary card. Tags and source
  * pills are still rendered by `BodyShell`.
  */
 import { BodyShell } from "./BodyShell"
@@ -19,7 +19,7 @@ export function SourceView({ page }: { page: WikiPage }) {
     >
       {summary && (
         <div className="mb-3">
-          <Card title="来源摘要 / Summary" accent="text-gray-600">
+          <Card title="Summary" accent="text-gray-600">
             <p className="text-[13px] leading-relaxed">{summary}</p>
           </Card>
         </div>

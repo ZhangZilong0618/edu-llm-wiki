@@ -23,7 +23,7 @@ export function typeLabel(type: string): string {
 }
 
 export function edgeLabel(type: string): string {
-  return EDGE_LABELS[type] || "相关";
+  return EDGE_LABELS[type] || "Related";
 }
 
 export function readableLabel(label: string, max = 22): string {

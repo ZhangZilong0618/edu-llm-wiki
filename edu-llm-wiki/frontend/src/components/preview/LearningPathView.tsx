@@ -1,8 +1,8 @@
 /**
  * Learning Path page view (C 组整合页).
  *
- * 列表型页：先修知识 / 推荐顺序 / 检测点。这一类不引文，因为它的内容
- * 是"指向其他页"，重复引文没意义。
+ * 列表型页：Prerequisite Knowledge / Recommended Order / Checkpoint。这一类不引文，因为它的内容
+ * 是"Links to other pages"，重复引文没意义。
  */
 import { BodyShell } from "./BodyShell"
 import { Card, Bullets, MarkdownSlice } from "./Card"
@@ -12,9 +12,9 @@ import { displayWikiTitle } from "@/lib/wiki-title"
 import type { WikiPage } from "@/types/wiki"
 
 export function LearningPathView({ page }: { page: WikiPage }) {
-  const prerequisites = extractSection(page.content, ["先修知识", "Prerequisites"])
-  const order = extractSection(page.content, ["推荐顺序", "Recommended order"])
-  const checkpoints = extractSection(page.content, ["检测点", "Checkpoints"])
+  const prerequisites = extractSection(page.content, ["Prerequisite Knowledge", "Prerequisites"])
+  const order = extractSection(page.content, ["Recommended Order", "Recommended order"])
+  const checkpoints = extractSection(page.content, ["Checkpoint", "Checkpoints"])
   const wikiPages = useAppStore((s) => s.wikiPages)
   const selectPage = useAppStore((s) => s.selectPage)
 
@@ -32,7 +32,7 @@ export function LearningPathView({ page }: { page: WikiPage }) {
       {prereqChips.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
           <span className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-            先修：
+            Prerequisite:
           </span>
           {prereqChips.map((w) => (
             <button
@@ -47,17 +47,17 @@ export function LearningPathView({ page }: { page: WikiPage }) {
       )}
       <div className="mb-3 grid gap-3 sm:grid-cols-2">
         {prerequisites && (
-          <Card title="先修知识 / Prerequisites" accent="text-indigo-600" className="sm:col-span-2">
+          <Card title="Prerequisites" accent="text-indigo-600" className="sm:col-span-2">
             <MarkdownSlice markdown={prerequisites} />
           </Card>
         )}
         {order && (
-          <Card title="推荐顺序 / Recommended order" accent="text-indigo-600" className="sm:col-span-2">
+          <Card title="Recommended order" accent="text-indigo-600" className="sm:col-span-2">
             <MarkdownSlice markdown={order} />
           </Card>
         )}
         {checkpoints && (
-          <Card title="检测点 / Checkpoints" accent="text-indigo-600" className="sm:col-span-2">
+          <Card title="Checkpoints" accent="text-indigo-600" className="sm:col-span-2">
             <MarkdownSlice markdown={checkpoints} />
           </Card>
         )}

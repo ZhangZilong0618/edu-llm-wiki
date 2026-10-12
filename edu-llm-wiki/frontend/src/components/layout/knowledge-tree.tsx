@@ -30,7 +30,7 @@ export function KnowledgeTree() {
       setSelectedPage(page)
       setActiveView("wiki")
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || `加载页面失败：${p.path}` })
+      toast({ type: "error", message: e?.message || `Failed to load page: ${p.path}` })
     }
   }
 

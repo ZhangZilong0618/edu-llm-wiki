@@ -2,7 +2,7 @@
  * Concept page view.
  *
  * Per docs/wiki-redesign.md §4.2 the top of a concept page should show an
- * "易混淆 / common misconceptions" card. We pull this from the structured
+ * "Common misconceptions" card. We pull this from the structured
  * `common_misconceptions` frontmatter (the only v2 field that has a clean
  * per-type mapping today). Everything else flows through the shared
  * `BodyShell` markdown body.
@@ -20,7 +20,7 @@ export function ConceptView({ page }: { page: WikiPage }) {
     >
       {misconceptions.length > 0 && (
         <div className="mb-3">
-          <Card title="易混淆 / Common misconceptions" accent="text-blue-600">
+          <Card title="Common misconceptions" accent="text-blue-600">
             <Bullets items={misconceptions} />
           </Card>
         </div>

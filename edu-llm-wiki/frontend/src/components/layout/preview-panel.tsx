@@ -101,16 +101,16 @@ function ResearchPanel({
 
   const runResearch = async () => {
     if (isCustomAction && !state.note.trim()) {
-      toast({ type: "error", message: "先写一下自定义研究提示词" })
+      toast({ type: "error", message: "First write a custom research prompt" })
       return
     }
-    beginOperation(runKey, "深入研究中")
+    beginOperation(runKey, "Researching in depth")
     onStateChange({ editingResult: false })
     try {
       const res = await api.runResearch({ page_path: page.path, action: selectedAction, note: state.note })
       onStateChange({ result: res })
     } catch (e: any) {
-      toast({ type: "error", message: `深入探究失败: ${e?.message || e}` })
+      toast({ type: "error", message: `Explore further failed: ${e?.message || e}` })
     } finally {
       endOperation(runKey)
     }
@@ -118,13 +118,13 @@ function ResearchPanel({
 
   const saveNote = async () => {
     if (!state.result) return
-    beginOperation(saveKey, "保存研究笔记中")
+    beginOperation(saveKey, "Saving research notes")
     try {
       const res = await api.saveResearchNote({ page_path: page.path, title: state.result.title, content: state.result.content })
       setSelectedPage(res.page)
-      toast({ type: "success", message: "已保存到当前页面" })
+      toast({ type: "success", message: "Saved to the current page" })
     } catch (e: any) {
-      toast({ type: "error", message: `保存失败: ${e?.message || e}` })
+      toast({ type: "error", message: `Save failed: ${e?.message || e}` })
     } finally {
       endOperation(saveKey)
     }
@@ -138,7 +138,7 @@ function ResearchPanel({
             <Microscope size={13} />
           </span>
           <div className="min-w-0">
-            <h3 className="truncate text-xs font-semibold">深入探究</h3>
+            <h3 className="truncate text-xs font-semibold">Explore Further</h3>
             <p className="truncate text-[11px] text-[var(--muted-foreground)]">{page.title}</p>
           </div>
           <button
@@ -178,7 +178,7 @@ function ResearchPanel({
           <textarea
             value={state.note}
             onChange={(e) => onStateChange({ note: e.target.value })}
-            placeholder={isCustomAction ? "写下你想让 AI 深入研究的提示词..." : "可选：补充你想深入的角度..."}
+            placeholder={isCustomAction ? "Write a prompt for the AI to research in depth..." : "Optional: add angles you want to explore..."}
             className="min-h-14 w-full resize-y rounded-md border bg-[var(--background)] px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
           />
           <button
@@ -187,7 +187,7 @@ function ResearchPanel({
             className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            {loading ? "研究中..." : "开始探究"}
+            {loading ? "Researching..." : "Start inquiry"}
           </button>
         </div>
 
@@ -196,14 +196,14 @@ function ResearchPanel({
           <div className="flex h-full items-center justify-center text-center text-xs text-[var(--muted-foreground)]">
             <div>
               <BookOpenCheck className="mx-auto mb-2 h-8 w-8 opacity-30" />
-              <p>选择一个动作，让当前页面继续长出可保存的研究笔记。</p>
+              <p>Choose an action to continue growing saveable research notes from the current page.</p>
             </div>
           </div>
         )}
         {loading && (
           <div className="flex h-full items-center justify-center text-xs text-[var(--muted-foreground)]">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            正在生成深入探究...
+            Generating in-depth exploration...
           </div>
         )}
         {state.result && !loading && (
@@ -215,19 +215,19 @@ function ResearchPanel({
                 className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors ${
                   state.editingResult ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                 }`}
-                title={state.editingResult ? "预览" : "编辑"}
+                title={state.editingResult ? "Preview" : "Edit"}
               >
                 {state.editingResult ? <BookOpenCheck size={12} /> : <Save size={12} />}
-                {state.editingResult ? "预览" : "编辑"}
+                {state.editingResult ? "Preview" : "Edit"}
               </button>
               <button
                 onClick={saveNote}
                 disabled={saving}
                 className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
-                title="保存到当前页面"
+                title="Save to Current Page"
               >
                 {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                保存
+                Save
               </button>
             </div>
             {state.editingResult ? (
@@ -245,7 +245,7 @@ function ResearchPanel({
               <div className="rounded-md border p-2">
                 <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]">
                   <Network size={12} />
-                  相关页面
+                  Related Pages
                 </div>
                 <div className="space-y-1">
                   {state.result.related_pages.map((related) => (
@@ -293,9 +293,9 @@ function PageEditor({
       await api.updatePage(page.path, { content })
       const updated = await api.getPage(page.path)
       onSaved(updated)
-      toast({ type: "success", message: "页面已保存" })
+      toast({ type: "success", message: "Page saved" })
     } catch (e: any) {
-      toast({ type: "error", message: `保存失败: ${e?.message || e}` })
+      toast({ type: "error", message: `Save failed: ${e?.message || e}` })
     } finally {
       setSaving(false)
     }
@@ -304,13 +304,13 @@ function PageEditor({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-[var(--muted-foreground)]">编辑模式</span>
+        <span className="text-xs font-medium text-[var(--muted-foreground)]">Edit Mode</span>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={onCancel}
             className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
           >
-            取消
+            Cancel
           </button>
           <button
             onClick={save}
@@ -318,7 +318,7 @@ function PageEditor({
             className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-            {saving ? "保存中..." : "保存"}
+            {saving ? "Saving..." : "Save"}
           </button>
         </div>
       </div>
@@ -439,10 +439,10 @@ export function PreviewPanel() {
                 ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
                 : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             }`}
-            title="深入探究当前页面"
+            title="Explore the current page in depth"
           >
             <Microscope size={13} />
-            深入探究
+            Explore Further
           </button>
         </div>
         {selectedPage.sources.length > 0 && (
@@ -522,14 +522,14 @@ function PageBodyDispatch({ page, onEdit, onPractice }: { page: WikiPage; onEdit
           className="inline-flex items-center gap-1.5 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1.5 text-xs text-[var(--primary)] hover:bg-[var(--primary)]/10"
         >
           <Sparkles size={12} />
-          为本页出几道题
+          Generate Questions for This Page
         </button>
         <button
           onClick={onEdit}
           className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
         >
           <Save size={12} />
-          编辑页面
+          Edit page
         </button>
       </div>
     </>

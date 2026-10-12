@@ -2,8 +2,8 @@
  * Principle page view.
  *
  * Per docs/wiki-redesign.md §4.2 the top of a principle page shows four
- * structured cards: "陈述" (statement), "适用条件" (conditions), "推导/说明"
- * (proof sketch), and "应用" (applications). All parsed from body `##`
+ * structured cards: "Statement" (statement), "Applicable Conditions" (conditions), "Derivation/Explanation"
+ * (proof sketch), and "Apply" (applications). All parsed from body `##`
  * sections.
  */
 import { BodyShell } from "./BodyShell"
@@ -12,10 +12,10 @@ import { extractSection } from "@/lib/page-sections"
 import type { WikiPage } from "@/types/wiki"
 
 export function PrincipleView({ page }: { page: WikiPage }) {
-  const statement = extractSection(page.content, ["陈述", "Statement"])
-  const conditions = extractSection(page.content, ["适用条件", "Conditions"])
-  const proof = extractSection(page.content, ["推导/说明", "推导", "Proof"])
-  const applications = extractSection(page.content, ["应用", "Applications"])
+  const statement = extractSection(page.content, ["Statement", "Statement"])
+  const conditions = extractSection(page.content, ["Applicable Conditions", "Conditions"])
+  const proof = extractSection(page.content, ["Derivation/Explanation", "Derivation", "Proof"])
+  const applications = extractSection(page.content, ["Apply", "Applications"])
 
   return (
     <BodyShell
@@ -24,22 +24,22 @@ export function PrincipleView({ page }: { page: WikiPage }) {
     >
       <div className="mb-3 grid gap-3 sm:grid-cols-2">
         {statement && (
-          <Card title="陈述 / Statement" accent="text-amber-600" className="sm:col-span-2">
+          <Card title="Statement" accent="text-amber-600" className="sm:col-span-2">
             <MarkdownSlice markdown={statement} />
           </Card>
         )}
         {conditions && (
-          <Card title="适用条件 / Conditions" accent="text-amber-600">
+          <Card title="Conditions" accent="text-amber-600">
             <MarkdownSlice markdown={conditions} />
           </Card>
         )}
         {proof && (
-          <Card title="推导/说明 / Proof sketch" accent="text-amber-600">
+          <Card title="Proof sketch" accent="text-amber-600">
             <MarkdownSlice markdown={proof} />
           </Card>
         )}
         {applications && (
-          <Card title="应用 / Applications" accent="text-amber-600" className="sm:col-span-2">
+          <Card title="Applications" accent="text-amber-600" className="sm:col-span-2">
             <MarkdownSlice markdown={applications} />
           </Card>
         )}

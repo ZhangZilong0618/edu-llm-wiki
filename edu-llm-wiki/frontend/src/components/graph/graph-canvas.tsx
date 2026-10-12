@@ -44,7 +44,7 @@ type PositionedEdge = GraphEdge & {
   targetNode: PositionedNode;
 };
 
-const LANE_LABELS = ["资料", "概念", "原理/公式", "练习/应用"];
+const LANE_LABELS = ["Resources", "Concept", "Principle/Formula", "Practice/Application"];
 const LANE_ORDER: Record<string, number> = {
   source: 0,
   concept: 1,
@@ -89,7 +89,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
   if (layout.nodes.length === 0) {
     return (
       <div className="flex h-full items-center justify-center bg-[var(--background)] text-sm text-[var(--muted-foreground)]">
-        当前筛选下没有可显示的知识点
+        No knowledge points to display under the current filter
       </div>
     );
   }
@@ -102,7 +102,7 @@ export function GraphCanvas(props: GraphCanvasProps) {
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         className="block min-h-full min-w-full"
         role="img"
-        aria-label="知识图谱学习地图"
+        aria-label="Knowledge graph learning map"
       >
         <defs>
           <marker
@@ -519,9 +519,9 @@ function normalizedCommunity(node: GraphNode): number {
 }
 
 function groupLabel(groupId: number, nodes: GraphNode[]): string {
-  if (groupId < 0) return "未分组知识";
+  if (groupId < 0) return "Ungrouped knowledge";
   const top = nodes[0];
-  return `知识簇 ${groupId + 1}${top ? ` · ${top.label}` : ""}`;
+  return `Knowledge cluster ${groupId + 1}${top ? ` · ${top.label}` : ""}`;
 }
 
 function nodeDisplayColor(

@@ -51,7 +51,7 @@ export function ReviewSession({
   if (!items.length) {
     return (
       <div className="rounded-lg border p-6 text-center text-sm text-[var(--muted-foreground)]">
-        今天没有需要复习的知识点 — 去做一些新题目吧。
+        No knowledge points to review today — go try some new questions.
       </div>
     )
   }
@@ -72,7 +72,7 @@ export function ReviewSession({
       )
       setStats((s) => ({ correct: s.correct + (correct ? 1 : 0), total: s.total + 1 }))
     } catch (e: any) {
-      toast({ type: "error", message: e?.message || "提交复习失败" })
+      toast({ type: "error", message: e?.message || "Failed to submit review" })
     }
     setBusy(false)
     setRevealed(false)
@@ -84,14 +84,14 @@ export function ReviewSession({
     return (
       <div className="rounded-lg border p-6 text-center">
         <p className="text-sm">
-          本轮复习完成 — {stats.correct}/{stats.total} 答对
+          Review complete — {stats.correct}/{stats.total} correct
         </p>
         {onComplete && (
           <button
             onClick={onComplete}
             className="mt-3 rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white"
           >
-            完成
+            Complete
           </button>
         )}
       </div>
@@ -104,9 +104,9 @@ export function ReviewSession({
         {idx + 1} / {items.length}
       </div>
       <h3 className="text-sm font-semibold">{item.title || item.kc_id}</h3>
-      <p className="text-xs text-[var(--muted-foreground)]">{item.prompt || "复习这道题"}</p>
+      <p className="text-xs text-[var(--muted-foreground)]">{item.prompt || "Review this question"}</p>
       {revealed && item.expected && (
-        <p className="rounded bg-slate-100 px-3 py-2 text-xs">参考：{item.expected}</p>
+        <p className="rounded bg-slate-100 px-3 py-2 text-xs">Reference: {item.expected}</p>
       )}
       <ConfidenceSlider value={confidence} onChange={setConfidence} />
       <div className="flex gap-2">
@@ -115,7 +115,7 @@ export function ReviewSession({
             onClick={() => setRevealed(true)}
             className="rounded-md bg-slate-200 px-3 py-1.5 text-xs"
           >
-            显示答案
+            Show Answer
           </button>
         ) : (
           <>
@@ -124,14 +124,14 @@ export function ReviewSession({
               onClick={() => submit(false)}
               className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-3 py-1.5 text-xs text-rose-700"
             >
-              <X size={12} /> 答错
+              <X size={12} /> Incorrect
             </button>
             <button
               disabled={busy}
               onClick={() => submit(true)}
               className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-3 py-1.5 text-xs text-emerald-700"
             >
-              <Check size={12} /> 答对
+              <Check size={12} /> Correct
             </button>
           </>
         )}

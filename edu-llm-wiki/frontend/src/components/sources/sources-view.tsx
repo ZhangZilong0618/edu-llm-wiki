@@ -11,15 +11,15 @@ function viewableExt(filename: string): boolean {
 }
 
 const STAGE_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
-  parse: { label: "解析文件", icon: <FileText size={12} /> },
-  plan: { label: "规划主干", icon: <Brain size={12} /> },
-  generate_core: { label: "生成主干", icon: <PenLine size={12} /> },
-  derive: { label: "生成进阶", icon: <Zap size={12} /> },
-  generate_derived: { label: "组装页面", icon: <FileScan size={12} /> },
-  verify_refs: { label: "引用校验", icon: <FileCheck size={12} /> },
-  analyze: { label: "LLM 分析", icon: <Brain size={12} /> },
-  generate: { label: "LLM 生成", icon: <PenLine size={12} /> },
-  write: { label: "写入页面", icon: <CheckCircle2 size={12} /> },
+  parse: { label: "Parse File", icon: <FileText size={12} /> },
+  plan: { label: "Plan Backbone", icon: <Brain size={12} /> },
+  generate_core: { label: "Generate Backbone", icon: <PenLine size={12} /> },
+  derive: { label: "Generate Advanced", icon: <Zap size={12} /> },
+  generate_derived: { label: "Assemble Page", icon: <FileScan size={12} /> },
+  verify_refs: { label: "Citation verification", icon: <FileCheck size={12} /> },
+  analyze: { label: "LLM Analysis", icon: <Brain size={12} /> },
+  generate: { label: "LLM Generation", icon: <PenLine size={12} /> },
+  write: { label: "Write to page", icon: <CheckCircle2 size={12} /> },
 }
 
 const INGEST_STAGES = ["parse", "plan", "generate_core", "derive", "generate_derived", "verify_refs", "write"]
@@ -218,7 +218,7 @@ export function SourcesView() {
     updateProgress(() => ({
       filename,
       status: "running" as const,
-      stages: INGEST_STAGES.map((stage) => ({ stage, message: "等待中...", status: "pending" as const })),
+      stages: INGEST_STAGES.map((stage) => ({ stage, message: "Waiting...", status: "pending" as const })),
     }))
 
     let failed = false
@@ -318,7 +318,7 @@ export function SourcesView() {
       ...prev,
       [filename]: {
         status: failed ? "error" : "done",
-        message: failed ? "处理失败，可重新加入队列" : undefined,
+        message: failed ? "Processing failed; you can re-add it to the queue" : undefined,
       },
     }))
   }, [clearProgressDismissTimer, scheduleProgressDismiss, setSourceFiles, updateProgress])
@@ -383,7 +383,7 @@ export function SourcesView() {
     setTaskQueue(queueRef.current)
     setTaskStates((prev) => ({
       ...prev,
-      [filename]: { status: "done", message: "已从队列移除" },
+      [filename]: { status: "done", message: "Removed from queue" },
     }))
   }, [])
 
@@ -393,7 +393,7 @@ export function SourcesView() {
     setTaskStates((prev) => {
       const next = { ...prev }
       for (const [filename, state] of Object.entries(prev)) {
-        if (state.status === "queued") next[filename] = { status: "done", message: "已从队列移除" }
+        if (state.status === "queued") next[filename] = { status: "done", message: "Removed from queue" }
       }
       return next
     })
@@ -488,7 +488,7 @@ export function SourcesView() {
           className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors"
         >
           {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-          {uploading ? "Uploading..." : isDragging ? "松开鼠标上传" : "Upload or Drop Documents"}
+          {uploading ? "Uploading..." : isDragging ? "Release mouse to upload" : "Upload or Drop Documents"}
         </button>
         </div>
         {uploadProgress ? (
@@ -510,7 +510,7 @@ export function SourcesView() {
             onClick={enqueueAllPending}
             disabled={pendingIngestFiles.length === 0}
             className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
-            title="将所有未导入的文档加入任务队列"
+            title="Add all unimported documents to the task queue"
           >
             <Clock size={14} />
             添加 {pendingIngestFiles.length} 个任务
@@ -521,14 +521,14 @@ export function SourcesView() {
           <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--muted)] p-2">
             <div className="mb-1 flex items-center justify-between gap-2">
               <span className="text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-                任务队列
+                Task Queue
               </span>
               {taskQueue.length > 0 && (
                 <button
                   onClick={clearPendingQueue}
                   className="text-[10px] text-[var(--muted-foreground)] hover:text-rose-600"
                 >
-                  清空待处理
+                  Clear pending
                 </button>
               )}
             </div>
@@ -536,19 +536,19 @@ export function SourcesView() {
               <div className="flex items-center gap-2 rounded bg-white px-2 py-1 text-[11px]">
                 <Loader2 size={12} className="shrink-0 animate-spin text-blue-600" />
                 <span className="flex-1 truncate">{activeTask}</span>
-                <span className="shrink-0 text-[10px] text-blue-600">运行中</span>
+                <span className="shrink-0 text-[10px] text-blue-600">Running</span>
               </div>
             )}
             {taskQueue.map((filename) => (
               <div key={filename} className="mt-1 flex items-center gap-2 rounded bg-white px-2 py-1 text-[11px]">
                 <Clock size={12} className="shrink-0 text-[var(--muted-foreground)]" />
                 <span className="flex-1 truncate">{filename}</span>
-                <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">待处理</span>
+                <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">Pending</span>
                 <button
                   onClick={() => removeQueuedTask(filename)}
                   className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-rose-50 hover:text-rose-600"
-                  title="从队列移除"
-                  aria-label={`从队列移除 ${filename}`}
+                  title="Remove from queue"
+                  aria-label={`Remove from queue ${filename}`}
                 >
                   <X size={12} />
                 </button>
@@ -586,11 +586,11 @@ export function SourcesView() {
               <span className="flex-1 truncate text-[var(--sidebar-foreground)]">{f.name}</span>
               {f.imported ? (
                 <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                  已入图谱
+                  Added to Graph
                 </span>
               ) : (
                 <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
-                  未导入
+                  Not imported
                 </span>
               )}
               <span className="text-[10px] text-[var(--muted-foreground)]">
@@ -601,11 +601,11 @@ export function SourcesView() {
                 <button
                   onClick={(e) => { e.stopPropagation(); handlePreview(f.name) }}
                   className="group relative p-1 rounded hover:bg-blue-100 text-blue-600"
-                  title="预览原始文件"
-                  aria-label="预览原始文件"
+                  title="Preview original file"
+                  aria-label="Preview original file"
                 >
                   <Eye size={14} />
-                  <IconTooltip>预览原始文件</IconTooltip>
+                  <IconTooltip>Preview original file</IconTooltip>
                 </button>
               )}
               <button
@@ -614,21 +614,21 @@ export function SourcesView() {
                 className="group relative p-1 rounded hover:bg-green-100 text-green-600 disabled:opacity-50"
                 title={
                   f.imported
-                    ? "已入图谱；如需重新生成，请先删除生成的 Wiki"
+                    ? "Already in the graph; to regenerate, please delete the generated Wiki first"
                     : activeTask === f.name
-                      ? "正在处理"
+                      ? "Processing"
                       : queuedSet.has(f.name)
-                        ? "已加入任务队列"
-                        : "用 LLM 生成知识 Wiki"
+                        ? "Added to task queue"
+                        : "Generate knowledge Wiki with LLM"
                 }
                 aria-label={
                   f.imported
-                    ? "已入图谱，不能重复执行"
+                    ? "Already added to the graph; cannot run again"
                     : activeTask === f.name
-                      ? "正在处理"
+                      ? "Processing"
                       : queuedSet.has(f.name)
-                        ? "已加入任务队列"
-                        : "用 LLM 生成知识 Wiki"
+                        ? "Added to task queue"
+                        : "Generate knowledge Wiki with LLM"
                 }
               >
                 {activeTask === f.name ? (
@@ -640,12 +640,12 @@ export function SourcesView() {
                 )}
                 <IconTooltip>
                   {f.imported
-                    ? "已入图谱"
+                    ? "Added to Graph"
                     : activeTask === f.name
-                      ? "正在处理"
+                      ? "Processing"
                       : queuedSet.has(f.name)
-                        ? "已加入队列"
-                        : "生成知识 Wiki"}
+                        ? "Added to queue"
+                        : "Generate knowledge Wiki"}
                 </IconTooltip>
               </button>
               <button
@@ -655,11 +655,11 @@ export function SourcesView() {
                     ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
                     : "hover:bg-amber-100 text-amber-600"
                 }`}
-                title={confirmDeleteWiki === f.name ? "再次点击确认删除该文件生成的 Wiki 页面" : "仅删除该文件生成的 Wiki 页面"}
-                aria-label={confirmDeleteWiki === f.name ? "再次点击确认删除该文件生成的 Wiki 页面" : "仅删除该文件生成的 Wiki 页面"}
+                title={confirmDeleteWiki === f.name ? "Click again to confirm deleting the Wiki pages generated from this file" : "Delete only the Wiki pages generated from this file"}
+                aria-label={confirmDeleteWiki === f.name ? "Click again to confirm deleting the Wiki pages generated from this file" : "Delete only the Wiki pages generated from this file"}
               >
                 <ScanSearch size={14} />
-                <IconTooltip>{confirmDeleteWiki === f.name ? "再次点击确认" : "删除生成的 Wiki"}</IconTooltip>
+                <IconTooltip>{confirmDeleteWiki === f.name ? "Click again to confirm" : "Delete generated Wiki"}</IconTooltip>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDelete(f.name) }}
@@ -668,11 +668,11 @@ export function SourcesView() {
                     ? "bg-red-100 text-red-600 hover:bg-red-200"
                     : "hover:bg-red-100 text-red-600"
                 }`}
-                title={confirmDelete === f.name ? "再次点击确认删除源文件" : "删除源文件"}
-                aria-label={confirmDelete === f.name ? "再次点击确认删除源文件" : "删除源文件"}
+                title={confirmDelete === f.name ? "Click again to confirm deleting the source file" : "Delete source file"}
+                aria-label={confirmDelete === f.name ? "Click again to confirm deleting the source file" : "Delete source file"}
               >
                 <Trash2 size={14} />
-                <IconTooltip>{confirmDelete === f.name ? "再次点击确认" : "删除源文件"}</IconTooltip>
+                <IconTooltip>{confirmDelete === f.name ? "Click again to confirm" : "Delete source file"}</IconTooltip>
               </button>
             </div>
           )
@@ -708,8 +708,8 @@ function ParseStatusIcon({
 }) {
   if (!parseable) {
     return (
-      <span className="group relative w-4 h-4" title="该文件类型不需要 OCR 解析">
-        <IconTooltip>无需 OCR 解析</IconTooltip>
+      <span className="group relative w-4 h-4" title="This file type does not require OCR parsing">
+        <IconTooltip>No OCR parsing needed</IconTooltip>
       </span>
     )
   }
@@ -718,19 +718,19 @@ function ParseStatusIcon({
       <button
         onClick={(e) => { e.stopPropagation(); onReparse() }}
         className="group relative p-1 rounded text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
-        title="用 PaddleOCR-VL 解析文档"
-        aria-label="用 PaddleOCR-VL 解析文档"
+        title="Parse documents with PaddleOCR-VL"
+        aria-label="Parse documents with PaddleOCR-VL"
       >
         <ScanSearch size={12} />
-        <IconTooltip>解析文档</IconTooltip>
+        <IconTooltip>Parse Document</IconTooltip>
       </button>
     )
   }
   if (status.status === "pending" || status.status === "running") {
     return (
-      <span className="group relative p-1 text-blue-500" title={`正在解析: ${status.page_count} 页`}>
+      <span className="group relative p-1 text-blue-500" title={`Parsing: ${status.page_count} 页`}>
         <Loader2 size={12} className="animate-spin" />
-        <IconTooltip>正在解析</IconTooltip>
+        <IconTooltip>Parsing</IconTooltip>
       </span>
     )
   }
@@ -739,11 +739,11 @@ function ParseStatusIcon({
       <button
         onClick={(e) => { e.stopPropagation(); onReparse() }}
         className="group relative p-1 rounded text-red-500 hover:bg-red-50"
-        title={`解析失败: ${status.error || "未知错误"}。点击重试。`}
-        aria-label="解析失败，点击重试"
+        title={`Analysis失败: ${status.error || "未知错误"}。点击Retry。`}
+        aria-label="Parsing failed; click to retry"
       >
         <AlertCircle size={12} />
-        <IconTooltip>解析失败，重试</IconTooltip>
+        <IconTooltip>Parsing failed, retry</IconTooltip>
       </button>
     )
   }
@@ -751,10 +751,10 @@ function ParseStatusIcon({
   return (
     <span
       className="group relative p-1 text-emerald-500"
-      title={`已解析: ${status.page_count} 页, ${status.image_count} 张图片`}
+      title={`已Analysis: ${status.page_count} 页, ${status.image_count} 张图片`}
     >
       <CheckCircle2 size={12} />
-      <IconTooltip>已完成解析</IconTooltip>
+      <IconTooltip>Analysis completed</IconTooltip>
     </span>
   )
 }
@@ -769,7 +769,7 @@ function IngestProgressPanel({
   setExpandedStages: (s: Set<string>) => void
 }) {
   const dismiss = useAppStore((s) => s.setIngestProgress)
-  // 当某阶段有 LLM 日志且 ingest 已完成/出错时，自动展开该阶段。
+  // 当某阶段有 LLM 日志且 ingest 已Complete/出错时，自动Expand该阶段。
   useEffect(() => {
     if (progress?.status !== "done" && progress?.status !== "error") return
     const auto = new Set(expandedStages)
@@ -802,8 +802,8 @@ function IngestProgressPanel({
         {allDone ? <CheckCircle2 size={12} /> : hasError ? null : <Loader2 size={12} className="animate-spin" />}
         <span className="truncate flex-1">
           {hasError ? `错误: ${progress.error}` :
-           allDone ? `处理完成: ${progress.filename}` :
-           `处理中: ${progress.filename}`}
+           allDone ? `处理Complete: ${progress.filename}` :
+           `Processing: ${progress.filename}`}
         </span>
         <button
           onClick={() => dismiss(null)}
@@ -862,19 +862,19 @@ function IngestProgressPanel({
                 <div className="ml-6 mb-1 px-2 py-1.5 rounded bg-white/60 text-[11px] space-y-1">
                   {s.details.concepts && s.details.concepts.length > 0 && (
                     <div>
-                      <span className="font-medium text-[var(--foreground)]">概念: </span>
+                      <span className="font-medium text-[var(--foreground)]">Concept: </span>
                       <span className="text-[var(--muted-foreground)]">{s.details.concepts.join(", ")}</span>
                     </div>
                   )}
                   {s.details.formulas && s.details.formulas.length > 0 && (
                     <div>
-                      <span className="font-medium text-[var(--foreground)]">公式: </span>
+                      <span className="font-medium text-[var(--foreground)]">Formula: </span>
                       <span className="text-[var(--muted-foreground)]">{s.details.formulas.join(", ")}</span>
                     </div>
                   )}
                   {s.details.principles && s.details.principles.length > 0 && (
                     <div>
-                      <span className="font-medium text-[var(--foreground)]">原理: </span>
+                      <span className="font-medium text-[var(--foreground)]">Principle: </span>
                       <span className="text-[var(--muted-foreground)]">{s.details.principles.join(", ")}</span>
                     </div>
                   )}
@@ -886,7 +886,7 @@ function IngestProgressPanel({
                   {s.pages.items.map((p, i) => (
                     <div key={i} className="flex items-center gap-2 px-2 py-0.5 border-b last:border-0">
                       <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${
-                        p.action === "新建" ? "bg-green-400" : p.action === "skip" ? "bg-gray-300" : "bg-blue-400"
+                        p.action === "New" ? "bg-green-400" : p.action === "skip" ? "bg-gray-300" : "bg-blue-400"
                       }`} />
                       <span className="text-[var(--muted-foreground)] w-6 text-right shrink-0">{p.page_type}</span>
                       <span className="truncate">{p.title}</span>

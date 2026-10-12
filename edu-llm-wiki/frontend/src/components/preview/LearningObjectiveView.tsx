@@ -1,7 +1,7 @@
 /**
- * Learning Objective page view (C 组评价页).
+ * Learning Objective page view (C 组Evaluate页).
  *
- * 行为动词 + 认知层级（Blooms）+ 达成证据。
+ * Action Verbs + Cognitive Level（Blooms）+ Evidence of Achievement。
  */
 import { BodyShell } from "./BodyShell"
 import { Card, Bullets, MarkdownSlice } from "./Card"
@@ -9,9 +9,9 @@ import { extractSection } from "@/lib/page-sections"
 import type { WikiPage } from "@/types/wiki"
 
 export function LearningObjectiveView({ page }: { page: WikiPage }) {
-  const verbs = extractSection(page.content, ["行为动词", "Action verbs"])
-  const level = extractSection(page.content, ["认知层级", "Blooms level"])
-  const evidence = extractSection(page.content, ["达成证据", "Evidence"])
+  const verbs = extractSection(page.content, ["Action Verbs", "Action verbs"])
+  const level = extractSection(page.content, ["Cognitive Level", "Blooms level"])
+  const evidence = extractSection(page.content, ["Evidence of Achievement", "Evidence"])
   const items = (verbs ?? "")
     .split(/\n+/)
     .map((s) => s.replace(/^[-*•\s]+/, "").trim())
@@ -24,17 +24,17 @@ export function LearningObjectiveView({ page }: { page: WikiPage }) {
     >
       <div className="mb-3 grid gap-3 sm:grid-cols-2">
         {items.length > 0 && (
-          <Card title="行为动词 / Action verbs" accent="text-purple-600">
+          <Card title="Action verbs" accent="text-purple-600">
             <Bullets items={items} />
           </Card>
         )}
         {level && (
-          <Card title="认知层级 / Blooms" accent="text-purple-600">
+          <Card title="Blooms" accent="text-purple-600">
             <MarkdownSlice markdown={level} />
           </Card>
         )}
         {evidence && (
-          <Card title="达成证据 / Evidence of mastery" accent="text-purple-600" className="sm:col-span-2">
+          <Card title="Evidence of mastery" accent="text-purple-600" className="sm:col-span-2">
             <MarkdownSlice markdown={evidence} />
           </Card>
         )}

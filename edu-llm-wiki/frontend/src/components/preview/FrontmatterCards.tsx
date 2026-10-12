@@ -42,7 +42,11 @@ function daysSince(iso: string | null | undefined): number | null {
 
 export function FrontmatterCards({ page }: { page: WikiPage }) {
   const prereqs = page.prerequisites ?? []
-  const related = page.related ?? []
+  const splitAlias = (entry: string) => {
+    const i = entry.indexOf("|")
+    return i >= 0 ? entry.slice(i + 1).trim() : pathLabel(entry)
+  }
+  const related = (page.related ?? []).map(splitAlias)
   const misconceptions = page.common_misconceptions ?? []
   const workedExampleRefs = page.worked_example_ref ?? []
   const days = daysSince(page.last_reviewed)
@@ -57,25 +61,25 @@ export function FrontmatterCards({ page }: { page: WikiPage }) {
 
   return (
     <div className="mt-6 grid gap-3 sm:grid-cols-2">
-      <ListSection title="前置知识 / Prerequisites" items={prereqs.map(pathLabel)} />
-      <ListSection title="相关 / Related" items={related.map(pathLabel)} />
+      <ListSection title="Prerequisites" items={prereqs.map(pathLabel)} />
+      <ListSection title="Related" items={related.map(pathLabel)} />
       <ListSection
-        title="常见误区 / Common misconceptions"
+        title="Common misconceptions"
         items={misconceptions}
       />
       {workedExampleRefs.length > 0 && (
         <ListSection
-          title="典型例题 / Worked examples"
+          title="Worked examples"
           items={workedExampleRefs.map(pathLabel)}
         />
       )}
       {days != null && (
         <div className="rounded-md border border-[var(--border)] bg-[var(--muted)]/40 p-3 sm:col-span-2">
           <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-            复习 / Last reviewed
+            Last reviewed
           </div>
           <div className="mt-1 text-xs text-[var(--foreground)]">
-            {days === 0 ? "今日复习过" : `${days} 天前复习`}
+            {days === 0 ? "Reviewed today" : `Reviewed ${days}d ago`}
           </div>
         </div>
       )}

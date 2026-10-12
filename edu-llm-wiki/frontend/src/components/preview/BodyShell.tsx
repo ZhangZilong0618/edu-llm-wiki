@@ -92,13 +92,13 @@ export function BodyShell({
       {hasRefs && (
         <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--muted)]/50 p-2.5 text-[11px]">
           <div className="mb-1.5 font-medium text-[var(--foreground)]">
-            引用溯源
+            Citation Tracing
             <span className="ml-2 text-[var(--muted-foreground)]">
               {verified.length > 0 && (
-                <span className="mr-2 text-green-600">✓ {verified.length} 已验证</span>
+                <span className="mr-2 text-green-600">✓ {verified.length} verified</span>
               )}
               {unverified.length > 0 && (
-                <span className="text-amber-600">⚠ {unverified.length} 未验证</span>
+                <span className="text-amber-600">⚠ {unverified.length} Unverified</span>
               )}
             </span>
           </div>
@@ -110,14 +110,14 @@ export function BodyShell({
                     ✓
                   </span>
                   <span className="shrink-0">
-                    {basename(r.file)} · 第 {r.page} 页
+                    {basename(r.file)} · p. {r.page}
                   </span>
                   <span className="truncate italic">「{r.quote}」</span>
                 </li>
               ))}
               {verified.length > 6 && (
                 <li className="text-[10px] text-[var(--muted-foreground)]">
-                  还有 {verified.length - 6} 条已验证引用…
+                  {verified.length - 6} more verified citations…
                 </li>
               )}
             </ul>
@@ -129,7 +129,7 @@ export function BodyShell({
                 onClick={() => setShowUnverified((v) => !v)}
                 className="text-[10px] text-amber-700 underline hover:text-amber-800"
               >
-                {showUnverified ? "收起" : "展开"}未验证引用 ({unverified.length})
+                {showUnverified ? "Collapse" : "Expand"}UnverifiedCitation ({unverified.length})
               </button>
               {showUnverified && (
                 <ul className="mt-1.5 space-y-1 text-[var(--muted-foreground)]">
@@ -139,7 +139,7 @@ export function BodyShell({
                         ?
                       </span>
                       <span className="shrink-0">
-                        {basename(r.file)} · 第 {r.page} 页
+                        {basename(r.file)} · p. {r.page}
                       </span>
                       <span className="truncate italic">「{r.quote}」</span>
                     </li>
@@ -153,7 +153,7 @@ export function BodyShell({
 
       {page.sources.length > 0 && (
         <div className="mt-2 text-[10px] text-[var(--muted-foreground)]">
-          来源文件：{page.sources.map((s) => basename(s)).join(" · ")}
+          Source file: {page.sources.map((s) => basename(s)).join(" · ")}
         </div>
       )}
     </div>
