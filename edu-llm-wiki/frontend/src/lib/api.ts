@@ -390,10 +390,8 @@ export const api = {
       `${BASE}/graph/mastery/${encodeURIComponent(input.node_id)}/exposure?${p()}`,
       { method: "POST" },
     ),
-  getLearningPath: (target: string, max_steps = 8) =>
-    request<LearningPathResponse>(
-      `${BASE}/graph/learning-path/${encodeURIComponent(target)}?${p()}&max_steps=${max_steps}`,
-    ),
+  getLearningPath: (learner: string) =>
+    request<LearningPathData>(`${BASE}/learning/path?${p()}&learner=${encodeURIComponent(learner)}`),
   // v3 learning endpoints
   getLearningState: (user_id: string) =>
     request<LearnerStateSummary>(
@@ -506,6 +504,8 @@ export interface TestCreateRequest {
   /** Optional page-scoped generation: when set, the backend should
    *  restrict question generation to this page (and its prerequisites). */
   page_path?: string | null
+  /** 知识点作用域(学习路径出题):上下文 = 本点页面 + 直接先修页面。 */
+  node_id?: string | null
   /** Optional seed echoed into the LLM prompt to encourage diversity
    *  across consecutive generations. Frontend auto-fills this. */
   seed?: string
@@ -594,11 +594,34 @@ export interface LearningPathStep {
   estimated_minutes: number
 }
 
-export interface LearningPathResponse {
-  target: string
-  steps: LearningPathStep[]
-  remaining: string[]
-  estimated_total_minutes: number
+export interface LearningPathNode {
+  id: string
+  label: string
+  node_type: string
+  page_path: string
+  level: number | null
+  p_known: number | null
+  status: "mastered" | "ready" | "upcoming" | "unresolved"
+  prereq_ids: string[]
+  prereq_labels: string[]
+  dependents_count: number
+  cycle_edges?: { source: string; target: string }[]
+}
+
+export interface LearningPathLevel {
+  level: number
+  nodes: LearningPathNode[]
+}
+
+export interface LearningPathData {
+  project_id: string
+  learner: string
+  mastery_threshold: number
+  progress: { mastered: number; total: number; current_level: number }
+  focus_id: string | null
+  levels: LearningPathLevel[]
+  unresolved: LearningPathNode[]
+  edge_conflicts: { source: string; target: string; origin: string; note: string }[]
 }
 
 export interface GraphEventEnvelope {

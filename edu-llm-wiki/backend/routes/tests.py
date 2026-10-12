@@ -439,6 +439,20 @@ def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[Te
     if req.page_path and not eligible:
         raise HTTPException(404, f"Wiki page not found: {req.page_path}")
 
+    # 知识点作用域:上下文 = 本点页面 + 直接先修点页面(学习路径出题)。
+    # 先修点页面排在本点之后,生成 prompt 里注明主次。
+    node_label = None
+    if req.node_id:
+        from services.learning.path import point_context_pages
+
+        scope_paths, node_label = point_context_pages(req.node_id, project_id)
+        if not scope_paths:
+            raise HTTPException(404, f"Knowledge node not found: {req.node_id}")
+        by_path = {page.get("path"): page for page in eligible}
+        eligible = [by_path[p] for p in scope_paths if p in by_path]
+        if not eligible:
+            raise HTTPException(404, f"No wiki pages for node scope: {req.node_id}")
+
     # Natural-language topics often name a concept rather than a file. Rank
     # keyword-search hits first, then fill the context with the remaining
     # knowledge pages.
@@ -481,7 +495,14 @@ def _candidate_context(req: TestCreateRequest, project_id: str) -> tuple[list[Te
             f"{page.get('content', '')[:1800]}"
         )
 
-    return extracted[: req.question_count], "\n\n".join(context_parts)
+    context_str = "\n\n".join(context_parts)
+    if req.node_id and node_label:
+        context_str = (
+            f"## 出题焦点\n本次出题围绕知识点《{node_label}》——上下文第一篇是它的页面,"
+            f"其余是它的直接先修点材料(帮助理解背景;题目主要考查《{node_label}》本身,"
+            f"可少量结合先修内容综合设问)。\n\n" + context_str
+        )
+    return extracted[: req.question_count], context_str
 
 
 async def _generate_questions(req: TestCreateRequest, project_id: str, existing_count: int, context: str, coverage: list[dict] | None = None) -> list[TestQuestion]:
@@ -706,12 +727,19 @@ async def create_test(req: TestCreateRequest, project_id: str = Query("default")
     if not questions:
         raise HTTPException(status_code=400, detail="No wiki content available to create a test")
 
+    node_label = None
+    if req.node_id:
+        from services.graph_store import get_nodes
+
+        node = next((n for n in get_nodes(project_id) if n["id"] == req.node_id), None)
+        node_label = node.get("label") if node else None
+
     for index, question in enumerate(questions, start=1):
         question.id = f"q{index}"
 
     session = TestSession(
         id=uuid.uuid4().hex[:12],
-        title=req.title or f"测试 {datetime.now().strftime('%m-%d %H:%M')}",
+        title=req.title or (f"{node_label} 练习" if node_label else f"测试 {datetime.now().strftime('%m-%d %H:%M')}"),
         folder=_normalize_folder(req.folder),
         scope=req.scope,
         source=req.source,

@@ -1,875 +1,537 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LearningPanel } from "@/components/learning/learning-panel";
+/**
+ * 学习路径视图(重设计)——拓扑分层 + BKT 掌握度。
+ *
+ * 左栏 PathBoard:Kahn 分层轨道,每层一排并列知识点卡片;
+ * 右栏 PointDetail:页面内容 + 出题练习(材料 = 本点 + 直接先修),
+ * 做题走现有 tests 管线,判分后 BKT 更新,只刷新该点状态。
+ *
+ * 路径 = f(图,掌握度) 纯函数(后端 services/learning/path.py):
+ * 本体 prerequisiteOf 优先、启发式 prerequisite 增量入图,
+ * 方向冲突进观察区(edge_conflicts)。
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BookOpen,
   Check,
-  ChevronDown,
-  ChevronRight,
-  Dumbbell,
-  FileText,
-  GraduationCap,
-  HelpCircle,
+  Circle,
+  GitFork,
   Loader2,
-  MessageCircle,
-  Play,
   RefreshCw,
-  RotateCcw,
-  Send,
-  Star,
-  X,
+  Sparkles,
 } from "lucide-react";
-import { api, setProjectId } from "@/lib/api";
-import { useAppStore } from "@/stores/app-store"
+
+import { api, type LearningPathData, type LearningPathNode, type TestSession } from "@/lib/api";
 import { useUserStore } from "@/stores/user-store";
 import { PAGE_TYPE_CONFIG, type PageType } from "@/lib/page-type";
 import { Markdown } from "@/components/markdown";
 import { toast } from "@/components/ui/toast";
+import type { WikiPage } from "@/types/wiki";
 
-import type { GraphData, GraphNode } from "@/types/wiki";
+/** 每次出题的题量(拍板:3–5 取 5)。 */
+const QUESTION_COUNT = 5;
 
-type ItemStatus = "not_started" | "done" | "needs_review";
-type StageId = "overview" | "foundations" | "core" | "applications" | "review";
+type Status = LearningPathNode["status"];
 
-interface LearningItem {
-  id: string;
-  path: string;
-  title: string;
-  type: string;
-  reason: string;
-  prerequisites: string[];
-  actions: ("read" | "ask" | "practice" | "review")[];
-  status: ItemStatus;
-  score: number;
-  isBridge: boolean;
-  isGap: boolean;
+function typeColor(nodeType: string): string {
+  return PAGE_TYPE_CONFIG[nodeType as PageType]?.hex || "#9ca3af";
 }
 
-interface LearningStage {
-  id: StageId;
-  title: string;
-  description: string;
-  items: LearningItem[];
+function typeLabel(nodeType: string): string {
+  return PAGE_TYPE_CONFIG[nodeType as PageType]?.label || nodeType;
 }
 
-interface TutorMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
+/** 掌握度环(SVG)。 */
+function MasteryRing({ value, status }: { value: number; status: Status }) {
+  const r = 15;
+  const c = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(1, value));
+  const color =
+    status === "mastered" ? "#16a34a" : status === "ready" ? "#2563eb" : status === "upcoming" ? "#94a3b8" : "#d97706";
+  return (
+    <svg width={38} height={38} viewBox="0 0 38 38" className="shrink-0">
+      <circle cx={19} cy={19} r={r} fill="none" stroke="#e2e8f0" strokeWidth={4} />
+      <circle
+        cx={19}
+        cy={19}
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth={4}
+        strokeDasharray={`${(c * pct).toFixed(1)} ${c.toFixed(1)}`}
+        strokeLinecap="round"
+        transform="rotate(-90 19 19)"
+        style={{ transition: "stroke-dasharray 0.5s ease" }}
+      />
+      <text x={19} y={19} textAnchor="middle" dominantBaseline="central" fontSize={9} fill="#475569">
+        {status === "mastered" ? "✓" : `${Math.round(pct * 100)}`}
+      </text>
+    </svg>
+  );
 }
 
-let tutorIdCounter = Date.now();
-function nextTutorId() {
-  return `${++tutorIdCounter}-${Math.random().toString(36).slice(2, 8)}`;
+/** 知识点卡片:类型色点 + 名称 + 掌握环,四态着色。 */
+function PointCard({
+  node,
+  focus,
+  selected,
+  onClick,
+}: {
+  node: LearningPathNode;
+  focus: boolean;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const pKnown = node.p_known ?? 0;
+  const dim = node.status === "upcoming";
+  return (
+    <button
+      onClick={onClick}
+      className={`group relative flex w-[168px] items-center gap-2 rounded-lg border p-2 text-left transition
+        ${selected ? "border-[var(--primary)] ring-1 ring-[var(--primary)]/40" : "border-[var(--border)] hover:border-[var(--primary)]/50"}
+        ${focus ? "border-[var(--primary)] shadow-[0_0_0_3px_var(--primary)]/15" : ""}
+        ${dim ? "opacity-55" : ""}`}
+      title={`${typeLabel(node.node_type)} · 先修 ${node.prereq_labels.length} · 被依赖 ${node.dependents_count}${
+        node.prereq_labels.length ? `\n先修: ${node.prereq_labels.join("、")}` : ""
+      }`}
+    >
+      <span
+        className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
+        style={{ backgroundColor: typeColor(node.node_type) }}
+        aria-hidden
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium">{node.label}</span>
+        <span className="mt-0.5 block text-[10px] text-[var(--muted-foreground)]">
+          {node.status === "mastered" ? "已掌握" : node.status === "ready" ? "就绪" : node.status === "unresolved" ? "未定序" : `先修 ${node.prereq_labels.length}`}
+        </span>
+      </span>
+      <MasteryRing value={pKnown} status={node.status} />
+    </button>
+  );
 }
 
-const STAGE_META: Record<StageId, { title: string; description: string }> = {
-  overview: {
-    title: "Overview",
-    description: "Start with summaries and source-level context so the map has a shape.",
-  },
-  foundations: {
-    title: "Foundations",
-    description: "Build the vocabulary and concepts that later items depend on.",
-  },
-  core: {
-    title: "Core Ideas",
-    description: "Work through the main concepts, formulas, and principles.",
-  },
-  applications: {
-    title: "Applications",
-    description: "Practice with worked examples and the Tests view to check whether the ideas transfer.",
-  },
-  review: {
-    title: "Review & Gaps",
-    description: "Revisit isolated, weakly connected, or high-friction knowledge points.",
-  },
-};
+/** 出题练习面板:生成 → 作答 → 提交 → 判分反馈。 */
+function ExercisePanel({
+  node,
+  learner,
+  onFinished,
+}: {
+  node: LearningPathNode;
+  learner: string;
+  onFinished: () => void;
+}) {
+  const [session, setSession] = useState<TestSession | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
 
-const STATUS_LABELS: Record<ItemStatus, string> = {
-  not_started: "Not started",
-  done: "Done",
-  needs_review: "Review",
-};
-
-function pagePath(node: GraphNode): string {
-  const metadataPath = typeof node.metadata?.path === "string" ? node.metadata.path : "";
-  return metadataPath || `${node.id}.md`;
-}
-
-function buildStages(data: GraphData, statuses: Record<string, ItemStatus>): LearningStage[] {
-  const nodesById = new Map(data.nodes.map((node) => [node.id, node]));
-  const adjacency = new Map<string, Set<string>>();
-  const prereqOf = new Map<string, Set<string>>();
-  const dependentsOf = new Map<string, Set<string>>();
-
-  for (const node of data.nodes) {
-    adjacency.set(node.id, new Set());
-    prereqOf.set(node.id, new Set());
-    dependentsOf.set(node.id, new Set());
-  }
-
-  for (const edge of data.edges) {
-    adjacency.get(edge.source)?.add(edge.target);
-    adjacency.get(edge.target)?.add(edge.source);
-    if (edge.edge_type === "prerequisite") {
-      prereqOf.get(edge.target)?.add(edge.source);
-      dependentsOf.get(edge.source)?.add(edge.target);
+  const generate = async () => {
+    setGenerating(true);
+    setSession(null);
+    setAnswers({});
+    try {
+      const s = await api.createTest({
+        scope: "wiki",
+        source: null,
+        question_count: QUESTION_COUNT,
+        question_types: ["multiple_choice", "fill_blank", "short_answer"],
+        difficulty: "mixed",
+        mode: "practice",
+        node_id: node.id,
+        seed: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      });
+      if (!s.questions?.length) {
+        toast({ type: "error", message: "生成失败:没有可用题目" });
+        return;
+      }
+      setSession(s);
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "出题失败" });
+    } finally {
+      setGenerating(false);
     }
-  }
-
-  const bridgeIds = new Set<string>();
-  const gapIds = new Set<string>();
-  for (const insight of data.insights) {
-    if (insight.insight_type === "bridge") insight.node_ids.forEach((id) => bridgeIds.add(id));
-    if (insight.insight_type === "knowledge_gap" || insight.insight_type === "isolated") {
-      insight.node_ids.forEach((id) => gapIds.add(id));
-    }
-  }
-
-  const buckets: Record<StageId, LearningItem[]> = {
-    overview: [],
-    foundations: [],
-    core: [],
-    applications: [],
-    review: [],
   };
 
-  for (const node of data.nodes) {
-    const type = node.node_type;
-    const degree = adjacency.get(node.id)?.size ?? 0;
-    const prereqs = [...(prereqOf.get(node.id) ?? [])];
-    const dependents = dependentsOf.get(node.id)?.size ?? 0;
-    const isBridge = bridgeIds.has(node.id);
-    const isGap = gapIds.has(node.id) || degree <= 1;
-    const score = degree + dependents * 2 + (isBridge ? 4 : 0) - (isGap ? 1 : 0);
-    const prerequisites = prereqs.map((id) => nodesById.get(id)?.label || id);
-
-    let stage: StageId = "core";
-    let reason = "This is part of the main conceptual spine.";
-    let actions: LearningItem["actions"] = ["read", "ask"];
-
-    if (isGap) {
-      stage = "review";
-      reason = "This item has weak graph connections, so it is worth checking deliberately.";
-      actions = ["read", "ask", "review"];
-    } else if (prereqs.length === 0 || dependents >= 2) {
-      stage = "foundations";
-      reason =
-        dependents >= 2
-          ? "Many later items depend on this, so learn it early."
-          : "This has few prerequisites and works as a foundation.";
-      actions = ["read", "ask"];
-    } else if (type === "formula" || type === "principle") {
-      reason = "Connect this with its prerequisite concepts before applying it.";
-      actions = ["read", "ask", "practice"];
+  const submit = async () => {
+    if (!session) return;
+    setSubmitting(true);
+    try {
+      const result = await api.submitTest(session.id, answers, {}, learner);
+      setSession(result);
+      onFinished();
+    } catch (e: any) {
+      toast({ type: "error", message: e?.message || "提交失败" });
+    } finally {
+      setSubmitting(false);
     }
-
-    buckets[stage].push({
-      id: node.id,
-      path: pagePath(node),
-      title: node.label,
-      type,
-      reason,
-      prerequisites,
-      actions,
-      status: statuses[node.id] || "not_started",
-      score,
-      isBridge,
-      isGap,
-    });
-  }
-
-  const orderByPriority = (a: LearningItem, b: LearningItem) => {
-    const typeOrder = {
-      synthesis: 0,
-      source: 1,
-      concept: 2,
-      formula: 3,
-      principle: 4,
-    };
-    return (
-      (typeOrder[a.type as keyof typeof typeOrder] ?? 9) -
-        (typeOrder[b.type as keyof typeof typeOrder] ?? 9) ||
-      b.score - a.score ||
-      a.title.localeCompare(b.title)
-    );
   };
 
-  return (Object.keys(STAGE_META) as StageId[])
-    .map((id) => ({
-      id,
-      ...STAGE_META[id],
-      items: buckets[id].sort(orderByPriority),
-    }))
-    .filter((stage) => stage.items.length > 0);
+  const submitted = session?.status === "submitted";
+  const attempts = session?.attempts || [];
+
+  return (
+    <div className="rounded-lg border bg-[var(--muted)]/30 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold">
+          <Sparkles size={13} className="text-[var(--primary)]" />
+          出题练习
+          <span className="font-normal text-[var(--muted-foreground)]">
+            (材料 = 本点 + 直接先修 {node.prereq_labels.length} 篇)
+          </span>
+        </div>
+        <button
+          onClick={generate}
+          disabled={generating}
+          className="inline-flex items-center gap-1 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1 text-xs text-[var(--primary)] hover:bg-[var(--primary)]/10 disabled:opacity-50"
+        >
+          {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+          {session ? "重新出题" : `生成 ${QUESTION_COUNT} 题`}
+        </button>
+      </div>
+
+      {!session && !generating && (
+        <p className="text-[11px] text-[var(--muted-foreground)]">
+          题目围绕《{node.label}》命制,先修点材料用于理解背景。答对会推高 BKT 掌握度(阈值 85%)。
+        </p>
+      )}
+
+      {session?.questions.map((q, qi) => {
+        const attempt = attempts.find((a) => a.question_id === q.id);
+        const correct = attempt ? attempt.score >= attempt.max_score * 0.999 : null;
+        return (
+          <div key={q.id} className="mb-3 rounded-md border bg-[var(--background)] p-2.5">
+            <p className="mb-2 text-xs font-medium">
+              {qi + 1}. {q.prompt}
+              {attempt && (
+                <span className={`ml-1.5 ${correct ? "text-green-600" : "text-red-600"}`}>
+                  {correct ? "✓" : "✗"}
+                </span>
+              )}
+            </p>
+            {q.type === "multiple_choice" ? (
+              <div className="space-y-1">
+                {q.options.map((opt, oi) => {
+                  const picked = answers[q.id] === opt;
+                  return (
+                    <label key={oi} className="flex cursor-pointer items-start gap-1.5 text-xs">
+                      <input
+                        type="radio"
+                        name={q.id}
+                        checked={picked}
+                        disabled={submitted}
+                        onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: opt }))}
+                        className="mt-0.5"
+                      />
+                      <span>{opt}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : (
+              <textarea
+                value={answers[q.id] || ""}
+                disabled={submitted}
+                onChange={(e) => setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                placeholder="作答…"
+                className="w-full rounded border bg-transparent px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/40"
+                rows={2}
+              />
+            )}
+            {attempt && (
+              <div className="mt-1.5 border-t pt-1.5 text-[11px] text-[var(--muted-foreground)]">
+                <span className="font-medium">答案:</span> {Array.isArray(attempt.correct_answer) ? attempt.correct_answer.join(" / ") : attempt.correct_answer}
+                {attempt.feedback ? <span className="ml-2">{attempt.feedback}</span> : null}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {session && !submitted && (
+        <button
+          onClick={submit}
+          disabled={submitting || Object.keys(answers).length < session.questions.length}
+          className="inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50"
+        >
+          {submitting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          提交({Object.keys(answers).length}/{session.questions.length})
+        </button>
+      )}
+
+      {submitted && session && (
+        <div className="flex items-center justify-between gap-2 border-t pt-2 text-xs">
+          <span>
+            得分 {session.score}/{session.max_score} · BKT 已更新
+          </span>
+          <button onClick={generate} className="text-[var(--primary)] hover:underline">
+            再练一轮
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
-function nextLearningItem(stages: LearningStage[], goal: string): LearningItem | null {
-  const preferredOrder: StageId[] =
-    goal === "practice"
-      ? ["applications", "core", "foundations", "review", "overview"]
-      : goal === "review"
-        ? ["review", "core", "applications", "foundations", "overview"]
-        : goal === "quick"
-          ? ["overview", "foundations", "core", "applications", "review"]
-          : ["foundations", "core", "applications", "overview", "review"];
-  for (const stageId of preferredOrder) {
-    const stage = stages.find((s) => s.id === stageId);
-    const item = stage?.items.find((i) => i.status !== "done");
-    if (item) return item;
-  }
-  return null;
-}
-
-export function LearnView() {
-  const [data, setData] = useState<GraphData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [goal, setGoal] = useState("system");
-  const [collapsedStages, setCollapsedStages] = useState<Set<StageId>>(new Set());
-  const [tutorItem, setTutorItem] = useState<LearningItem | null>(null);
-  const [tutorMessages, setTutorMessages] = useState<TutorMessage[]>([]);
-  const [tutorInput, setTutorInput] = useState("");
-  const [tutorStreaming, setTutorStreaming] = useState(false);
-  const [tutorStatus, setTutorStatus] = useState<string | null>(null);
-  const [tutorTopPercent, setTutorTopPercent] = useState(50);
-  const splitContainerRef = useRef<HTMLDivElement>(null);
-  const currentProject = useAppStore((s) => s.currentProject);
-  const selectPage = useAppStore((s) => s.selectPage);
-  const setActiveView = useAppStore((s) => s.setActiveView);
-  const userId = useUserStore((s) => s.userId)
-  const [statuses, setStatuses] = useState<Record<string, ItemStatus>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("edu-llm-wiki.learning.default") || "{}");
-    } catch {
-      return {};
-    }
-  });
-
-  const storageKey = `edu-llm-wiki.learning.${currentProject}`;
-
-  useEffect(() => {
-    try {
-      setStatuses(JSON.parse(localStorage.getItem(storageKey) || "{}"));
-    } catch {
-      setStatuses({});
-    }
-  }, [storageKey]);
+/** 点详情右栏。 */
+function PointDetail({
+  node,
+  learner,
+  onExerciseFinished,
+}: {
+  node: LearningPathNode;
+  learner: string;
+  onExerciseFinished: () => void;
+}) {
+  const [page, setPage] = useState<WikiPage | null>(null);
+  const [loadingPage, setLoadingPage] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setData(null);
-    setProjectId(currentProject || "default");
+    setPage(null);
+    if (!node.page_path) return;
+    setLoadingPage(true);
     api
-      .getGraph()
-      .then((graph) => {
-        if (!cancelled) setData(graph);
+      .getPage(node.page_path)
+      .then((p) => {
+        if (!cancelled) setPage(p);
       })
-      .catch((e) => {
-        const message = e?.message || "Failed to load graph"
-        if (!cancelled) {
-          setError(message)
-          toast({ type: "error", message })
-        }
+      .catch(() => {
+        if (!cancelled) setPage(null);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setLoadingPage(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [currentProject]);
-
-  useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(statuses));
-  }, [statuses, storageKey]);
-
-  const stages = useMemo(() => (data ? buildStages(data, statuses) : []), [data, statuses]);
-  const nextItem = useMemo(() => nextLearningItem(stages, goal), [stages, goal]);
-  const items = useMemo(() => stages.flatMap((stage) => stage.items), [stages]);
-  const doneCount = items.filter((item) => item.status === "done").length;
-  const reviewCount = items.filter((item) => item.status === "needs_review").length;
-  const progress = items.length ? Math.round((doneCount / items.length) * 100) : 0;
-
-  const updateStatus = useCallback((id: string, status: ItemStatus) => {
-    setStatuses((prev) => ({ ...prev, [id]: status }));
-  }, []);
-
-  const openItem = useCallback(
-    async (item: LearningItem) => {
-      await selectPage(item.path);
-      if (item.status === "not_started") updateStatus(item.id, "done");
-    },
-    [selectPage, updateStatus],
-  );
-
-  const askTutor = useCallback(
-    async (item: LearningItem) => {
-      setTutorItem(item);
-      setTutorMessages([
-        {
-          id: nextTutorId(),
-          role: "assistant",
-          content: `I will tutor you on **${item.title}**. Ask things like "how do I study this page", "give me an example", or "here is what I don't get" — or just paste your confusion.`,
-        },
-      ]);
-      setTutorInput("");
-      void selectPage(item.path);
-    },
-    [selectPage],
-  );
-
-  const sendTutorMessage = useCallback(async () => {
-    if (!tutorItem || !tutorInput.trim() || tutorStreaming) return;
-
-    const userText = tutorInput.trim();
-    const assistantId = nextTutorId();
-    const nextMessages: TutorMessage[] = [
-      ...tutorMessages,
-      { id: nextTutorId(), role: "user", content: userText },
-      { id: assistantId, role: "assistant", content: "" },
-    ];
-    setTutorMessages(nextMessages);
-    setTutorInput("");
-    setTutorStreaming(true);
-    setTutorStatus("Reading current learning item...");
-
-    try {
-      let lastContent = "";
-      const apiMessages = [
-        {
-          role: "user",
-          content: [
-            `You are the tutor in the Learning Path. Current node: ${tutorItem.title}`,
-            `Node type: ${tutorItem.type}`,
-            `Reason: ${tutorItem.reason}`,
-            tutorItem.prerequisites.length ? `Prerequisite Knowledge：${tutorItem.prerequisites.join("、")}` : "",
-            "",
-            `Student question: ${userText}`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        },
-      ];
-
-      for await (const event of api.chatStream(apiMessages, undefined, {
-        mode: "ask",
-        scope: { type: "current_page", page_path: tutorItem.path },
-        options: { citation_required: true, answer_style: "socratic" },
-      })) {
-        if (event.type === "status") {
-          setTutorStatus(event.text);
-        } else if (event.type === "content") {
-          lastContent += event.text;
-          setTutorMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: lastContent } : m)),
-          );
-        } else if (event.type === "replace") {
-          lastContent = event.text;
-          setTutorMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: lastContent } : m)),
-          );
-        }
-      }
-    } catch (e: any) {
-      setTutorMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, content: `Tutor failed: ${e?.message || e}` } : m,
-        ),
-      );
-    } finally {
-      setTutorStreaming(false);
-      setTutorStatus(null);
-    }
-  }, [tutorInput, tutorItem, tutorMessages, tutorStreaming]);
-
-  const practiceItem = useCallback(
-    async (item: LearningItem) => {
-      await selectPage(item.path);
-      setActiveView("wiki");
-    },
-    [selectPage, setActiveView],
-  );
-
-  const startTutorResize = (event: React.MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const container = splitContainerRef.current;
-    if (!container) return;
-
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-
-    const onMove = (moveEvent: MouseEvent) => {
-      const rect = container.getBoundingClientRect();
-      const next = ((moveEvent.clientY - rect.top) / rect.height) * 100;
-      setTutorTopPercent(Math.min(78, Math.max(22, next)));
-    };
-
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  };
-
-  const toggleStage = (stageId: StageId) => {
-    setCollapsedStages((prev) => {
-      const next = new Set(prev);
-      if (next.has(stageId)) next.delete(stageId);
-      else next.add(stageId);
-      return next;
-    });
-  };
-
-  if (loading) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--muted-foreground)]">
-        <RefreshCw className="h-8 w-8 animate-spin opacity-40" />
-        <p className="text-sm">Building learning path...</p>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-[var(--muted-foreground)]">
-        <GraduationCap className="h-10 w-10 opacity-30" />
-        <p className="text-sm text-red-500">{error}</p>
-      </div>
-    );
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center text-center text-[var(--muted-foreground)]">
-        <div>
-          <GraduationCap className="h-12 w-12 mx-auto mb-3 opacity-20" />
-          <p className="text-sm font-medium">No learning path available</p>
-          <p className="text-xs mt-1">Import materials and complete ingest; the system will build a personalized learning path for you.</p>
-          <button
-            type="button"
-            onClick={() => setActiveView("sources")}
-            className="mt-3 inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)]"
-          >
-            Import Materials →
-          </button>
-        </div>
-      </div>
-    );
-  }
+  }, [node.id, node.page_path]);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="shrink-0 border-b px-4 py-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
+      <div className="rounded-lg border p-3">
         <div className="flex items-center gap-2">
-          <GraduationCap className="h-4 w-4 text-[var(--muted-foreground)]" />
-          <span className="text-sm font-medium">Learning Path</span>
-          <select
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            className="ml-auto h-7 rounded-md border bg-[var(--background)] px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
-          >
-            <option value="system">System Learning</option>
-            <option value="quick">Quick Start</option>
-            <option value="practice">Practice Driven</option>
-            <option value="review">Review Gaps</option>
-          </select>
-        </div>
-        <div className="mt-3 grid grid-cols-[1fr_auto] items-center gap-3">
-          <div className="h-2 overflow-hidden rounded-full bg-[var(--muted)]">
-            <div
-              className="h-full bg-[var(--primary)] transition-all"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <span className="text-xs text-[var(--muted-foreground)]">
-            {doneCount} / {items.length}
+          <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: typeColor(node.node_type) }} />
+          <h3 className="text-sm font-semibold">{node.label}</h3>
+          <span className="ml-auto text-[10px] text-[var(--muted-foreground)]">
+            {typeLabel(node.node_type)}
+            {node.level ? ` · 第 ${node.level} 阶` : " · 未定序"}
           </span>
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-[var(--muted-foreground)]">
-          <span>{stages.length} stages</span>
-          <span>·</span>
-          <span>{reviewCount} marked for review</span>
-          <span>·</span>
-          <span>
-            Goal:{" "}
-            {goal === "system"
-              ? "System Learning"
-              : goal === "quick"
-                ? "Quick Start"
-                : goal === "practice"
-                  ? "Practice Driven"
-                  : "Review Gaps"}
-          </span>
+        <div className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+          先修 {node.prereq_labels.length}
+          {node.prereq_labels.length > 0 && `(${node.prereq_labels.join("、")})`} · 被依赖 {node.dependents_count} ·
+          BKT 掌握 {node.p_known === null ? "未学" : `${Math.round(node.p_known * 100)}%`}
         </div>
       </div>
 
-      {nextItem && (
-        <section className="shrink-0 border-b bg-[var(--background)] px-4 py-3">
-          <div className="mb-2 flex items-center gap-2">
-            <Play className="h-4 w-4 text-[var(--primary)]" />
-            <h2 className="text-sm font-semibold">Continue Learning</h2>
-            {nextItem.status === "needs_review" && (
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">
-                Review
-              </span>
-            )}
+      {node.page_path && (
+        <div className="rounded-lg border p-3">
+          <div className="mb-2 flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
+            <BookOpen size={11} /> 页面内容
           </div>
-          <div className="flex items-start gap-3 rounded-md border bg-[var(--card)] p-3">
-            <TypeIcon type={nextItem.type} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{nextItem.title}</p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">{nextItem.reason}</p>
-              {nextItem.prerequisites.length > 0 && (
-                <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-                  Requires: {nextItem.prerequisites.slice(0, 3).join(", ")}
-                </p>
-              )}
-            </div>
-            <div className="flex shrink-0 gap-1">
-              <IconButton
-                label="Start"
-                onClick={() => openItem(nextItem)}
-                icon={<Play size={14} />}
-              />
-              <IconButton
-                label="Ask Tutor"
-                onClick={() => askTutor(nextItem)}
-                icon={<MessageCircle size={14} />}
-              />
-              <IconButton
-                label="Done"
-                onClick={() => updateStatus(nextItem.id, "done")}
-                icon={<Check size={14} />}
-              />
-            </div>
-          </div>
-        </section>
+          {loadingPage ? (
+            <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
+          ) : page ? (
+            <Markdown>{page.content || "*无内容*"}</Markdown>
+          ) : (
+            <p className="text-[11px] text-[var(--muted-foreground)]">页面加载失败</p>
+          )}
+        </div>
       )}
 
-      <div className="max-h-[38vh] shrink-0 overflow-y-auto border-b px-4 py-3">
-        <LearningPanel userId={userId} projectId={currentProject} />
-      </div>
-
-      <div ref={splitContainerRef} className="flex min-h-0 flex-1 flex-col">
-        <div
-          className={`${tutorItem ? "min-h-[160px] shrink-0" : "flex-1"} min-h-0 overflow-y-auto px-4 py-4`}
-          style={tutorItem ? { flexBasis: `${tutorTopPercent}%` } : undefined}
-        >
-          {stages.map((stage, index) => {
-            const collapsed = collapsedStages.has(stage.id);
-            const stageDone = stage.items.filter((item) => item.status === "done").length;
-            return (
-              <section key={stage.id} className="mb-5">
-                <button
-                  onClick={() => toggleStage(stage.id)}
-                  className="mb-2 flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--accent)]"
-                >
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--primary)] text-xs font-semibold text-[var(--primary-foreground)]">
-                    {index + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                      <span className="text-sm font-semibold">{stage.title}</span>
-                      <span className="text-[11px] text-[var(--muted-foreground)]">
-                        {stageDone}/{stage.items.length}
-                      </span>
-                    </div>
-                    <p className="truncate text-xs text-[var(--muted-foreground)]">
-                      {stage.description}
-                    </p>
-                  </div>
-                </button>
-                {!collapsed && (
-                  <div className="space-y-2 border-l pl-4">
-                    {stage.items.map((item) => (
-                      <LearningRow
-                        key={item.id}
-                        item={item}
-                        onRead={() => openItem(item)}
-                        onAsk={() => askTutor(item)}
-                        onPractice={() => practiceItem(item)}
-                        onDone={() => updateStatus(item.id, "done")}
-                        onReview={() =>
-                          updateStatus(
-                            item.id,
-                            item.status === "needs_review" ? "not_started" : "needs_review",
-                          )
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-
-        {tutorItem && (
-          <>
-            <div
-              onMouseDown={startTutorResize}
-              className="group flex h-2 shrink-0 cursor-row-resize items-center justify-center border-y bg-[var(--muted)]/40 hover:bg-[var(--primary)]/10"
-              title="Drag to resize tutor"
-            >
-              <div className="h-0.5 w-10 rounded-full bg-[var(--border)] group-hover:bg-[var(--primary)]" />
-            </div>
-            <TutorPanel
-              item={tutorItem}
-              messages={tutorMessages}
-              input={tutorInput}
-              streaming={tutorStreaming}
-              status={tutorStatus}
-              onInput={setTutorInput}
-              onSend={sendTutorMessage}
-              onClose={() => setTutorItem(null)}
-            />
-          </>
-        )}
-      </div>
+      <ExercisePanel node={node} learner={learner} onFinished={onExerciseFinished} />
     </div>
   );
 }
 
-function TutorPanel({
-  item,
-  messages,
-  input,
-  streaming,
-  status,
-  onInput,
-  onSend,
-  onClose,
-}: {
-  item: LearningItem;
-  messages: TutorMessage[];
-  input: string;
-  streaming: boolean;
-  status: string | null;
-  onInput: (value: string) => void;
-  onSend: () => void;
-  onClose: () => void;
-}) {
+export function LearnView() {
+  const learner = useUserStore((s) => s.userId);
+  const [path, setPath] = useState<LearningPathData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showConflicts, setShowConflicts] = useState(false);
+
+  const loadPath = useCallback(
+    (keepSelection: boolean) => {
+      setLoading(true);
+      api
+        .getLearningPath(learner)
+        .then((data) => {
+          setPath(data);
+          setError(null);
+          setSelectedId((current) => {
+            if (keepSelection && current) return current;
+            return data.focus_id || data.levels[0]?.nodes[0]?.id || null;
+          });
+        })
+        .catch((e: any) => setError(e?.message || "加载学习路径失败"))
+        .finally(() => setLoading(false));
+    },
+    [learner],
+  );
+
+  useEffect(() => {
+    setSelectedId(null);
+    loadPath(false);
+  }, [loadPath]);
+
+  const selected = useMemo(() => {
+    if (!path || !selectedId) return null;
+    for (const lv of path.levels) {
+      const found = lv.nodes.find((n) => n.id === selectedId);
+      if (found) return found;
+    }
+    return path.unresolved.find((n) => n.id === selectedId) || null;
+  }, [path, selectedId]);
+
+  const progressPct = path && path.progress.total > 0
+    ? Math.round((path.progress.mastered / path.progress.total) * 100)
+    : 0;
+
   return (
-    <section className="flex min-h-[160px] flex-1 flex-col bg-[var(--background)]">
-      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
-        <MessageCircle className="h-4 w-4 text-[var(--primary)]" />
-        <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold">Tutor</h2>
-          <p className="truncate text-[11px] text-[var(--muted-foreground)]">{item.title}</p>
-        </div>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* 头部:进度条 + 当前层 */}
+      <div className="flex items-center gap-3 border-b px-4 py-2.5">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+          <GitFork size={14} className="text-[var(--primary)]" /> 学习路径
+        </h2>
+        {path && (
+          <>
+            <div className="flex min-w-[160px] flex-1 items-center gap-2">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--muted)]">
+                <div
+                  className="h-full rounded-full bg-green-500 transition-all"
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+              <span className="shrink-0 text-[11px] text-[var(--muted-foreground)]">
+                {path.progress.mastered}/{path.progress.total} 已掌握 · 当前第 {path.progress.current_level} 阶
+              </span>
+            </div>
+            <span className="text-[11px] text-[var(--muted-foreground)]">学习者: {learner}</span>
+          </>
+        )}
         <button
-          onClick={onClose}
-          className="ml-auto rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-          title="Close tutor"
+          onClick={() => loadPath(true)}
+          disabled={loading}
+          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-[var(--accent)] disabled:opacity-50"
+          title="重新计算路径(图或掌握度更新后)"
         >
-          <X size={14} />
+          <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> 刷新
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        <div className="space-y-3">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[86%] rounded-lg px-3 py-2 text-sm ${
-                  message.role === "user"
-                    ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                    : "bg-[var(--muted)] text-[var(--foreground)]"
-                }`}
-              >
-                {message.role === "assistant" ? (
-                  <Markdown>{message.content || "..."}</Markdown>
-                ) : (
-                  <p className="whitespace-pre-wrap">{message.content}</p>
-                )}
-              </div>
-            </div>
-          ))}
-          {streaming && (
-            <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {status || "Tutor is thinking..."}
-            </div>
-          )}
+      {error && (
+        <div className="border-b bg-red-50 px-4 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
+          {error}
         </div>
-      </div>
+      )}
 
-      <div className="shrink-0 border-t p-3">
-        <div className="flex gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => onInput(e.target.value)}
-            onKeyDown={(e) => {
-              const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean };
-              if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                onSend();
-              }
-            }}
-            placeholder="Ask about this learning item..."
-            rows={2}
-            className="min-w-0 flex-1 resize-none rounded-md border bg-[var(--background)] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-          />
-          <button
-            onClick={onSend}
-            disabled={!input.trim() || streaming}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50"
-            title="Send"
-          >
-            {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          </button>
+      {loading && !path ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-[var(--muted-foreground)]">
+          <Loader2 size={16} className="mr-2 animate-spin" /> 正在计算学习路径…
         </div>
-      </div>
-    </section>
-  );
-}
+      ) : !path || path.progress.total === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-[var(--muted-foreground)]">
+          <Circle size={28} className="opacity-30" />
+          <p>当前项目还没有知识图谱——先到 Import 导入文档。</p>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          {/* 左栏:分层轨道 */}
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <div className="space-y-5">
+              {path.levels.map((lv) => {
+                const isCurrent = lv.level === path.progress.current_level;
+                return (
+                  <section key={lv.level}>
+                    <div className="mb-2 flex items-center gap-2">
+                      <span
+                        className={`inline-flex h-5 items-center rounded-full px-2 text-[10px] font-semibold ${
+                          isCurrent
+                            ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                            : "bg-[var(--muted)] text-[var(--muted-foreground)]"
+                        }`}
+                      >
+                        第 {lv.level} 阶
+                      </span>
+                      <span className="text-[10px] text-[var(--muted-foreground)]">
+                        {lv.nodes.length} 个知识点{isCurrent && path.focus_id ? " · 从这里开始 →" : ""}
+                      </span>
+                      <span className="h-px flex-1 bg-[var(--border)]" />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {lv.nodes.map((n) => (
+                        <PointCard
+                          key={n.id}
+                          node={n}
+                          focus={n.id === path.focus_id}
+                          selected={n.id === selectedId}
+                          onClick={() => setSelectedId(n.id)}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
 
-function TypeIcon({ type }: { type: string }) {
-  const cfg = PAGE_TYPE_CONFIG[type as PageType] ?? PAGE_TYPE_CONFIG.concept;
-  const Icon = cfg.Icon;
-  return (
-    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${cfg.twBg}`}>
-      <Icon className={`h-4 w-4 ${cfg.twColor}`} />
-    </div>
-  );
-}
-
-function IconButton({
-  label,
-  icon,
-  onClick,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex h-8 w-8 items-center justify-center rounded-md border text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]"
-      title={label}
-    >
-      {icon}
-    </button>
-  );
-}
-
-function LearningRow({
-  item,
-  onRead,
-  onAsk,
-  onPractice,
-  onDone,
-  onReview,
-}: {
-  item: LearningItem;
-  onRead: () => void;
-  onAsk: () => void;
-  onPractice: () => void;
-  onDone: () => void;
-  onReview: () => void;
-}) {
-  const cfg = PAGE_TYPE_CONFIG[item.type as PageType] ?? PAGE_TYPE_CONFIG.concept;
-  return (
-    <div className={`group rounded-md border p-3 ${item.status === "done" ? "opacity-65" : ""}`}>
-      <div className="flex items-start gap-3">
-        <TypeIcon type={item.type} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-sm font-medium group-hover:text-[var(--primary)]">
-              {item.title}
-            </span>
-            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${cfg.twBg} ${cfg.twColor}`}>
-              {cfg.shortLabel}
-            </span>
-            {item.isBridge && (
-              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-blue-100 px-1 py-0.5 text-[10px] text-blue-600">
-                <Star className="h-2.5 w-2.5" />
-                Key
-              </span>
-            )}
-            {item.status === "needs_review" && (
-              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-700">
-                <AlertTriangle className="h-2.5 w-2.5" />
-                Review
-              </span>
-            )}
+              {/* 观察区:环点 + 边冲突 */}
+              {(path.unresolved.length > 0 || path.edge_conflicts.length > 0) && (
+                <section className="rounded-lg border border-dashed p-3">
+                  <button
+                    className="flex w-full items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]"
+                    onClick={() => setShowConflicts((v) => !v)}
+                  >
+                    <AlertTriangle size={13} className="text-amber-500" />
+                    观察区:未定序 {path.unresolved.length} 点 · 边冲突 {path.edge_conflicts.length} 条
+                    <span className="ml-auto">{showConflicts ? "收起" : "展开"}</span>
+                  </button>
+                  {showConflicts && (
+                    <div className="mt-2 space-y-2 text-[11px]">
+                      {path.unresolved.map((n) => (
+                        <div key={n.id} className="rounded border p-1.5">
+                          <button className="font-medium hover:underline" onClick={() => setSelectedId(n.id)}>
+                            {n.label}
+                          </button>
+                          {(n.cycle_edges || []).map((ce, i) => (
+                            <span key={i} className="ml-2 text-[var(--muted-foreground)]">
+                              {ce.source} → {ce.target}
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                      {path.edge_conflicts.map((c, i) => (
+                        <div key={i} className="text-[var(--muted-foreground)]">
+                          <span className="text-amber-600">冲突边:</span> {c.source} → {c.target}({c.note})
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
           </div>
-          <p className="mt-1 text-xs text-[var(--muted-foreground)]">{item.reason}</p>
-          {item.prerequisites.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {item.prerequisites.slice(0, 4).map((prereq) => (
-                <span
-                  key={prereq}
-                  className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)]"
-                >
-                  {prereq}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
-          {STATUS_LABELS[item.status]}
-        </span>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-1.5 pl-11">
-        {item.actions.includes("read") && (
-          <ActionButton label="Read" icon={<BookOpen size={12} />} onClick={onRead} />
-        )}
-        {item.actions.includes("ask") && (
-          <ActionButton label="Ask Tutor" icon={<MessageCircle size={12} />} onClick={onAsk} />
-        )}
-        {item.actions.includes("practice") && (
-          <ActionButton label="Practice" icon={<Dumbbell size={12} />} onClick={onPractice} />
-        )}
-        {item.actions.includes("review") && (
-          <ActionButton
-            label={item.status === "needs_review" ? "Clear Review" : "Needs Review"}
-            icon={<RotateCcw size={12} />}
-            onClick={onReview}
-          />
-        )}
-        <ActionButton label="Mark Done" icon={<Check size={12} />} onClick={onDone} />
-        {item.isGap && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-amber-600">
-            <HelpCircle size={11} /> weak link
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
-function ActionButton({
-  label,
-  icon,
-  onClick,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]"
-    >
-      {icon}
-      {label}
-    </button>
+          {/* 右栏:点详情 */}
+          <aside className="min-h-0 w-[42%] border-l">
+            {selected ? (
+              <PointDetail
+                key={selected.id}
+                node={selected}
+                learner={learner}
+                onExerciseFinished={() => loadPath(true)}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
+                点击左侧知识点查看详情与出题
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
+    </div>
   );
 }

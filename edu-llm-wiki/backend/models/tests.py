@@ -15,6 +15,8 @@ class TestCreateRequest(BaseModel):
     # Optional page-scoped generation. When present, context is restricted to
     # this wiki page instead of the whole project.
     page_path: str | None = None
+    # 知识点作用域(学习路径出题):上下文 = 本点页面 + 直接先修点页面。
+    node_id: str | None = None
     question_count: int = Field(default=5, ge=1, le=30)
     question_types: list[str] = ["multiple_choice", "fill_blank", "short_answer"]
     difficulty: str = "mixed"

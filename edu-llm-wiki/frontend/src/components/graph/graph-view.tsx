@@ -1,5 +1,5 @@
 // v2 entry: orchestrates the canvas, filter panel, node-detail sidebar,
-// learning path panel and live event stream. State lives here so it can
+// live event stream. State lives here so it can
 // persist across view changes; each child component is dumb.
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -7,7 +7,7 @@ import { toast } from "@/components/ui/toast";
 import { BookOpen, GitFork, RefreshCw, X } from "lucide-react";
 
 import { useAppStore } from "@/stores/app-store";
-import { api, type LearningPathResponse, type MaterialsGraphData } from "@/lib/api";
+import { api, type MaterialsGraphData } from "@/lib/api";
 import type { GraphData, GraphEdge, GraphNode } from "@/types/wiki";
 
 import { GraphNetworkCanvas, type GraphHoverState, type GraphSelection } from "./graph-network-canvas";
@@ -46,8 +46,6 @@ export function GraphView() {
   const [colorMode, setColorMode] = useState<ColorMode>("type");
   const [nodeScale, setNodeScale] = useState(1);
   const [spacing, setSpacing] = useState(1);
-  const [path, setPath] = useState<LearningPathResponse | null>(null);
-  const [pathLoading, setPathLoading] = useState(false);
   const [nodeDetail, setNodeDetail] = useState<{ text: string; loading: boolean } | null>(null);
   const [articlePages, setArticlePages] = useState<MaterialsPageOption[]>([]);
   const [articlePath, setArticlePath] = useState("");
@@ -99,7 +97,6 @@ export function GraphView() {
       setMaterialsGraph(graph);
       setPreviewingMaterials(true);
       setSelected(null);
-      setPath(null);
       setShowWeakLinks(true);
       toast({ type: "success", message: "Article relationship graph extraction complete" });
     } catch (e: any) {
@@ -185,36 +182,8 @@ export function GraphView() {
     if (!displayData || !selected) return;
     if (!nodesById[selected.node.id]) {
       setSelected(null);
-      setPath(null);
     }
   }, [displayData, nodesById, selected]);
-
-  // Auto-load a learning path when the user selects a node they haven't
-  // mastered yet. Skipped silently if mastery is still loading.
-  useEffect(() => {
-    if (!selected || previewingMaterials) return;
-    const m = mastery[selected.node.id];
-    if (m && (m.level === "proficient" || m.level === "mastered")) {
-      setPath(null);
-      return;
-    }
-    let cancelled = false;
-    setPathLoading(true);
-    api
-      .getLearningPath(selected.node.id, 6)
-      .then((res) => {
-        if (!cancelled) setPath(res);
-      })
-      .catch(() => {
-        if (!cancelled) setPath(null);
-      })
-      .finally(() => {
-        if (!cancelled) setPathLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selected, mastery, previewingMaterials]);
 
   if ((loading || materialsLoading) && !displayData) {
     return (
@@ -374,14 +343,12 @@ export function GraphView() {
             onPreview={() => {
               setPreviewingMaterials(true);
               setSelected(null);
-              setPath(null);
-              setShowWeakLinks(true);
+                      setShowWeakLinks(true);
             }}
             onExitPreview={() => {
               setPreviewingMaterials(false);
               setSelected(null);
-              setPath(null);
-            }}
+                    }}
           />
 
           {selectedNodeData && (
@@ -416,37 +383,6 @@ export function GraphView() {
                     </li>
                   ))}
                 </ul>
-              )}
-            </section>
-          )}
-
-          {selected && (
-            <section className="mt-4 space-y-2 border-t pt-3">
-              <div className="flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-                <GitFork size={10} /> Learning Path
-              </div>
-              {pathLoading ? (
-                <p className="text-[11px] text-[var(--muted-foreground)]">Calculating…</p>
-              ) : path && path.steps.length > 0 ? (
-                <ol className="space-y-1 text-[11px]">
-                  {path.steps.map((step, i) => (
-                    <li
-                      key={step.node_id}
-                      className="flex items-center gap-2 rounded border bg-[var(--muted)] px-1.5 py-1"
-                    >
-                      <span className="text-[10px] text-[var(--muted-foreground)]">{i + 1}.</span>
-                      <span className="flex-1 truncate">
-                        {readableLabel(step.title || step.node_id)}
-                      </span>
-                      {step.mastery && <GraphMasteryBadge level={step.mastery} />}
-                    </li>
-                  ))}
-                  <li className="block pt-1 text-[10px] text-[var(--muted-foreground)]">
-                    ≈ {path.estimated_total_minutes.toFixed(0)} min
-                  </li>
-                </ol>
-              ) : (
-                <p className="text-[11px] text-[var(--muted-foreground)]">No prerequisite path</p>
               )}
             </section>
           )}

@@ -20,11 +20,9 @@ from config import settings
 from models.graph import (
     GraphData,
     GraphEvent as GraphEventModel,
-    LearningPathResponse,
 )
 from services.graph_engine import build_graph, get_node_neighborhood
 from services.graph_engine import events as graph_events
-from services.graph_engine.paths import compute_learning_path
 from services.graph_store import (
     get_nodes as store_get_nodes,
     reset_user as store_reset_user,
@@ -117,34 +115,6 @@ async def get_insights(project_id: str = Query("default")) -> list[dict]:
 # ---------------------------------------------------------------------------
 # v2 endpoints — learning path, mastery, events
 # ---------------------------------------------------------------------------
-
-
-@router.get("/learning-path/{node_id}", response_model=LearningPathResponse)
-async def get_learning_path(
-    node_id: str,
-    user_id: str = Query("default"),
-    project_id: str = Query("default"),
-    max_steps: int = Query(8, ge=1, le=20),
-) -> LearningPathResponse:
-    """Produce an ordered study track from a learner's current mastery to
-    ``node_id``. Steps are prerequisite nodes the learner has not yet
-    reached the ``proficient`` level on.
-    """
-    from services.graph_store import list_mastery
-    mastery_rows, edges, nodes = await asyncio.gather(
-        asyncio.to_thread(list_mastery, project_id, user_id),
-        asyncio.to_thread(store_get_edges, project_id),
-        asyncio.to_thread(store_get_nodes, project_id),
-    )
-    return await asyncio.to_thread(
-        compute_learning_path,
-        target=node_id,
-        edges=edges,
-        nodes_by_id={n["id"]: n for n in nodes},
-        mastery_map={r["node_id"]: r.get("state", "new") for r in mastery_rows},
-        mastery_scores={r["node_id"]: float(r.get("score", 0.0)) for r in mastery_rows},
-        max_steps=max_steps,
-    )
 
 
 @router.get("/mastery", response_model=list)
