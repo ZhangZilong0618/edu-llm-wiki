@@ -1,9 +1,10 @@
 /**
  * 学习路径视图(重设计)——拓扑分层 + BKT 掌握度。
  *
- * 左栏 PathBoard:Kahn 分层轨道,每层一排并列知识点卡片;
- * 右栏 PointDetail:页面内容 + 出题练习(材料 = 本点 + 直接先修),
- * 做题走现有 tests 管线,判分后 BKT 更新,只刷新该点状态。
+ * 主体:n 叉树图形(每棵树顶=树根=最先学,森林垂直堆叠,深度≥2
+ * 默认折叠)。点击节点 → 页面打开到全局预览面板(Select a page to
+ * preview 区域);出题练习走右滑抽屉(材料 = 本点 + 直接先修),
+ * 判分后 BKT 更新并刷新路径。
  *
  * 路径 = f(图,掌握度) 纯函数(后端 services/learning/path.py):
  * 本体 prerequisiteOf 优先、启发式 prerequisite 增量入图,
@@ -13,7 +14,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  BookOpen,
   Check,
   ChevronRight,
   Circle,
@@ -21,14 +21,14 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
+  X,
 } from "lucide-react";
 
 import { api, type LearningPathData, type LearningPathNode, type TestSession } from "@/lib/api";
 import { useUserStore } from "@/stores/user-store";
+import { useAppStore } from "@/stores/app-store";
 import { PAGE_TYPE_CONFIG, type PageType } from "@/lib/page-type";
-import { Markdown } from "@/components/markdown";
 import { toast } from "@/components/ui/toast";
-import type { WikiPage } from "@/types/wiki";
 
 /** 每次出题的题量(拍板:3–5 取 5)。 */
 const QUESTION_COUNT = 5;
@@ -210,7 +210,7 @@ function TreeDiagram({
   collapsed: Set<string>;
   expanded: Set<string>;
   onToggle: (id: string, visible: boolean) => void;
-  onSelect: (id: string) => void;
+  onSelect: (node: LearningPathNode) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useMemo(
@@ -265,7 +265,7 @@ function TreeDiagram({
                 </span>
               )}
               <button
-                onClick={() => onSelect(node.id)}
+                onClick={() => onSelect(node)}
                 className={`flex items-center gap-1.5 rounded-lg border px-2 text-left transition
                   ${selected ? "border-[var(--primary)] ring-1 ring-[var(--primary)]/40" : "border-[var(--border)] hover:border-[var(--primary)]/60"}
                   ${focus ? "shadow-[0_0_0_3px_var(--primary)]/20" : ""}
@@ -478,73 +478,43 @@ function ExercisePanel({
 }
 
 /** 点详情右栏。 */
-function PointDetail({
+/** 出题抽屉:右滑覆盖,含节点元信息 + 练习面板。 */
+function ExerciseDrawer({
   node,
   learner,
+  onClose,
   onExerciseFinished,
 }: {
   node: LearningPathNode;
   learner: string;
+  onClose: () => void;
   onExerciseFinished: () => void;
 }) {
-  const [page, setPage] = useState<WikiPage | null>(null);
-  const [loadingPage, setLoadingPage] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setPage(null);
-    if (!node.page_path) return;
-    setLoadingPage(true);
-    api
-      .getPage(node.page_path)
-      .then((p) => {
-        if (!cancelled) setPage(p);
-      })
-      .catch(() => {
-        if (!cancelled) setPage(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingPage(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [node.id, node.page_path]);
-
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
-      <div className="rounded-lg border p-3">
-        <div className="flex items-center gap-2">
+    <div className="absolute inset-0 z-30 flex justify-end bg-black/20" onClick={onClose}>
+      <div
+        className="flex h-full w-[520px] max-w-[90%] flex-col border-l bg-[var(--background)] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b px-3 py-2">
           <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: typeColor(node.node_type) }} />
-          <h3 className="text-sm font-semibold">{node.label}</h3>
-          <span className="ml-auto text-[10px] text-[var(--muted-foreground)]">
-            {typeLabel(node.node_type)}
-            {node.level ? ` · 第 ${node.level} 阶` : " · 未定序"}
+          <span className="truncate text-sm font-semibold">{node.label}</span>
+          <span className="shrink-0 text-[10px] text-[var(--muted-foreground)]">
+            {typeLabel(node.node_type)} · 先修 {node.prereq_labels.length} · BKT{" "}
+            {node.p_known === null ? "未学" : `${Math.round(node.p_known * 100)}%`}
           </span>
+          <button
+            onClick={onClose}
+            className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--accent)]"
+            aria-label="关闭"
+          >
+            <X size={14} />
+          </button>
         </div>
-        <div className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
-          先修 {node.prereq_labels.length}
-          {node.prereq_labels.length > 0 && `(${node.prereq_labels.join("、")})`} · 被依赖 {node.dependents_count} ·
-          BKT 掌握 {node.p_known === null ? "未学" : `${Math.round(node.p_known * 100)}%`}
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <ExercisePanel node={node} learner={learner} onFinished={onExerciseFinished} />
         </div>
       </div>
-
-      {node.page_path && (
-        <div className="rounded-lg border p-3">
-          <div className="mb-2 flex items-center gap-1 text-[10px] font-semibold uppercase text-[var(--muted-foreground)]">
-            <BookOpen size={11} /> 页面内容
-          </div>
-          {loadingPage ? (
-            <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
-          ) : page ? (
-            <Markdown>{page.content || "*无内容*"}</Markdown>
-          ) : (
-            <p className="text-[11px] text-[var(--muted-foreground)]">页面加载失败</p>
-          )}
-        </div>
-      )}
-
-      <ExercisePanel node={node} learner={learner} onFinished={onExerciseFinished} />
     </div>
   );
 }
@@ -558,6 +528,19 @@ export function LearnView() {
   const [showConflicts, setShowConflicts] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [exerciseOpen, setExerciseOpen] = useState(false);
+  // selectedId 的 ref:loadPath 读它决定是否保留选择,但不依赖 state 本身
+  // (依赖 state 会让点击节点触发 loadPath 重建 → effect 重跑 → 焦点覆盖点击)。
+  const selectedIdRef = useRef<string | null>(null);
+
+  /** 点击节点:树内高亮 + 打开到全局预览面板(Select a page to preview 区域)。 */
+  const openNode = useCallback((node: LearningPathNode) => {
+    setSelectedId(node.id);
+    selectedIdRef.current = node.id;
+    if (node.page_path) {
+      useAppStore.getState().selectPage(node.page_path);
+    }
+  }, []);
 
   const loadPath = useCallback(
     (keepSelection: boolean) => {
@@ -567,10 +550,19 @@ export function LearnView() {
         .then((data) => {
           setPath(data);
           setError(null);
-          setSelectedId((current) => {
-            if (keepSelection && current) return current;
-            return data.focus_id || data.levels[0]?.nodes[0]?.id || null;
-          });
+          const nextId =
+            keepSelection && selectedIdRef.current
+              ? selectedIdRef.current
+              : data.focus_id || data.levels[0]?.nodes[0]?.id || null;
+          setSelectedId(nextId);
+          selectedIdRef.current = nextId;
+          if (!keepSelection && nextId) {
+            // 初始加载:焦点点的页面直接打开到预览面板,不留空态
+            const focusNode = data.levels.flatMap((lv) => lv.nodes).find((n) => n.id === nextId);
+            if (focusNode?.page_path) {
+              useAppStore.getState().selectPage(focusNode.page_path);
+            }
+          }
         })
         .catch((e: any) => setError(e?.message || "加载学习路径失败"))
         .finally(() => setLoading(false));
@@ -580,6 +572,7 @@ export function LearnView() {
 
   useEffect(() => {
     setSelectedId(null);
+    selectedIdRef.current = null;
     setCollapsed(new Set());
     setExpanded(new Set());
     loadPath(false);
@@ -627,7 +620,7 @@ export function LearnView() {
     : 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       {/* 头部:进度条 + 当前层 */}
       <div className="flex items-center gap-3 border-b px-4 py-2.5">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -649,6 +642,14 @@ export function LearnView() {
             <span className="text-[11px] text-[var(--muted-foreground)]">学习者: {learner}</span>
           </>
         )}
+        <button
+          onClick={() => setExerciseOpen(true)}
+          disabled={!selected}
+          className="inline-flex items-center gap-1 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1 text-xs text-[var(--primary)] hover:bg-[var(--primary)]/10 disabled:opacity-40"
+          title={selected ? `为《${selected.label}》出 ${QUESTION_COUNT} 题(材料含直接先修)` : "先选择一个知识点"}
+        >
+          <Sparkles size={12} /> 出题练习
+        </button>
         <button
           onClick={() => loadPath(true)}
           disabled={loading}
@@ -675,70 +676,64 @@ export function LearnView() {
           <p>当前项目还没有知识图谱——先到 Import 导入文档。</p>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* 左栏:n 叉树图形(顶行=最先学的树根,向下=学习推进) */}
-          <div className="min-h-0 min-w-0 flex-1 p-1">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {/* n 叉树图形(每棵树顶=树根=最先学,向下=学习推进);点节点 → 页面开进右侧全局预览面板 */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1">
             <TreeDiagram
               path={path}
               selectedId={selectedId}
               collapsed={collapsed}
               expanded={expanded}
               onToggle={toggle}
-              onSelect={setSelectedId}
+              onSelect={openNode}
             />
 
-              {/* 观察区:环点 + 边冲突 */}
-              {(path.unresolved.length > 0 || path.edge_conflicts.length > 0) && (
-                <section className="rounded-lg border border-dashed p-3">
-                  <button
-                    className="flex w-full items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]"
-                    onClick={() => setShowConflicts((v) => !v)}
-                  >
-                    <AlertTriangle size={13} className="text-amber-500" />
-                    观察区:未定序 {path.unresolved.length} 点 · 边冲突 {path.edge_conflicts.length} 条
-                    <span className="ml-auto">{showConflicts ? "收起" : "展开"}</span>
-                  </button>
-                  {showConflicts && (
-                    <div className="mt-2 space-y-2 text-[11px]">
-                      {path.unresolved.map((n) => (
-                        <div key={n.id} className="rounded border p-1.5">
-                          <button className="font-medium hover:underline" onClick={() => setSelectedId(n.id)}>
-                            {n.label}
-                          </button>
-                          {(n.cycle_edges || []).map((ce, i) => (
-                            <span key={i} className="ml-2 text-[var(--muted-foreground)]">
-                              {ce.source} → {ce.target}
-                            </span>
-                          ))}
-                        </div>
-                      ))}
-                      {path.edge_conflicts.map((c, i) => (
-                        <div key={i} className="text-[var(--muted-foreground)]">
-                          <span className="text-amber-600">冲突边:</span> {c.source} → {c.target}({c.note})
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )}
-          </div>
-
-          {/* 右栏:点详情 */}
-          <aside className="min-h-0 w-[42%] shrink-0 border-l">
-            {selected ? (
-              <PointDetail
-                key={selected.id}
-                node={selected}
-                learner={learner}
-                onExerciseFinished={() => loadPath(true)}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">
-                点击左侧知识点查看详情与出题
-              </div>
+            {/* 观察区:环点 + 边冲突 */}
+            {(path.unresolved.length > 0 || path.edge_conflicts.length > 0) && (
+              <section className="shrink-0 rounded-lg border border-dashed p-3">
+                <button
+                  className="flex w-full items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]"
+                  onClick={() => setShowConflicts((v) => !v)}
+                >
+                  <AlertTriangle size={13} className="text-amber-500" />
+                  观察区:未定序 {path.unresolved.length} 点 · 边冲突 {path.edge_conflicts.length} 条
+                  <span className="ml-auto">{showConflicts ? "收起" : "展开"}</span>
+                </button>
+                {showConflicts && (
+                  <div className="mt-2 space-y-2 text-[11px]">
+                    {path.unresolved.map((n) => (
+                      <div key={n.id} className="rounded border p-1.5">
+                        <button className="font-medium hover:underline" onClick={() => openNode(n)}>
+                          {n.label}
+                        </button>
+                        {(n.cycle_edges || []).map((ce, i) => (
+                          <span key={i} className="ml-2 text-[var(--muted-foreground)]">
+                            {ce.source} → {ce.target}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                    {path.edge_conflicts.map((c, i) => (
+                      <div key={i} className="text-[var(--muted-foreground)]">
+                        <span className="text-amber-600">冲突边:</span> {c.source} → {c.target}({c.note})
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
             )}
-          </aside>
+          </div>
         </div>
+      )}
+
+      {/* 出题抽屉(材料=本点+直接先修;提交后 BKT 更新并刷新路径) */}
+      {exerciseOpen && selected && (
+        <ExerciseDrawer
+          node={selected}
+          learner={learner}
+          onClose={() => setExerciseOpen(false)}
+          onExerciseFinished={() => loadPath(true)}
+        />
       )}
     </div>
   );
