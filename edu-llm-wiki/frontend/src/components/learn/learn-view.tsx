@@ -77,17 +77,21 @@ function MasteryRing({ value, status, compact = false }: { value: number; status
 }
 
 // ---- n 叉树图形布局 ----
-// 顶行 = 全部树根(无先修 = 最先学),子节点向下扇出;
-// 叶子按列排布,父节点居中于子节点之上(简化 tidy-tree)。
+// 森林垂直堆叠:每棵树顶行=树根(无先修 = 最先学),子节点向下扇出,
+// 树与树自上而下依次排列;宽度=各树自身叶子列宽(不再整片平铺一行)。
+// 深度≥2 的分支默认折叠(+N 徽标),expanded/collapsed 双集合覆盖默认。
 const NODE_W = 150;
 const NODE_H = 46;
 const COL_GAP = 26;
 const ROW_GAP = 74;
+const TREE_GAP = 64;
 const CANVAS_PAD = 24;
+/** 深度达到该值起默认折叠分支。 */
+const DEFAULT_COLLAPSE_DEPTH = 2;
 
 interface LaidNode {
   node: LearningPathNode;
-  x: number; // 左上角
+  x: number; // 画布坐标(含内边距)
   y: number;
   depth: number;
 }
@@ -98,6 +102,12 @@ interface TreeLayout {
   width: number;
   height: number;
   focusPos: { x: number; y: number } | null;
+}
+
+/** 分支是否隐藏:显式折叠,或深度≥2 且未显式展开。 */
+function branchHidden(id: string, depth: number, collapsed: Set<string>, expanded: Set<string>): boolean {
+  if (collapsed.has(id)) return true;
+  return depth >= DEFAULT_COLLAPSE_DEPTH && !expanded.has(id);
 }
 
 function subtreeSize(node: LearningPathNode): number {
@@ -112,11 +122,12 @@ function containsId(node: LearningPathNode, id: string): boolean {
 function layoutForest(
   roots: LearningPathNode[],
   collapsed: Set<string>,
+  expanded: Set<string>,
   focusId: string | null,
 ): TreeLayout {
   const COL_W = NODE_W + COL_GAP;
   const ROW_H = NODE_H + ROW_GAP;
-  // 根排序:含焦点的树最左(先看到),其次子树大的主干在前
+  // 树排序:含焦点的树最上(先看到),其次子树大的主干在前
   const ordered = [...roots].sort((a, b) => {
     const fa = focusId ? (containsId(a, focusId) ? 0 : 1) : 1;
     const fb = focusId ? (containsId(b, focusId) ? 0 : 1) : 1;
@@ -126,69 +137,85 @@ function layoutForest(
 
   const nodes: LaidNode[] = [];
   const edges: { from: LaidNode; to: LaidNode }[] = [];
-  let col = 0;
-  let maxDepth = 0;
+  let width = CANVAS_PAD * 2;
+  let yOff = CANVAS_PAD;
   let focusPos: { x: number; y: number } | null = null;
 
-  const place = (node: LearningPathNode, depth: number): number => {
-    maxDepth = Math.max(maxDepth, depth);
-    const kids = collapsed.has(node.id) ? [] : node.children ?? [];
-    let x: number;
-    if (kids.length === 0) {
-      x = col * COL_W;
-      col += 1;
-    } else {
-      const childXs = kids.map((k) => place(k, depth + 1));
-      x = (Math.min(...childXs) + Math.max(...childXs)) / 2;
-    }
-    const laid: LaidNode = { node, x, y: depth * ROW_H, depth };
-    nodes.push(laid);
-    if (node.id === focusId) focusPos = { x, y: depth * ROW_H };
-    kids.forEach((k, i) => {
-      const child = nodes.find((n) => n.node.id === k.id);
-      if (child) edges.push({ from: laid, to: child });
-    });
-    return x;
-  };
-  ordered.forEach((r) => place(r, 0));
+  for (const root of ordered) {
+    let col = 0;
+    let treeMaxDepth = 0;
+    const treeNodes: LaidNode[] = [];
+    const treeEdges: { from: LaidNode; to: LaidNode }[] = [];
+
+    const place = (node: LearningPathNode, depth: number): number => {
+      treeMaxDepth = Math.max(treeMaxDepth, depth);
+      const kids = branchHidden(node.id, depth, collapsed, expanded)
+        ? []
+        : node.children ?? [];
+      let x: number;
+      if (kids.length === 0) {
+        x = col * COL_W + CANVAS_PAD;
+        col += 1;
+      } else {
+        const childXs = kids.map((k) => place(k, depth + 1));
+        x = (Math.min(...childXs) + Math.max(...childXs)) / 2;
+      }
+      const laid: LaidNode = { node, x, y: yOff + depth * ROW_H, depth };
+      treeNodes.push(laid);
+      if (node.id === focusId) focusPos = { x, y: laid.y };
+      kids.forEach((k) => {
+        const child = treeNodes.find((n) => n.node.id === k.id);
+        if (child) treeEdges.push({ from: laid, to: child });
+      });
+      return x;
+    };
+    place(root, 0);
+
+    nodes.push(...treeNodes);
+    edges.push(...treeEdges);
+    width = Math.max(width, Math.max(col, 1) * COL_W - COL_GAP + CANVAS_PAD * 2);
+    yOff += (treeMaxDepth + 1) * ROW_H - ROW_GAP + NODE_H + TREE_GAP;
+  }
 
   return {
     nodes,
     edges,
-    width: Math.max(col, 1) * COL_W - COL_GAP + CANVAS_PAD * 2,
-    height: (maxDepth + 1) * ROW_H - ROW_GAP + NODE_H + CANVAS_PAD * 2,
+    width,
+    height: Math.max(yOff - TREE_GAP + CANVAS_PAD, 1),
     focusPos,
   };
 }
 
-/** 肘形连线:父底中 → 垂直 → 水平 → 子顶中。 */
+/** 肘形连线:父底中 → 垂直 → 水平 → 子顶中(坐标已含画布内边距)。 */
 function edgePath(from: LaidNode, to: LaidNode): string {
-  const x1 = from.x + NODE_W / 2 + CANVAS_PAD;
-  const y1 = from.y + NODE_H + CANVAS_PAD;
-  const x2 = to.x + NODE_W / 2 + CANVAS_PAD;
-  const y2 = to.y + CANVAS_PAD;
+  const x1 = from.x + NODE_W / 2;
+  const y1 = from.y + NODE_H;
+  const x2 = to.x + NODE_W / 2;
+  const y2 = to.y;
   const midY = (y1 + y2) / 2;
   return `M ${x1} ${y1} V ${midY} H ${x2} V ${y2}`;
 }
 
-/** n 叉树图形:顶行=最先学(树根),向下扇出;可折叠分支,点击进详情。 */
+/** n 叉树图形:每棵树顶=树根(最先学),向下扇出;深度≥2 默认折叠。 */
 function TreeDiagram({
   path,
   selectedId,
   collapsed,
+  expanded,
   onToggle,
   onSelect,
 }: {
   path: LearningPathData;
   selectedId: string | null;
   collapsed: Set<string>;
-  onToggle: (id: string) => void;
+  expanded: Set<string>;
+  onToggle: (id: string, visible: boolean) => void;
   onSelect: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const layout = useMemo(
-    () => layoutForest(path.tree, collapsed, path.focus_id),
-    [path.tree, collapsed, path.focus_id],
+    () => layoutForest(path.tree, collapsed, expanded, path.focus_id),
+    [path.tree, collapsed, expanded, path.focus_id],
   );
 
   // 布局/焦点变化时滚到焦点附近
@@ -196,14 +223,14 @@ function TreeDiagram({
     const el = containerRef.current;
     if (!el || !layout.focusPos) return;
     el.scrollTo({
-      left: Math.max(0, layout.focusPos.x + CANVAS_PAD - el.clientWidth / 2 + NODE_W / 2),
-      top: Math.max(0, layout.focusPos.y + CANVAS_PAD - el.clientHeight / 2),
+      left: Math.max(0, layout.focusPos.x - el.clientWidth / 2 + NODE_W / 2),
+      top: Math.max(0, layout.focusPos.y - el.clientHeight / 3),
       behavior: "smooth",
     });
   }, [layout]);
 
   return (
-    <div ref={containerRef} className="min-h-0 flex-1 overflow-auto">
+    <div ref={containerRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
       <div className="relative" style={{ width: layout.width, height: layout.height }}>
         <svg
           className="pointer-events-none absolute inset-0"
@@ -225,13 +252,13 @@ function TreeDiagram({
         </svg>
         {layout.nodes.map(({ node, x, y, depth }) => {
           const hasChildren = (node.children?.length ?? 0) > 0;
-          const isCollapsed = collapsed.has(node.id);
+          const hidden = branchHidden(node.id, depth, collapsed, expanded);
           const focus = node.id === path.focus_id;
           const selected = node.id === selectedId;
           const dim = node.status === "upcoming";
           const extra = node.extra_prereq_labels ?? [];
           return (
-            <div key={node.id} className="absolute" style={{ left: x + CANVAS_PAD, top: y + CANVAS_PAD }}>
+            <div key={node.id} className="absolute" style={{ left: x, top: y }}>
               {focus && (
                 <span className="absolute -top-4 left-0 whitespace-nowrap rounded bg-[var(--primary)] px-1.5 text-[9px] text-[var(--primary-foreground)]">
                   从这里开始
@@ -261,21 +288,21 @@ function TreeDiagram({
                   <span
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      onToggle(node.id);
+                      onToggle(node.id, !hidden);
                     }}
                     className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                     role="button"
-                    aria-label={isCollapsed ? "展开分支" : "折叠分支"}
+                    aria-label={hidden ? "展开分支" : "折叠分支"}
                   >
                     <ChevronRight
                       size={12}
-                      className={`transition-transform ${isCollapsed ? "-rotate-90" : "rotate-90"}`}
+                      className={`transition-transform ${hidden ? "-rotate-90" : "rotate-90"}`}
                     />
                   </span>
                 )}
                 <MasteryRing value={node.p_known ?? 0} status={node.status} compact />
               </button>
-              {isCollapsed && hasChildren && (
+              {hidden && hasChildren && (
                 <span className="absolute -bottom-3.5 right-1 rounded-full bg-[var(--muted)] px-1.5 text-[9px] text-[var(--muted-foreground)]">
                   +{(node.children ?? []).length}
                 </span>
@@ -530,6 +557,7 @@ export function LearnView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showConflicts, setShowConflicts] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const loadPath = useCallback(
     (keepSelection: boolean) => {
@@ -552,6 +580,8 @@ export function LearnView() {
 
   useEffect(() => {
     setSelectedId(null);
+    setCollapsed(new Set());
+    setExpanded(new Set());
     loadPath(false);
   }, [loadPath]);
 
@@ -570,13 +600,26 @@ export function LearnView() {
     );
   }, [path, selectedId]);
 
-  const toggle = useCallback((id: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const toggle = useCallback((id: string, visible: boolean) => {
+    if (visible) {
+      // 折叠:加入显式折叠集,清掉展开标记
+      setCollapsed((prev) => new Set(prev).add(id));
+      setExpanded((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } else {
+      // 展开:加入展开集(覆盖深度默认折叠),清掉显式折叠
+      setExpanded((prev) => new Set(prev).add(id));
+      setCollapsed((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
   }, []);
 
   const progressPct = path && path.progress.total > 0
@@ -632,13 +675,14 @@ export function LearnView() {
           <p>当前项目还没有知识图谱——先到 Import 导入文档。</p>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* 左栏:n 叉树图形(顶行=最先学的树根,向下=学习推进) */}
-          <div className="min-h-0 flex-1 p-1">
+          <div className="min-h-0 min-w-0 flex-1 p-1">
             <TreeDiagram
               path={path}
               selectedId={selectedId}
               collapsed={collapsed}
+              expanded={expanded}
               onToggle={toggle}
               onSelect={setSelectedId}
             />
@@ -680,7 +724,7 @@ export function LearnView() {
           </div>
 
           {/* 右栏:点详情 */}
-          <aside className="min-h-0 w-[42%] border-l">
+          <aside className="min-h-0 w-[42%] shrink-0 border-l">
             {selected ? (
               <PointDetail
                 key={selected.id}
