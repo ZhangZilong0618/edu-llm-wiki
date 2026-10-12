@@ -606,6 +606,10 @@ export interface LearningPathNode {
   prereq_labels: string[]
   dependents_count: number
   cycle_edges?: { source: string; target: string }[]
+  /** 树状结构:子节点(依赖本点的知识);挂接原则=最深直接先修 */
+  children?: LearningPathNode[]
+  /** 多先修时,除树形父节点之外的其余先修 */
+  extra_prereq_labels?: string[]
 }
 
 export interface LearningPathLevel {
@@ -620,6 +624,7 @@ export interface LearningPathData {
   progress: { mastered: number; total: number; current_level: number }
   focus_id: string | null
   levels: LearningPathLevel[]
+  tree: LearningPathNode[]
   unresolved: LearningPathNode[]
   edge_conflicts: { source: string; target: string; origin: string; note: string }[]
 }

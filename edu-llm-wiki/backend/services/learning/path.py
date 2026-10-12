@@ -132,6 +132,7 @@ def build_learning_path(project_id: str, user_id: str = "default") -> dict:
             "learner": user_id,
             "progress": {"mastered": 0, "total": 0, "current_level": 0},
             "levels": [],
+            "tree": [],
             "unresolved": [],
             "edge_conflicts": [],
         }
@@ -182,6 +183,45 @@ def build_learning_path(project_id: str, user_id: str = "default") -> dict:
         {"level": i + 1, "nodes": [node_obj(nid, level=i + 1) for nid in ids]}
         for i, ids in enumerate(levels)
     ]
+
+    # ---- 树状结构 ----
+    # 每点挂在"最深的直接先修"之下(最后解锁它的先修):树根=无先修点,
+    # 自根向下即学习推进方向,兄弟=并列可学;多先修的其余先修标"还需"。
+    # 接受边是 DAG → 每点恰有一个父或为根,树覆盖全部节点。
+    level_of: dict[str, int] = {}
+    for i, ids in enumerate(levels):
+        for nid in ids:
+            level_of[nid] = i + 1
+
+    parent_of: dict[str, str] = {}
+    extra_prereqs: dict[str, list[str]] = {}
+    for nid in node_map:
+        pr = direct_prereqs.get(nid, [])
+        if not pr:
+            continue
+        ordered = sorted(pr, key=lambda p: (-level_of.get(p, 0), p))
+        parent_of[nid] = ordered[0]
+        extra_prereqs[nid] = sorted(ordered[1:])
+
+    children_of: dict[str, list[str]] = defaultdict(list)
+    for nid, pid in parent_of.items():
+        children_of[pid].append(nid)
+    for lst in children_of.values():
+        lst.sort(key=lambda c: (level_of.get(c, 0), node_map[c].get("label", "")))
+    roots = sorted(
+        (nid for nid in node_map if nid not in parent_of),
+        key=lambda r: (level_of.get(r, 0), node_map[r].get("label", "")),
+    )
+
+    def tree_obj(nid: str) -> dict:
+        obj = node_obj(nid, level=level_of.get(nid))
+        obj["extra_prereq_labels"] = [
+            node_map[p].get("label", p) for p in extra_prereqs.get(nid, [])
+        ]
+        obj["children"] = [tree_obj(c) for c in children_of.get(nid, [])]
+        return obj
+
+    tree = [tree_obj(r) for r in roots]
 
     # 环点:附上参与环的定序边(两端都在未定序集合内)
     unresolved_set = set(unresolved_ids)
@@ -242,6 +282,7 @@ def build_learning_path(project_id: str, user_id: str = "default") -> dict:
         },
         "focus_id": focus_id,
         "levels": level_objs,
+        "tree": tree,
         "unresolved": unresolved_objs,
         "edge_conflicts": edge_conflicts,
     }
