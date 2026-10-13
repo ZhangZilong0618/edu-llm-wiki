@@ -4,7 +4,7 @@ import { useAppStore } from "@/stores/app-store"
 import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X, Bot, Brain, Lightbulb, CheckCircle2, CircleAlert } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X, Bot, Brain, Lightbulb, CheckCircle2, CircleAlert, Wrench, Zap, ChevronDown, ChevronRight } from "lucide-react"
 
 interface CitedSource {
   path: string
@@ -15,11 +15,23 @@ interface CitedSource {
   anchor?: string | null
 }
 
+// One visible line of the agent's reasoning trace: rounds, chain-of-thought
+// text, tool actions, observations, and phase transitions.
+interface AgentStep {
+  text: string
+  kind: "round" | "thought" | "action" | "step" | "answer"
+}
+
 interface Message {
   id: string
   role: "user" | "assistant"
   content: string
   cited?: CitedSource[]
+  // Agent reasoning trace: streamed expanded while the agent works, then
+  // collapsed to a one-line summary when the answer starts streaming.
+  steps?: AgentStep[]
+  stepsCollapsed?: boolean
+  traceMs?: number
   practice?: PracticeQuestion
   practiceMode?: "practice" | "review"
   evaluation?: PracticeEvaluation
@@ -35,6 +47,71 @@ function displayOption(option: string): string {
   // Generated questions often include their own A./B. marker. The card adds
   // the marker for a stable layout, so remove the duplicate from the text.
   return option.replace(/^\s*[A-Za-z][.)、:：]\s*/, "").trim()
+}
+
+const STEP_ICONS: Record<AgentStep["kind"], typeof Brain> = {
+  round: Zap,
+  thought: Brain,
+  action: Wrench,
+  step: CheckCircle2,
+  answer: Loader2,
+}
+
+// Codex-style reasoning trace: streamed expanded while the agent works
+// (rounds, thoughts, tool actions, observations), then collapsed to a
+// one-line summary once the answer starts streaming. Click to re-expand.
+function AgentTrace({ steps, collapsed, traceMs, active, onToggle }: {
+  steps: AgentStep[]
+  collapsed: boolean
+  traceMs?: number
+  active: boolean
+  onToggle: () => void
+}) {
+  if (!steps.length) return null
+  const expanded = active || !collapsed
+  const toolCalls = steps.filter((s) => s.kind === "action").length
+  const reads = steps.filter((s) => s.text.startsWith("已读取 [")).length
+  const summary = active
+    ? "正在推理…"
+    : `智能体执行了 ${steps.length} 步`
+      + (toolCalls ? ` · ${toolCalls} 次工具调用` : "")
+      + (reads ? ` · 读取 ${reads} 个页面` : "")
+      + (traceMs ? ` · ${(traceMs / 1000).toFixed(1)}s` : "")
+  return (
+    <div className="mb-2 w-full min-w-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-left text-[11px] text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+        title={expanded ? "收起推理过程" : "展开推理过程"}
+      >
+        {expanded ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
+        {active ? <Loader2 size={12} className="shrink-0 animate-spin" /> : <Brain size={12} className="shrink-0" />}
+        <span className="min-w-0 truncate">{summary}</span>
+      </button>
+      {expanded ? (
+        <div className="mt-1 min-w-0 space-y-1 border-l border-[var(--border)] pl-2.5">
+          {steps.map((step, i) => {
+            const Icon = STEP_ICONS[step.kind] || CheckCircle2
+            const isLast = i === steps.length - 1
+            return (
+              <div key={i} className="flex min-w-0 items-start gap-1.5 text-[11px] leading-relaxed">
+                <Icon
+                  size={11}
+                  className={`mt-0.5 shrink-0 ${step.kind === "thought" ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}${active && isLast ? " animate-pulse" : ""}`}
+                />
+                <span
+                  className={`min-w-0 break-words [overflow-wrap:anywhere] ${step.kind === "thought" ? "italic text-[var(--foreground)]/70" : "text-[var(--muted-foreground)]"}`}
+                >
+                  {step.text}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function isAssessmentFollowup(text: string): boolean {
@@ -144,6 +221,9 @@ export function ChatPanel() {
   const [practiceConfidence, setPracticeConfidence] = useState<number | null>(null)
   const [gradingPractice, setGradingPractice] = useState(false)
   const practiceAttemptRef = useRef<{ answer: string; id: string } | null>(null)
+  // Wall-clock start of the current agent run; frozen into the message when
+  // the answer starts streaming (shown in the collapsed trace summary).
+  const traceStartRef = useRef<number | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const autoResizeTextarea = useCallback(() => {
@@ -613,6 +693,7 @@ export function ChatPanel() {
     setInput("")
     setStreaming(assistantId)
     setChatStatus("Understanding the question...")
+    traceStartRef.current = null
     textareaRef.current?.focus()
 
     if (!convTitle && messages.length === 0) {
@@ -653,6 +734,13 @@ export function ChatPanel() {
       })) {
         if (event.type === "status") {
           setChatStatus(event.text)
+          if (event.text) {
+            if (traceStartRef.current == null) traceStartRef.current = Date.now()
+            const kind = (event.kind as AgentStep["kind"]) || "step"
+            setMessages((prev) => prev.map((m) => m.id === assistantId
+              ? { ...m, steps: [...(m.steps || []), { text: event.text, kind }] }
+              : m))
+          }
         } else if (event.type === "practice_question") {
           const raw = (event.question || event.payload || event) as Partial<PracticeQuestion> & { session_id?: string }
           if (raw.prompt) {
@@ -677,7 +765,18 @@ export function ChatPanel() {
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
           lastContent += event.text
-          setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
+          setMessages((prev) => prev.map((m) => {
+            if (m.id !== assistantId) return m
+            // The answer is streaming now: collapse the reasoning trace into
+            // its one-line summary and freeze the elapsed time.
+            const traceMs = m.traceMs ?? (traceStartRef.current ? Date.now() - traceStartRef.current : undefined)
+            return {
+              ...m,
+              content: lastContent,
+              traceMs,
+              stepsCollapsed: m.steps?.length ? true : (m.stepsCollapsed ?? false),
+            }
+          }))
         } else if (event.type === "replace") {
           lastContent = event.text
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: lastContent } : m))
@@ -1159,6 +1258,17 @@ export function ChatPanel() {
                       >
                         (Stopped)
                       </span>
+                    ) : null}
+                    {msg.steps && msg.steps.length > 0 ? (
+                      <AgentTrace
+                        steps={msg.steps}
+                        collapsed={msg.stepsCollapsed ?? false}
+                        traceMs={msg.traceMs}
+                        active={Boolean(streaming) && msg.id === lastAssistantId}
+                        onToggle={() => setMessages((prev) => prev.map((m) =>
+                          m.id === msg.id ? { ...m, stepsCollapsed: !(m.stepsCollapsed ?? false) } : m,
+                        ))}
+                      />
                     ) : null}
                     {msg.content ? <Markdown>{msg.content}</Markdown> : msg.practice ? null : <Markdown>...</Markdown>}
                     {msg.practice && !msg.practiceDismissed ? (

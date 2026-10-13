@@ -111,11 +111,17 @@ def _scope_hint(scope) -> str:
     return ""
 
 
-async def _emit(on_status, text: str) -> None:
+async def _emit(on_status, text: str, kind: str = "step") -> None:
     if on_status is None:
         return
     try:
-        await on_status(text)
+        await on_status(text, kind)
+    except TypeError:
+        # Callers with the older single-argument signature still work.
+        try:
+            await on_status(text)
+        except Exception:
+            pass
     except Exception:
         # Status is best-effort; never fail the agent loop on a callback error.
         pass
@@ -195,7 +201,7 @@ async def run_react_agent(
         for step in range(1, max_steps + 1):
             _check_abort()
             steps = step
-            await _emit(on_status, f"ReAct 第 {step} 轮：规划下一步")
+            await _emit(on_status, f"ReAct 第 {step} 轮：规划下一步", "round")
             try:
                 turn = await chat_complete_tools(
                     system,
@@ -212,13 +218,19 @@ async def run_react_agent(
 
             tool_calls = turn["tool_calls"]
             if not tool_calls:
-                await _emit(on_status, "证据已足够，正在生成回答")
+                await _emit(on_status, "证据已足够，正在生成回答", "answer")
                 return ReactResult(
                     answer=turn["content"],
                     evidence=evidence,
                     steps=steps,
                     tool_calls=tool_call_count,
                 )
+
+            # The model's inter-tool reasoning text is the visible chain of
+            # thought for the UI; surface it before the actions it produced.
+            thought = (turn["content"] or "").strip()
+            if thought:
+                await _emit(on_status, thought[:400], "thought")
 
             convo.append({
                 "role": "assistant",
@@ -231,6 +243,7 @@ async def run_react_agent(
                 await _emit(
                     on_status,
                     f"调用工具 {call['name']}({json.dumps(call['arguments'], ensure_ascii=False)[:120]})",
+                    "action",
                 )
                 pages_before = len(evidence.pages)
                 try:
@@ -247,12 +260,12 @@ async def run_react_agent(
                 })
                 if len(evidence.pages) > pages_before:
                     page = evidence.pages[-1]
-                    await _emit(on_status, f"已读取 [{page['number']}] {page['title']}")
+                    await _emit(on_status, f"已读取 [{page['number']}] {page['title']}", "step")
 
         # Step budget exhausted: force a final answer from the evidence
         # already read. The original message history carries no tool
         # turns, so plain chat_complete is safe for every provider.
-        await _emit(on_status, "已达工具调用上限，基于已读页面作答")
+        await _emit(on_status, "已达工具调用上限，基于已读页面作答", "answer")
         evidence_block = "\n\n".join(
             f"[{page['number']}] {page['title']} ({page['path']})\n\n{page['content']}"
             for page in evidence.pages

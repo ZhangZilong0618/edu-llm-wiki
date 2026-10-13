@@ -1198,11 +1198,11 @@ async def chat_stream(
 
     # Full RAG pipeline with status relay so the user can see graph retrieval progress.
     budget = compute_budget(req.context_budget)
-    status_queue: asyncio.Queue[str] = asyncio.Queue()
+    status_queue: asyncio.Queue[dict] = asyncio.Queue()
 
-    async def on_status(text: str) -> None:
+    async def on_status(text: str, kind: str = "step") -> None:
         try:
-            await status_queue.put(text)
+            await status_queue.put({"text": text, "kind": kind})
         except Exception:
             pass
 
@@ -1275,14 +1275,14 @@ async def chat_stream(
         # While pipeline runs, relay any status updates immediately.
         while not pipeline_task.done():
             try:
-                text = await asyncio.wait_for(status_queue.get(), timeout=0.1)
-                yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': text})}\n\n"
+                status = await asyncio.wait_for(status_queue.get(), timeout=0.1)
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': status['text'], 'kind': status.get('kind', 'step')})}\n\n"
             except asyncio.TimeoutError:
                 continue
         # Drain anything queued right at the end.
         while not status_queue.empty():
-            text = status_queue.get_nowait()
-            yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': text})}\n\n"
+            status = status_queue.get_nowait()
+            yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieve', 'text': status['text'], 'kind': status.get('kind', 'step')})}\n\n"
 
         # If the pipeline raised, surface the error instead of leaving the
         # client waiting for a stream that will never produce [DONE].
@@ -1302,7 +1302,7 @@ async def chat_stream(
             cleaned, actual_cited = _filter_actual_citations(react_answer, react_cited)
             try:
                 yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in actual_cited]}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '回答已生成'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '回答已生成', 'kind': 'answer'}, ensure_ascii=False)}\n\n"
                 # The whole answer already exists; replay it in chunks so the
                 # client keeps its typing-stream UX without a second model call.
                 for start in range(0, len(cleaned), 64):
@@ -1351,7 +1351,7 @@ async def chat_stream(
         )
 
         yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in cited]})}\n\n"
-        yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '正在生成带引用回答...'})}\n\n"
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '正在生成带引用回答...', 'kind': 'answer'}, ensure_ascii=False)}\n\n"
         full_response = ""
         try:
             try:
