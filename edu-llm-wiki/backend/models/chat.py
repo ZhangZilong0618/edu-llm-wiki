@@ -79,6 +79,9 @@ class ChatResponse(BaseModel):
     # Structured tutoring payloads are optional so existing chat consumers
     # can continue to render ordinary answers unchanged.
     practice_question: dict | None = None
+    # Multi-card requests ("出 3 道题") return every issued card here;
+    # ``practice_question`` stays the first card for old consumers.
+    practice_questions: list[dict] | None = None
     evaluation: dict | None = None
     learning_update: dict | None = None
 

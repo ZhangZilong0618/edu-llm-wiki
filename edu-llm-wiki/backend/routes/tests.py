@@ -517,6 +517,11 @@ async def _generate_questions(req: TestCreateRequest, project_id: str, existing_
 
     user = f"""请生成 {needed} 道测试题。
 
+硬性约束（违反即视为废题）：
+- 题目必须且只能考查下方「Wiki 内容」中明确出现的知识。
+- 严禁把概念挪到其他学科语境中设问（例如把 wiki 中的化学概念放到程序设计、数据结构等背景下提问）。
+- 若下方内容不足以支撑所需题量，宁可换个角度考查同一页面，也绝不编造内容之外的知识。
+
 scope: {req.scope}
 source: {req.source or "全部"}
 requested_types: {", ".join(req.question_types)}

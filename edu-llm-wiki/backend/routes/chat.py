@@ -61,12 +61,17 @@ def _agent_mode(req: ChatRequest) -> str:
     practice_terms = (
         "出题", "出一道", "出个题", "出个问题", "再来一道", "再来一题", "再出一题", "下一题",
         "给我一道", "给我一题", "来一道", "来个题", "来个小测", "小测一下",
-        "测试我", "考考我", "考我", "问我一道", "我要答题", "开始答题", "答题练习",
+        "测试我", "考考我", "考我", "考察一下", "考察我", "考一考", "测一测", "问我一道", "我要答题", "开始答题", "答题练习",
         "做一道题", "做题", "开始练习", "做练习", "练习题", "练一题", "练练", "测验", "quiz", "practice",
         "challenge me", "give me a question", "another question",
     )
+    # A bare 考察/考/测 followed by a question word is someone ASKING about
+    # quiz content ("这个考察的什么内容"), not requesting a card.
+    _quiz_question_re = re.compile(r"(?:考察|考|测|练|出)[^，。？?]{0,12}(?:的)?是?什么[^？?]{0,8}$")
     if any(term in latest for term in review_terms) and not any(term in latest for term in review_exclusions):
         return "review"
+    if _quiz_question_re.search(latest):
+        return "ask"
     if (
         any(term in latest for term in practice_terms) or _looks_like_practice_request(latest)
     ) and not _is_question_about_practice_method(latest):
@@ -115,9 +120,144 @@ def _explicit_practice_topic(text: str) -> str | None:
         match = re.search(pattern, text)
         if match:
             topic = re.sub(r"\s+", " ", match.group(1)).strip(" ：:，,。")
+            # Strip embedded counts ("原子结构的 3 道" → "原子结构") and
+            # question-type words ("出个选择题" captures "选择") before using
+            # the topic to ground question generation.
+            topic = re.sub(r"[0-9一二两三四五六七八九十百千多几]+\s*(?:道|个|张|次|组|题)\s*", " ", topic)
+            topic = _QUESTION_TYPE_STRIP_RE.sub(" ", topic).strip().rstrip("的").strip()
             if topic and topic not in {"题", "问题", "一道题", "一个题目"}:
                 return topic
     return None
+
+
+_CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_QUESTION_COUNT_RE = re.compile(
+    r"(?:出|来|考|测|给|做|问|练|考察|测试)"
+    r".{0,12}?([0-9]+|[一二两三四五六七八九十百千]+)\s*(?:道|个|张|次|组|题|练|测)*"
+)
+
+
+#: Question-type words the learner may name. 判断/客观 map to multiple_choice
+#: because the card system has three types.
+_QUESTION_TYPE_WORDS: dict[str, tuple[str, ...]] = {
+    "multiple_choice": ("选择题", "单选题", "多选题", "判断题", "单选", "多选", "判断", "客观题", "multiple choice", "choice"),
+    "fill_blank": ("填空题", "填空", "fill blank", "fill_blank"),
+    "short_answer": ("简答题", "简答", "问答题", "问答", "主观题", "论述题", "short answer", "short_answer"),
+}
+# Longest-first stripping so "选择题" is removed before its "选择" prefix.
+# The strip set is broader than the parsing set: inside a captured topic,
+# short type fragments like 选择/问答 are always type words, never subjects.
+_QUESTION_TYPE_STRIP_RE = re.compile(
+    "|".join(
+        re.escape(word)
+        for word in sorted(
+            {w for words in _QUESTION_TYPE_WORDS.values() for w in words}
+            | {"选择", "问答", "论述"},
+            key=len,
+            reverse=True,
+        )
+    )
+)
+
+
+def _parse_question_types(text: str) -> list[str] | None:
+    """Question types the learner explicitly asked for, or None.
+
+    "出个选择题" → ["multiple_choice"]; "来两道简答和填空" → both. None means
+    the request did not name a type and the generator picks freely.
+    """
+    selected: list[str] = []
+    for question_type, words in _QUESTION_TYPE_WORDS.items():
+        if any(word in (text or "") for word in words):
+            selected.append(question_type)
+    return selected or None
+
+
+def _named_question_count(text: str) -> int | None:
+    """The count the learner explicitly named, or None when unspecified.
+
+    A vague "多道/几道" means 3. Clamped to 1..10 so a playful "来一百道"
+    cannot flood the chat with cards. ``None`` lets the caller derive the
+    number from BKT mastery instead.
+    """
+    if re.search(r"[多几][^，。;,.]{0,6}(?:道|个|张|题)", text or ""):
+        return 3
+    # "考察一下我" uses 一下 as a softener, not a count; drop it before
+    # matching so the request stays "unspecified" (BKT-derived panel size).
+    text_clean = re.sub(r"[一二]下(?!题)", "", text or "")
+    match = _QUESTION_COUNT_RE.search(text_clean)
+    if not match:
+        return None
+    raw = match.group(1)
+    if raw.isdigit():
+        count = int(raw)
+    elif "百" in raw or "千" in raw:
+        # 一百/一千 — anything this large clamps to the cap anyway.
+        count = 100
+    elif raw in _CN_DIGITS:
+        count = _CN_DIGITS[raw]
+    else:
+        # 十几 / 二十 style compounds: sum the digits; the clamp handles
+        # anything oversized.
+        count = sum(_CN_DIGITS.get(ch, 0) for ch in raw) or 1
+    return max(1, min(10, count))
+
+
+def _parse_question_count(text: str) -> int:
+    """Named count with a default of 1 (kept for older callers/tests)."""
+    return _named_question_count(text) or 1
+
+
+#: 难度意图("出难一点的题" / "来道简单的")。
+_DIFFICULTY_WORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("hard", ("难一点", "难点", "更难", "难些", "有难度", "挑战", "hard", "difficult")),
+    ("easy", ("简单点", "简单", "容易", "基础点", "基础题", "容易点", "easy", "simple")),
+]
+
+
+def _parse_difficulty(text: str) -> str:
+    """Learner-named difficulty, or "mixed" when unspecified."""
+    for difficulty, words in _DIFFICULTY_WORDS:
+        if any(word in (text or "") for word in words):
+            return difficulty
+    return "mixed"
+
+
+#: 学习意图("我要学元素了,给我出题")。捕获动词后的直接宾语作主题。
+_LEARNING_INTENT_RE = re.compile(
+    r"(?:要|想|准备|开始|继续|该)?(?:学习|复习|学)\s*"
+    r"([一-鿿A-Za-z0-9]{1,16}?)"
+    r"(?:了|吧|呢)?(?:[\s,，。;；]|$)"
+)
+
+
+def _topic_from_learning_intent(text: str) -> str | None:
+    """A subject named via a learning intent, e.g. 我要学元素 → 元素."""
+    for match in _LEARNING_INTENT_RE.finditer(text or ""):
+        subject = match.group(1).strip()
+        if subject and subject not in {"习", "一下", "学", "点", "习一下", "了"}:
+            return subject
+    return None
+
+
+def _last_issued_card(project_id: str, conversation_id: str) -> dict | None:
+    """The most recent card issued in this conversation, if any.
+
+    Continuation requests ("继续出题") inherit the last card's type and
+    subject so a run of cards stays coherent.
+    """
+    try:
+        from services.graph_store import connect
+
+        with connect(project_id) as conn:
+            row = conn.execute(
+                """SELECT question_type, kc_id, related_page FROM agent_questions
+                   WHERE project_id=? AND session_id=? ORDER BY created_at DESC LIMIT 1""",
+                (project_id, conversation_id),
+            ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
 
 
 def _practice_topic(req: ChatRequest) -> str | None:
@@ -342,6 +482,22 @@ def _extract_cited_numbers(response: str) -> tuple[str, set[int]]:
     numbers = {int(n) for n in re.findall(r"\d+", match.group(1))}
     cleaned = (response[:match.start()] + response[match.end():]).strip()
     return cleaned, numbers
+
+
+def _linkify_cited_titles(text: str, cited: list[dict]) -> str:
+    """Wrap already-cited page titles in wikilinks so they render clickable.
+
+    The model frequently names wiki pages in plain text despite the wikilink
+    rule; this upgrades exactly the titles the answer actually cites —
+    nothing else, so ordinary words never become links. A title the model
+    already wrote as a [[wikilink]] is left alone.
+    """
+    for page in cited or []:
+        title = str(page.get("title") or "").strip()
+        if len(title) < 2 or f"[[{title}" in text or f"[[{page.get('path')}" in text:
+            continue
+        text = text.replace(title, f"[[{title}]]")
+    return text
 
 
 def _filter_actual_citations(response: str, cited: list[dict]) -> tuple[str, list[dict]]:
@@ -576,12 +732,15 @@ async def _try_react_answer(
     assessment_context: dict | None,
     on_status=None,
     abort_signal: "asyncio.Event | None" = None,
-) -> tuple[str, list[dict]] | None:
-    """Run the MCP-tool ReAct agent; return (answer, cited) or None to fall back.
+) -> tuple[str, list[dict], list[dict]] | None:
+    """Run the MCP-tool ReAct agent; return (answer, cited, cards) or None.
 
-    Any agent failure (provider without function calling, outage) resolves to
-    ``None`` so chat degrades to the legacy graph pipeline instead of erroring.
+    ``cards`` are server-owned practice cards issued through the agent's
+    ``issue_practice_questions`` tool (structured quiz requests phrased in any
+    wording). Any agent failure (provider without function calling, outage)
+    resolves to ``None`` so chat degrades to the legacy graph pipeline.
     """
+    practice_cards: list[dict] = []
     try:
         result = await run_react_agent(
             last_user_msg,
@@ -596,12 +755,13 @@ async def _try_react_answer(
             purpose=_wiki_purpose(project_id),
             scope=req.scope,
             model=req.options.model,
+            practice_cards=practice_cards,
             on_status=on_status,
             abort_signal=abort_signal,
         )
         cited = _cited_from_evidence(result.evidence.pages, last_user_msg)
         _record_exposure_for_pages(project_id, req.user_id, result.evidence.pages)
-        return result.answer, cited
+        return result.answer, cited, practice_cards
     except asyncio.CancelledError:
         raise
     except ReactAgentError as exc:
@@ -889,6 +1049,192 @@ async def practice_answer(
         raise HTTPException(status_code=404, detail="Practice question not found") from exc
 
 
+def _is_true_false_request(text: str) -> bool:
+    """The learner asked for 判断题 cards ("出判断题", "来两道判断").
+
+    Must be called on an already-recognised quiz request, where "判断"
+    always names the card style rather than a knowledge topic.
+    """
+    return "判断" in (text or "")
+
+
+def _quiz_focus_kc(req: ChatRequest, project_id: str, last_user_msg: str) -> str | None:
+    """The knowledge component this quiz run should advance.
+
+    Priority: the last card issued in this conversation (continuation), then
+    the page named by the topic/learning intent. None means a fresh request
+    with no resolvable focus.
+    """
+    continuation = _last_issued_card(project_id, req.conversation_id or "")
+    if continuation and continuation.get("kc_id"):
+        return str(continuation["kc_id"])
+    topic = _explicit_practice_topic(last_user_msg) or _topic_from_learning_intent(last_user_msg)
+    if topic:
+        try:
+            from services.agent_assessment import _topic_pages
+            from services.graph_store import make_node_id
+
+            pages = _topic_pages(project_id, topic)
+            if pages:
+                return make_node_id(project_id, pages[0]["path"])
+        except Exception:
+            pass
+    return None
+
+
+def _kc_page(project_id: str, kc_id: str | None) -> str | None:
+    """The wiki page a knowledge component maps to, if any."""
+    if not kc_id:
+        return None
+    try:
+        from services.graph_store import get_nodes
+
+        for node in get_nodes(project_id):
+            if node.get("id") == kc_id:
+                return node.get("page_path") or (node.get("metadata") or {}).get("path")
+    except Exception:
+        pass
+    return None
+
+
+def _auto_question_count(req: ChatRequest, project_id: str, last_user_msg: str) -> int:
+    """Cards a fully-correct run needs to lift the focus KC to 0.90 (BKT).
+
+    Simulates consecutive correct observations from the focus KC's current
+    p_known under its own BKT parameters; without a focus (or stored state)
+    the canonical prior applies. Clamped to 1..10.
+    """
+    from services.learning.bkt import default_params, observe
+
+    params = dict(default_params())
+    kc_id = _quiz_focus_kc(req, project_id, last_user_msg)
+    if kc_id:
+        try:
+            from services.graph_store import connect
+
+            with connect(project_id) as conn:
+                row = conn.execute(
+                    """SELECT p_known, p_t, p_g, p_s FROM bkt_params
+                       WHERE project_id=? AND user_id=? AND kc_id=?""",
+                    (project_id, req.user_id, kc_id),
+                ).fetchone()
+            if row:
+                params = {key: float(row[key]) for key in ("p_known", "p_t", "p_g", "p_s")}
+        except Exception:
+            pass
+    p_known, needed = params["p_known"], 0
+    while p_known < 0.90 and needed < 10:
+        p_known = observe(
+            p_known, params["p_t"], params["p_g"], params["p_s"], correct=True
+        )[0]
+        needed += 1
+    return max(1, needed)
+
+
+#: Per-card type rotation used when the learner did not name a type:
+#: variety across 选择/判断/简答/填空 is the default quiz shape.
+_CARD_TYPE_ROTATION: tuple[tuple[list[str], str], ...] = (
+    (["multiple_choice"], ""),
+    (["short_answer"], ""),
+    (["multiple_choice"], "true_false"),
+    (["fill_blank"], ""),
+)
+
+
+async def _issue_practice_cards(
+    req: ChatRequest,
+    project_id: str,
+    agent_mode: str,
+    count: int | None,
+) -> tuple[list[dict], dict]:
+    """Issue server-owned cards; stops at the first empty one.
+
+    ``count=None`` means the learner did not name a number: it becomes the
+    BKT-derived count — how many cards a fully-correct run needs to lift the
+    focus KC's mastery to 0.90. Learner-named question types ("出个选择题")
+    and 判断题 style constrain every card; otherwise the four card shapes
+    rotate for variety. Returns (cards, first_card_or_empty_marker).
+    """
+    from services.agent_assessment import create_question
+
+    last_user_msg = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+    question_types = _parse_question_types(last_user_msg)
+    card_style = "true_false" if _is_true_false_request(last_user_msg) else ""
+    if card_style == "true_false":
+        # A 判断题 is a two-option multiple-choice card; without the explicit
+        # type the generator may fall back to a four-option variant.
+        question_types = ["multiple_choice"]
+
+    if count is None:
+        count = _auto_question_count(req, project_id, last_user_msg)
+    count = max(1, min(10, int(count)))
+
+    difficulty = _parse_difficulty(last_user_msg)
+
+    # Subject continuation: with no explicit topic, keep issuing cards on the
+    # last card's page so a quiz run stays on the learner's current subject.
+    continuation = _last_issued_card(project_id, req.conversation_id or "")
+    topic = _explicit_practice_topic(last_user_msg) or _topic_from_learning_intent(last_user_msg)
+    # Anchor the quiz on the learner's actual focus: the last card's page,
+    # else the focus KC's page (learning path / weak spot), never a random
+    # "first eight pages" slice.
+    continuation_page = None
+    if topic is None:
+        if continuation and continuation.get("related_page"):
+            continuation_page = continuation["related_page"]
+        if not continuation_page:
+            continuation_page = _kc_page(
+                project_id, _quiz_focus_kc(req, project_id, last_user_msg)
+            )
+
+    if question_types or card_style:
+        card_mix = [(question_types, card_style)] * count
+    else:
+        card_mix = [_CARD_TYPE_ROTATION[i % len(_CARD_TYPE_ROTATION)] for i in range(count)]
+
+    def _looks_like_true_false(card: dict) -> bool:
+        options = ((card.get("question") or {}).get("options")) or []
+        return len(options) <= 2
+
+    cards: list[dict] = []
+    marker: dict = {}
+    for card_types, card_style_i in card_mix:
+        card = await create_question(
+            project_id,
+            req.user_id,
+            mode=agent_mode,
+            session_id=req.conversation_id,
+            page_path=(
+                req.scope.page_path if req.scope.type == "current_page" else None
+            ) or continuation_page,
+            topic=topic or _practice_topic(req),
+            question_types=card_types,
+            card_style=card_style_i,
+            difficulty=difficulty,
+        )
+        # The style is prompt-enforced; one retry keeps a model that ignored
+        # the two-option instruction from slipping a four-option card through.
+        if card_style_i == "true_false" and card.get("question") and not _looks_like_true_false(card):
+            card = await create_question(
+                project_id,
+                req.user_id,
+                mode=agent_mode,
+                session_id=req.conversation_id,
+                page_path=(
+                    req.scope.page_path if req.scope.type == "current_page" else None
+                ) or continuation_page,
+                topic=topic or _practice_topic(req),
+                question_types=card_types,
+                card_style=card_style_i,
+                difficulty=difficulty,
+            )
+        if card.get("status") == "empty" or card.get("question") is None:
+            marker = card
+            break
+        cards.append(card)
+    return cards, marker
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
@@ -900,15 +1246,11 @@ async def chat(
     _require_admin_token(admin_token, x_admin_token)
     agent_mode = _agent_mode(req)
     if agent_mode in {"practice", "review"}:
-        from services.agent_assessment import create_question
-
-        card = await create_question(
-            project_id,
-            req.user_id,
-            mode=agent_mode,
-            session_id=req.conversation_id,
-            page_path=req.scope.page_path if req.scope.type == "current_page" else None,
-            topic=_practice_topic(req),
+        last_user_msg = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+        named_count = _named_question_count(last_user_msg)
+        cards, marker = await _issue_practice_cards(
+            req, project_id, agent_mode,
+            named_count if agent_mode == "practice" else (named_count or 1),
         )
         try:
             from services.wiki_auto_update import record_dialogue
@@ -917,8 +1259,8 @@ async def chat(
                 record_dialogue,
                 project_id,
                 req.user_id,
-                query=next((m.content for m in reversed(req.messages) if m.role == "user"), ""),
-                response=card.get("message") or "开始练习：请先作答。",
+                query=last_user_msg,
+                response=marker.get("message") or "开始练习：请先作答。",
                 conversation_id=req.conversation_id,
                 cited_pages=[],
                 mode=agent_mode,
@@ -926,23 +1268,29 @@ async def chat(
             )
         except Exception:
             pass
-        question = card.get("question")
-        if card.get("status") == "empty" or question is None:
+        if not cards:
             return ChatResponse(
-                content=card.get("message") or "当前没有到期复习卡。",
+                content=marker.get("message") or "当前没有到期复习卡。",
                 cited_pages=[],
                 conversation_id=req.conversation_id,
                 practice_question=None,
                 learning_update={
                     "status": "empty",
-                    "due_count": card.get("due_count", 0),
+                    "due_count": marker.get("due_count", 0),
                 },
             )
+        questions = [card["question"] for card in cards]
+        intro = (
+            f"开始练习（共 {len(questions)} 题）：请先作答；提交后我会更新你的 BKT 掌握度和 SM-2 复习时间。"
+            if len(questions) > 1
+            else "开始练习：请先作答；提交后我会更新你的 BKT 掌握度和 SM-2 复习时间。"
+        )
         return ChatResponse(
-            content="开始练习：请先作答；提交后我会更新你的 BKT 掌握度和 SM-2 复习时间。",
+            content=intro,
             cited_pages=[],
             conversation_id=req.conversation_id,
-            practice_question=question,
+            practice_question=questions[0],
+            practice_questions=questions,
         )
     last_user_msg = ""
     for msg in reversed(req.messages):
@@ -997,8 +1345,10 @@ async def chat(
         )
 
     if react_result is not None:
-        raw_answer, react_cited = react_result
+        raw_answer, react_cited, react_cards = react_result
+        questions = [card["question"] for card in react_cards if card.get("question")]
         response, actual_cited = _filter_actual_citations(raw_answer, react_cited)
+        response = _linkify_cited_titles(response, actual_cited)
         try:
             from services.wiki_auto_update import record_dialogue
 
@@ -1019,6 +1369,8 @@ async def chat(
             content=response,
             cited_pages=[CitedPage(**c) for c in actual_cited],
             conversation_id=req.conversation_id,
+            practice_question=questions[0] if questions else None,
+            practice_questions=questions or None,
         )
 
     # Full RAG pipeline
@@ -1103,19 +1455,14 @@ async def chat_stream(
     if agent_mode in {"practice", "review"}:
         async def practice_gen():
             try:
-                from services.agent_assessment import create_question
-
                 # Flush a visible progress event before model-backed question
                 # generation. This keeps the single chat surface informative
                 # while the skill is selecting or creating a card.
                 yield f"data: {json.dumps({'type': 'status', 'stage': 'practice', 'text': '正在准备题目…'}, ensure_ascii=False)}\n\n"
-                card = await create_question(
-                    project_id,
-                    req.user_id,
-                    mode=agent_mode,
-                    session_id=req.conversation_id,
-                    page_path=req.scope.page_path if req.scope.type == "current_page" else None,
-                    topic=_practice_topic(req),
+                named_count = _named_question_count(last_user_msg)
+                cards, marker = await _issue_practice_cards(
+                    req, project_id, agent_mode,
+                    named_count if agent_mode == "practice" else (named_count or 1),
                 )
                 try:
                     from services.wiki_auto_update import record_dialogue
@@ -1125,7 +1472,7 @@ async def chat_stream(
                         project_id,
                         req.user_id,
                         query=last_user_msg,
-                        response=card.get("message") or "开始练习：请先作答。",
+                        response=marker.get("message") or "开始练习：请先作答。",
                         conversation_id=req.conversation_id,
                         cited_pages=[],
                         mode=agent_mode,
@@ -1133,16 +1480,47 @@ async def chat_stream(
                     )
                 except Exception:
                     pass
-                question = card.get("question")
-                if card.get("status") == "empty" or question is None:
-                    text = card.get("message") or "当前没有到期复习卡。"
-                    yield f"data: {json.dumps({'type': 'queue_empty', 'mode': agent_mode, 'message': text, 'due_count': card.get('due_count', 0)}, ensure_ascii=False)}\n\n"
+                if not cards:
+                    text = marker.get("message") or "当前没有到期复习卡。"
+                    yield f"data: {json.dumps({'type': 'queue_empty', 'mode': agent_mode, 'message': text, 'due_count': marker.get('due_count', 0)}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'content', 'text': text}, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
                     return
-                yield f"data: {json.dumps({'type': 'practice_question', 'mode': agent_mode, 'session_id': card['session_id'], 'question': question}, ensure_ascii=False)}\n\n"
-                text = "开始练习：请先作答；提交后我会更新你的 BKT 掌握度和 SM-2 复习时间。"
-                yield f"data: {json.dumps({'type': 'content', 'text': text}, ensure_ascii=False)}\n\n"
+                total = len(cards)
+                if agent_mode == "practice":
+                    # One panel carrying every question: the learner answers
+                    # all of them and submits a single batch.
+                    questions_payload = [
+                        {**card["question"], "session_id": card["session_id"]}
+                        for card in cards
+                    ]
+                    set_event = {
+                        "type": "practice_set",
+                        "mode": agent_mode,
+                        "questions": questions_payload,
+                        "total": total,
+                    }
+                    yield f"data: {json.dumps(set_event, ensure_ascii=False)}\n\n"
+                    intro = (
+                        f"开始练习（共 {total} 题，多题型混合作答）：全部提交后我会统一更新你的 BKT 掌握度和 SM-2 复习时间。"
+                        if total > 1
+                        else "开始练习：请作答后提交，提交后我会更新你的 BKT 掌握度和 SM-2 复习时间。"
+                    )
+                else:
+                    # Reviews reopen due cards one at a time.
+                    for index, card in enumerate(cards, 1):
+                        question = card["question"]
+                        event = {
+                            "type": "practice_question",
+                            "mode": agent_mode,
+                            "session_id": card["session_id"],
+                            "question": question,
+                            "index": index,
+                            "total": total,
+                        }
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    intro = "开始复习：请先作答；提交后我会更新你的 BKT 掌握度和 SM-2 复习时间。"
+                yield f"data: {json.dumps({'type': 'content', 'text': intro}, ensure_ascii=False)}\n\n"
             except Exception as exc:
                 yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:240]}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
@@ -1225,8 +1603,8 @@ async def chat_stream(
             except asyncio.CancelledError:
                 raise
             if react is not None:
-                answer, cited = react
-                return "react", answer, cited, {}
+                answer, cited, cards = react
+                return "react", answer, cited, {"practice_cards": cards}
             await on_status("工具调用不可用，回退到图谱检索管线")
         (
             pages_context,
@@ -1300,7 +1678,24 @@ async def chat_stream(
         kind, react_answer, react_cited, bundle = pipeline_task.result()
         if kind == "react":
             cleaned, actual_cited = _filter_actual_citations(react_answer, react_cited)
+            cleaned = _linkify_cited_titles(cleaned, actual_cited)
             try:
+                # Cards issued through the agent's quiz tool stream as one
+                # multi-question panel before the text so clients render them
+                # without parsing markdown.
+                cards = [c for c in (bundle.get("practice_cards") or []) if c.get("question")]
+                if cards:
+                    questions_payload = [
+                        {**card["question"], "session_id": card.get("session_id")}
+                        for card in cards
+                    ]
+                    set_event = {
+                        "type": "practice_set",
+                        "mode": "practice",
+                        "questions": questions_payload,
+                        "total": len(cards),
+                    }
+                    yield f"data: {json.dumps(set_event, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in actual_cited]}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '回答已生成', 'kind': 'answer'}, ensure_ascii=False)}\n\n"
                 # The whole answer already exists; replay it in chunks so the
@@ -1377,6 +1772,7 @@ async def chat_stream(
             abort_event.set()
             watcher.cancel()
         cleaned, actual_cited = _filter_actual_citations(full_response, cited)
+        cleaned = _linkify_cited_titles(cleaned, actual_cited)
         try:
             from services.wiki_auto_update import record_dialogue
 

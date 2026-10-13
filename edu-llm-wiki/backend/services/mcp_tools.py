@@ -93,8 +93,15 @@ def build_wiki_tool_server(
     user_id: str = "default",
     evidence: EvidenceRegistry,
     max_page_size: int = 5_000,
+    practice_cards: list | None = None,
 ) -> WikiMcpServer:
-    """Build a per-request MCP server exposing wiki retrieval tools."""
+    """Build a per-request MCP server exposing wiki retrieval tools.
+
+    ``practice_cards`` is an outbox: the ``issue_practice_questions`` tool
+    appends the server-owned cards it issues so the chat route can stream
+    them as structured card events instead of leaving the model to invent
+    question text in markdown.
+    """
 
     server = WikiMcpServer(name="edu-wiki-retrieval")
 
@@ -301,6 +308,67 @@ def build_wiki_tool_server(
             f"- due review items today: {int(state.get('sr_due_today', 0) or 0)}\n"
             f"- overconfidence gap: {float(state.get('overconfidence_gap', 0) or 0):.2f}\n"
             f"- prerequisite readiness: {float(state.get('readiness', 0) or 0):.2f}"
+        )
+
+    @server.tool()
+    async def issue_practice_questions(
+        topic: str = "",
+        count: int = 1,
+        difficulty: str = "mixed",
+        question_type: str = "",
+    ) -> str:
+        """Issue server-owned practice question cards for the learner.
+
+        Whenever the learner asks to be quizzed in ANY wording ("考考我",
+        "考察一下我", "出题", "给我来几道题", "test me"), call this tool
+        instead of writing question text yourself — the cards are graded,
+        update BKT/SM-2, and render as answerable cards in the chat.
+
+        ``count`` follows the learner's request (default 1, max 10); ``topic``
+        is an optional subject; ``difficulty`` is easy/medium/hard/mixed.
+        ``question_type`` is the card type the learner named, one of
+        "multiple_choice" (选择题/单选), "short_answer" (简答/问答),
+        "fill_blank" (填空), or "true_false" (判断题 — renders as a card with
+        exactly two options, 正确/错误) — empty means the learner did not
+        specify.
+        After issuing, briefly tell the learner how many cards arrived and
+        prompt them to answer; do not repeat or rewrite the questions.
+        """
+        try:
+            from services.agent_assessment import create_question
+
+            named_type = question_type.strip().lower()
+            card_style = "true_false" if named_type == "true_false" else ""
+            valid_types = {"multiple_choice", "short_answer", "fill_blank", "true_false"}
+            question_types = (
+                ["multiple_choice"] if card_style
+                else ([named_type] if named_type in valid_types else None)
+            )
+            issued = []
+            for _ in range(max(1, min(10, int(count)))):
+                card = await create_question(
+                    project_id,
+                    user_id,
+                    mode="practice",
+                    session_id=None,
+                    topic=(topic or "").strip() or None,
+                    difficulty=difficulty,
+                    question_types=question_types,
+                    card_style=card_style,
+                )
+                if card.get("question") is None:
+                    break
+                issued.append(card)
+        except Exception as exc:
+            return f"ERROR issuing practice questions: {exc}"
+        if not issued:
+            return "No cards could be issued (knowledge base empty). Tell the learner to import material first."
+        if practice_cards is not None:
+            practice_cards.extend(issued)
+        return (
+            f"Issued {len(issued)} practice card(s). They will appear to the "
+            "learner as answerable cards. Tell the learner the cards are ready "
+            "and that they should answer; do NOT restate the questions yourself."
         )
 
     @server.tool()

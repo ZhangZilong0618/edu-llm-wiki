@@ -437,7 +437,12 @@ def _render_plan_markdown(plan: dict, *, reason: str, generated_at: str) -> str:
         lines.append("")
         for node in level["nodes"]:
             mark = _STATUS_MARK.get(node.get("status", "upcoming"), "⏳")
-            line = f"- {mark} **{node.get('label', node['id'])}**"
+            # Wikilinks make every topic clickable in the chat/preview
+            # renderers; the path disambiguates non-unique page titles.
+            page_path = str(node.get("page_path") or "").strip()
+            label = node.get("label", node["id"])
+            title_part = f"[[{page_path}|{label}]]" if page_path else f"**{label}**"
+            line = f"- {mark} {title_part}"
             p_known = node.get("p_known")
             if p_known is not None:
                 line += f" · 掌握 {p_known * 100:.0f}%"
@@ -456,7 +461,10 @@ def _render_plan_markdown(plan: dict, *, reason: str, generated_at: str) -> str:
             cycle = "; ".join(
                 f"{e['source']} ⇄ {e['target']}" for e in node.get("cycle_edges", [])
             )
-            lines.append(f"- ⚠️ **{node.get('label', node['id'])}**{f' · 环: {cycle}' if cycle else ''}")
+            page_path = str(node.get("page_path") or "").strip()
+            label = node.get("label", node["id"])
+            title_part = f"[[{page_path}|{label}]]" if page_path else f"**{label}**"
+            lines.append(f"- ⚠️ {title_part}{f' · 环: {cycle}' if cycle else ''}")
         lines.append("")
 
     conflicts = plan.get("edge_conflicts") or []
@@ -550,6 +558,17 @@ def write_plan(
         fm["created"] = generated_at
 
     _atomic_write(path, make_frontmatter(fm) + "\n" + body)
+
+    # Close the loop with the TeachingObject pages: a plan write changes the
+    # LearningPlanning class statistics, so re-render those class pages.
+    # Best-effort; projection failures never fail the plan write itself.
+    try:
+        from services.teaching_semantic import refresh_planning_pages
+
+        refresh_planning_pages(project_id)
+    except Exception:
+        pass
+
     return {"markdown": body, "plan": plan, "report": report, "path": str(path)}
 
 

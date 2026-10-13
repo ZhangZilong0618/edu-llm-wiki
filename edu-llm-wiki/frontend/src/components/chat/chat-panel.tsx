@@ -34,6 +34,14 @@ interface Message {
   traceMs?: number
   practice?: PracticeQuestion
   practiceMode?: "practice" | "review"
+  // Multi-question practice panel ("出题" without a count): every question
+  // renders on one card and answers submit as a single batch.
+  practiceSet?: {
+    questions: PracticeQuestion[]
+    mode: "practice" | "review"
+    results?: Record<string, PracticeEvaluation>
+    submitted?: boolean
+  }
   evaluation?: PracticeEvaluation
   practiceAttempt?: { answer: string; id: string }
   practiceDismissed?: boolean
@@ -55,6 +63,193 @@ const STEP_ICONS: Record<AgentStep["kind"], typeof Brain> = {
   action: Wrench,
   step: CheckCircle2,
   answer: Loader2,
+}
+
+const PRACTICE_SET_TYPE_LABEL: Record<string, string> = {
+  multiple_choice: "选择",
+  short_answer: "简答",
+  fill_blank: "填空",
+}
+
+// One card carrying a whole quiz set: every question answers in place and
+// the batch submits once — each answer is graded through the same
+// server-owned card API (BKT/SM-2 update per question).
+function PracticeSetPanel({ message, userId, onGraded }: {
+  message: Message
+  userId: string
+  onGraded: (results: Record<string, PracticeEvaluation>) => void
+}) {
+  const set = message.practiceSet!
+  const stored = set.results || {}
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [confidence, setConfidence] = useState<number | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [progress, setProgress] = useState("")
+  const [batchError, setBatchError] = useState<string | null>(null)
+
+  const questionId = (q: PracticeQuestion) => q.id || q.question_id || ""
+  const submitted = set.submitted === true
+  const allAnswered = set.questions.every((q) => (answers[questionId(q)] || "").trim())
+  const finalUpdate = set.questions
+    .map((q) => stored[questionId(q)]?.learning_update)
+    .filter(Boolean)
+    .pop()
+
+  async function submitBatch() {
+    if (!allAnswered || confidence == null || submitting) return
+    setSubmitting(true)
+    setBatchError(null)
+    const collected: Record<string, PracticeEvaluation> = {}
+    try {
+      for (let i = 0; i < set.questions.length; i++) {
+        const q = set.questions[i]
+        const qid = questionId(q)
+        setProgress(`正在批改 ${i + 1}/${set.questions.length}…`)
+        const evaluation = await api.submitPracticeAnswer(q.session_id || "", {
+          question_id: qid,
+          answer: answers[qid] || "",
+          confidence,
+          hint_ladder: 0,
+          attempt_id: crypto.randomUUID(),
+        }, userId)
+        collected[qid] = evaluation
+      }
+      setProgress("")
+      onGraded(collected)
+    } catch (e: any) {
+      setBatchError(e?.message || "批改失败，可重试；已批改的题不会重复计分")
+      if (Object.keys(collected).length) onGraded(collected)
+    } finally {
+      setSubmitting(false)
+      setProgress("")
+    }
+  }
+
+  return (
+    <div className="mt-3 min-w-0 overflow-hidden rounded-lg border border-[var(--primary)]/30 bg-[var(--background)] p-3 [overflow-wrap:anywhere]">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--primary)]">
+          <Brain size={14} className="shrink-0" />
+          <span>练习 · 共 {set.questions.length} 题（{[...new Set(set.questions.map((q) => PRACTICE_SET_TYPE_LABEL[q.type || ""] || q.type || "题"))].join(" / ")}）</span>
+        </div>
+        {submitted ? (
+          <span className="text-[10px] text-[var(--muted-foreground)]">已完成批改</span>
+        ) : (
+          <span className="text-[10px] text-[var(--muted-foreground)]">多题混合作答，一次提交</span>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        {set.questions.map((q, index) => {
+          const qid = questionId(q)
+          const result = stored[qid]
+          const answer = answers[qid] || ""
+          const isChoice = q.type === "multiple_choice" && (q.options?.length || 0) > 0
+          const isTrueFalse = isChoice && (q.options?.length || 0) <= 2
+          return (
+            <div key={qid || index} className="min-w-0 rounded-md border border-[var(--border)] p-2.5">
+              <div className="mb-1.5 flex items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
+                <span className="rounded bg-[var(--accent)] px-1.5 py-0.5 font-medium">第 {index + 1} 题</span>
+                <span>{PRACTICE_SET_TYPE_LABEL[q.type || ""] || q.type || "题"}{isTrueFalse ? "（判断）" : ""}</span>
+                {result ? (
+                  <span className={result.correct ? "text-green-600" : "text-red-600"}>
+                    {result.correct ? "✓ 正确" : "✗ 需巩固"}
+                    {result.score != null ? ` · 得分 ${Math.round(result.score * 100)}%` : ""}
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-xs leading-relaxed [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto">
+                <InlineMarkdown>{q.prompt || ""}</InlineMarkdown>
+              </div>
+
+              {isChoice ? (
+                <div className="mt-2 grid gap-1.5">
+                  {(q.options || []).map((option, optIndex) => {
+                    const letter = String.fromCharCode(65 + optIndex)
+                    const selected = answer.toUpperCase() === letter
+                    return (
+                      <button
+                        key={`${qid}-${optIndex}`}
+                        type="button"
+                        disabled={submitted || submitting}
+                        onClick={() => setAnswers((prev) => ({ ...prev, [qid]: letter }))}
+                        className={`min-w-0 break-words rounded-md border px-2.5 py-1.5 text-left text-xs hover:border-[var(--primary)] hover:bg-[var(--accent)] disabled:opacity-70 [overflow-wrap:anywhere] ${selected ? "border-[var(--primary)] bg-[var(--accent)]" : ""}`}
+                      >
+                        <span className="mr-1.5 font-medium">{letter}.</span>
+                        <span className="inline-block min-w-0 max-w-full align-middle overflow-x-auto [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto">
+                          <InlineMarkdown>{displayOption(option)}</InlineMarkdown>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <textarea
+                  value={answer}
+                  disabled={submitted || submitting}
+                  onChange={(e) => setAnswers((prev) => ({ ...prev, [qid]: e.target.value }))}
+                  placeholder="在此作答…"
+                  rows={q.type === "short_answer" ? 3 : 1}
+                  className="mt-2 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2.5 py-2 text-xs outline-none focus:border-[var(--primary)] disabled:opacity-70"
+                />
+              )}
+
+              {result ? (
+                <div className="mt-2 min-w-0 rounded bg-[var(--accent)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--muted-foreground)] [overflow-wrap:anywhere] [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_p]:my-1 [&_p]:leading-relaxed">
+                  {result.correct_answer != null && String(Array.isArray(result.correct_answer) ? result.correct_answer.join(" / ") : result.correct_answer).trim() ? (
+                    <p><span className="font-medium text-[var(--foreground)]">参考答案：</span><Markdown>{Array.isArray(result.correct_answer) ? result.correct_answer.join(" / ") : String(result.correct_answer)}</Markdown></p>
+                  ) : null}
+                  {result.explanation ? (
+                    <p className="mt-1"><span className="font-medium text-[var(--foreground)]">解析：</span><Markdown>{result.explanation}</Markdown></p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+
+      {!submitted ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-[var(--muted-foreground)]">答题信心（提交时必选）</span>
+          {[1, 2, 3, 4, 5].map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-label={`信心 ${value}/5`}
+              onClick={() => setConfidence(value)}
+              disabled={submitting}
+              className={`h-5 w-5 rounded-full border text-[10px] disabled:opacity-60 ${confidence === value ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "text-[var(--muted-foreground)] hover:border-[var(--primary)]"}`}
+            >
+              {value}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={submitBatch}
+            disabled={!allAnswered || confidence == null || submitting}
+            className="ml-auto rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            title={!allAnswered ? "请先完成所有题目" : confidence == null ? "请选择信心程度" : "提交全部答案"}
+          >
+            {submitting ? (progress || "批改中…") : `提交全部答案（${set.questions.length} 题）`}
+          </button>
+          {confidence == null && allAnswered ? (
+            <span className="w-full text-[10px] text-amber-700">提交前需要选择 1–5 的答题信心</span>
+          ) : null}
+          {batchError ? <span className="w-full text-[10px] text-red-600">{batchError}</span> : null}
+        </div>
+      ) : (
+        <div className="mt-3 border-t border-[var(--border)] pt-2 text-[10px] text-[var(--muted-foreground)]">
+          已提交 {Object.keys(stored).length}/{set.questions.length} 题
+          {finalUpdate?.bkt?.p_known != null ? (
+            <span className="ml-2 text-[var(--primary)]">
+              本次学习后掌握度 {Math.round((finalUpdate.bkt.p_known as number) * 100)}% · 已安排下次复习
+            </span>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Codex-style reasoning trace: streamed expanded while the agent works
@@ -216,6 +411,13 @@ export function ChatPanel() {
   const [chatStatus, setChatStatus] = useState<string | null>(null)
   const [recognizingImage, setRecognizingImage] = useState(false)
   const [practiceQuestion, setPracticeQuestion] = useState<PracticeQuestion | null>(null)
+  // Multi-card requests queue the cards beyond the first; each answered (or
+  // skipped) card releases the next one as a fresh assistant message.
+  const [practiceQueue, setPracticeQueue] = useState<PracticeQuestion[]>([])
+  const practiceQueueRef = useRef<PracticeQuestion[]>([])
+  useEffect(() => {
+    practiceQueueRef.current = practiceQueue
+  }, [practiceQueue])
   const [practiceSessionId, setPracticeSessionId] = useState<string | null>(null)
   const [practiceHintLevel, setPracticeHintLevel] = useState(0)
   const [practiceConfidence, setPracticeConfidence] = useState<number | null>(null)
@@ -315,6 +517,7 @@ export function ChatPanel() {
     setStreaming(null)
     setChatStatus(null)
     setPracticeQuestion(null)
+    setPracticeQueue([])
     setPracticeSessionId(null)
     setPracticeHintLevel(0)
     setPracticeConfidence(null)
@@ -346,6 +549,7 @@ export function ChatPanel() {
       } else {
         setInput("")
         setPracticeQuestion(null)
+        setPracticeQueue([])
         setPracticeSessionId(null)
         setPracticeHintLevel(0)
         setPracticeConfidence(null)
@@ -405,19 +609,23 @@ export function ChatPanel() {
           api.saveConversation({
             id,
             title: convTitleRef.current,
-            messages: messagesRef.current.map((m) => ({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-              cited: m.cited,
-              practice: m.practice,
-              practiceMode: m.practiceMode,
-              evaluation: m.evaluation,
-              practiceAttempt: m.practiceAttempt,
-      practiceDismissed: m.practiceDismissed,
-      practiceSkipped: m.practiceSkipped,
-      assessmentContextQuestionId: m.assessmentContextQuestionId,
-            })),
+        messages: messagesRef.current.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          cited: m.cited,
+          practice: m.practice,
+          practiceSet: m.practiceSet,
+          practiceMode: m.practiceMode,
+          evaluation: m.evaluation,
+          practiceAttempt: m.practiceAttempt,
+          practiceDismissed: m.practiceDismissed,
+          practiceSkipped: m.practiceSkipped,
+          assessmentContextQuestionId: m.assessmentContextQuestionId,
+          steps: m.steps,
+          stepsCollapsed: m.stepsCollapsed,
+          traceMs: m.traceMs,
+        })),
           }).catch(() => {})
         }
       }
@@ -461,12 +669,16 @@ export function ChatPanel() {
           content: m.content,
           cited: m.cited,
           practice: m.practice,
+          practiceSet: m.practiceSet,
           practiceMode: m.practiceMode,
           evaluation: m.evaluation,
           practiceAttempt: m.practiceAttempt,
           practiceDismissed: m.practiceDismissed,
           practiceSkipped: m.practiceSkipped,
           assessmentContextQuestionId: m.assessmentContextQuestionId,
+          steps: m.steps,
+          stepsCollapsed: m.stepsCollapsed,
+          traceMs: m.traceMs,
         })),
       }).then(() => {
         const wasFirstSave = !wasRefreshedRef.current
@@ -482,8 +694,35 @@ export function ChatPanel() {
     }, 500)
   }, [convTitle, setConversations])
 
-  const submitPracticeAnswer = useCallback(async () => {
-    if (!practiceQuestion || streaming || gradingPractice || !input.trim()) return
+  // Pull the next queued practice card into a fresh assistant message and
+  // make it the active answer target.
+  const showNextPracticeCard = useCallback(() => {
+    const queue = practiceQueueRef.current
+    if (!queue.length) return
+    const [next, ...rest] = queue
+    practiceQueueRef.current = rest
+    setPracticeQueue(rest)
+    const cardMessage: Message = {
+      id: nextId(),
+      role: "assistant",
+      content: "",
+      practice: next,
+      practiceMode: "practice",
+    }
+    const nextMessages = [...messagesRef.current, cardMessage]
+    messagesRef.current = nextMessages
+    setMessages(nextMessages)
+    autoSave(nextMessages, convTitle)
+    setPracticeQuestion(next)
+    setPracticeSessionId(next.session_id || null)
+    setPracticeHintLevel(0)
+    setPracticeConfidence(null)
+    practiceAttemptRef.current = null
+    setInput("")
+    textareaRef.current?.focus()
+  }, [autoSave, convTitle])
+
+  const submitPracticeAnswer = useCallback(async () => {    if (!practiceQuestion || streaming || gradingPractice || !input.trim()) return
     if (practiceConfidence == null) {
       toast({ type: "error", message: "请先选择信心程度（1–5）再提交答案" })
       return
@@ -534,6 +773,8 @@ export function ChatPanel() {
       setPracticeHintLevel(0)
       setPracticeConfidence(null)
       autoSave(nextMessages, convTitle)
+      // Multi-card runs surface the next queued card right away.
+      showNextPracticeCard()
     } catch (e: any) {
       setInput(answer)
       toast({ type: "error", message: e?.message || "答案批改失败" })
@@ -541,7 +782,7 @@ export function ChatPanel() {
       setGradingPractice(false)
       setChatStatus(null)
     }
-  }, [autoSave, convTitle, gradingPractice, input, practiceConfidence, practiceHintLevel, practiceQuestion, practiceSessionId, streaming, userId])
+  }, [autoSave, convTitle, gradingPractice, input, practiceConfidence, practiceHintLevel, practiceQuestion, practiceSessionId, showNextPracticeCard, streaming, userId])
 
   const requestAnotherPractice = useCallback((messageId: string) => {
     if (streaming || gradingPractice) return
@@ -553,6 +794,7 @@ export function ChatPanel() {
     if (!currentMessages.some((message) => message.id === messageId && message.practice)) return
     setMessages(currentMessages)
     setPracticeQuestion(null)
+    setPracticeQueue([])
     setPracticeSessionId(null)
     setPracticeHintLevel(0)
     setPracticeConfidence(null)
@@ -570,6 +812,7 @@ export function ChatPanel() {
     )
     setMessages(currentMessages)
     setPracticeQuestion(null)
+    setPracticeQueue([])
     setPracticeSessionId(null)
     setPracticeHintLevel(0)
     setPracticeConfidence(null)
@@ -658,6 +901,7 @@ export function ChatPanel() {
         autoSave(baseMsgs, convTitle)
       }
       setPracticeQuestion(null)
+      setPracticeQueue([])
       setPracticeSessionId(null)
       setPracticeHintLevel(0)
       setPracticeConfidence(null)
@@ -741,21 +985,50 @@ export function ChatPanel() {
               ? { ...m, steps: [...(m.steps || []), { text: event.text, kind }] }
               : m))
           }
+        } else if (event.type === "practice_set") {
+          // Multi-question practice panel: one card carrying every question,
+          // answered together and submitted as one batch.
+          const rawQuestions = (event.questions || []) as Array<Partial<PracticeQuestion> & { session_id?: string }>
+          const questions = rawQuestions
+            .filter((raw) => raw.prompt)
+            .map((raw) => ({ ...raw, id: raw.id || raw.question_id || nextId() })) as PracticeQuestion[]
+          if (questions.length) {
+            setPracticeQuestion(null)
+            setPracticeQueue([])
+            practiceAttemptRef.current = null
+            setMessages((prev) => prev.map((message) => message.id === assistantId
+              ? {
+                  ...message,
+                  content: "",
+                  practice: undefined,
+                  practiceSet: { questions, mode: event.mode === "review" ? "review" : "practice" },
+                }
+              : message,
+            ))
+          }
         } else if (event.type === "practice_question") {
           const raw = (event.question || event.payload || event) as Partial<PracticeQuestion> & { session_id?: string }
           if (raw.prompt) {
             const question = { ...raw, id: raw.id || raw.question_id || nextId() } as PracticeQuestion
-            setPracticeQuestion(question)
-            practiceAttemptRef.current = null
-            setPracticeSessionId((event.session_id || raw.session_id || null) as string | null)
-            setPracticeHintLevel(0)
-            setPracticeConfidence(null)
-            setMessages((prev) => prev.map((message) => message.id === assistantId
-              ? { ...message, content: "", practice: question, practiceMode: event.mode === "review" ? "review" : "practice" }
-              : message,
-            ))
+            const isFirstCard = event.index == null || event.index === 1
+            if (isFirstCard) {
+              setPracticeQuestion(question)
+              practiceAttemptRef.current = null
+              setPracticeSessionId((event.session_id || raw.session_id || null) as string | null)
+              setPracticeHintLevel(0)
+              setPracticeConfidence(null)
+              setMessages((prev) => prev.map((message) => message.id === assistantId
+                ? { ...message, content: "", practice: question, practiceMode: event.mode === "review" ? "review" : "practice" }
+                : message,
+              ))
+            } else {
+              // Multi-card requests ("出 3 道题"): later cards queue up and
+              // appear as new assistant messages as the learner answers.
+              setPracticeQueue((queue) => [...queue, question])
+            }
           }
         } else if (event.type === "queue_empty") {
+          setPracticeQueue([])
           setPracticeQuestion(null)
           setPracticeSessionId(null)
           setPracticeHintLevel(0)
@@ -802,8 +1075,13 @@ export function ChatPanel() {
       }
 
       setMessages((prev) => {
+        // The conversation title is set once from the first user turn and
+        // must never drift with later messages — otherwise pasting a quiz
+        // prompt into the composer renames the whole conversation to the
+        // question text. Fall back to the latest user text only when no
+        // title exists yet (first-turn race).
         const lastUser = [...prev].reverse().find((m) => m.role === "user")
-        const titleSeed = lastUser?.content?.trim() || convTitle
+        const titleSeed = convTitle || lastUser?.content?.trim() || "新对话"
         autoSave(prev, titleSeed.slice(0, 50))
         return prev
       })
@@ -1271,6 +1549,22 @@ export function ChatPanel() {
                       />
                     ) : null}
                     {msg.content ? <Markdown>{msg.content}</Markdown> : msg.practice ? null : <Markdown>...</Markdown>}
+                    {msg.practiceSet && msg.practiceSet.questions.length ? (
+                      <PracticeSetPanel
+                        message={msg}
+                        userId={userId}
+                        onGraded={(results) => {
+                          const nextMessages = messagesRef.current.map((m) =>
+                            m.id === msg.id && m.practiceSet
+                              ? { ...m, practiceSet: { ...m.practiceSet, results, submitted: true } }
+                              : m,
+                          )
+                          messagesRef.current = nextMessages
+                          setMessages(nextMessages)
+                          autoSave(nextMessages, convTitle)
+                        }}
+                      />
+                    ) : null}
                     {msg.practice && !msg.practiceDismissed ? (
                       <div className="mt-3 min-w-0 overflow-hidden rounded-lg border border-[var(--primary)]/30 bg-[var(--background)] p-3 [overflow-wrap:anywhere]">
                         {(() => {

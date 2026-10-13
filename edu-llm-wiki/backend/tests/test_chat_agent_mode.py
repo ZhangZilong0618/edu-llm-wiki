@@ -1,5 +1,6 @@
-import pytest
 import json
+
+import pytest
 
 from config import settings
 from models.chat import ChatRequest
@@ -65,14 +66,16 @@ def test_chat_practice_inherits_topic_and_returns_structured_card(monkeypatch, t
         project_id=project_id,
     )
     captured = {}
+    counter = {"n": 0}
 
     async def fake_generate(req, project_id, existing_count, context, coverage=None):
         from models.tests import TestQuestion
 
         captured["natural_prompt"] = req.natural_prompt
         captured["context"] = context
+        counter["n"] += 1
         return [TestQuestion(
-            id="elements-question", type="multiple_choice",
+            id=f"elements-question-{counter['n']}", type="multiple_choice",
             prompt="元素的化学性质主要由什么决定？",
             options=["最外层电子", "中子数"], answer="A",
             explanation="最外层电子决定元素的化学性质。",
@@ -80,8 +83,9 @@ def test_chat_practice_inherits_topic_and_returns_structured_card(monkeypatch, t
         )]
 
     monkeypatch.setattr("routes.tests._generate_questions", fake_generate)
-    from main import app
     from fastapi.testclient import TestClient
+
+    from main import app
 
     client = TestClient(app)
     response = client.post(
@@ -103,9 +107,11 @@ def test_chat_practice_inherits_topic_and_returns_structured_card(monkeypatch, t
         for line in response.text.splitlines()
         if line.startswith("data: {")
     ]
-    card = next(event for event in events if event["type"] == "practice_question")
-    assert card["question"]["related_page"] == "z/elements.md"
-    assert "元素的化学性质主要由什么决定" in card["question"]["prompt"]
+    card_set = next(event for event in events if event["type"] == "practice_set")
+    # No count named → BKT-derived multi-question panel on the active topic.
+    assert card_set["total"] == len(card_set["questions"]) >= 3
+    assert all(q["related_page"] == "z/elements.md" for q in card_set["questions"])
+    assert all("元素的化学性质主要由什么决定" in q["prompt"] for q in card_set["questions"])
     assert "# 元素" in captured["context"]
     assert "高分子构型" not in captured["context"]
     assert "元素" in captured["natural_prompt"]
@@ -122,19 +128,23 @@ def test_explicit_topic_request_enters_structured_practice_flow(monkeypatch, tmp
         project_id=project_id,
     )
 
+    counter = {"n": 0}
+
     async def fake_generate(req, project_id, existing_count, context, coverage=None):
         from models.tests import TestQuestion
 
         assert "元素" in req.natural_prompt
+        counter["n"] += 1
         return [TestQuestion(
-            id="explicit-elements", type="short_answer", prompt="什么是元素？",
+            id=f"explicit-elements-{counter['n']}", type="short_answer", prompt="什么是元素？",
             answer="同核电荷数原子", explanation="元素按核电荷数定义。",
             related_page="concepts/elements.md", difficulty="basic",
         )]
 
     monkeypatch.setattr("routes.tests._generate_questions", fake_generate)
-    from main import app
     from fastapi.testclient import TestClient
+
+    from main import app
 
     response = TestClient(app).post(
         f"/api/chat/stream?project_id={project_id}",
@@ -151,8 +161,8 @@ def test_explicit_topic_request_enters_structured_practice_flow(monkeypatch, tmp
         for line in response.text.splitlines()
         if line.startswith("data: {")
     ]
-    card = next(event for event in events if event["type"] == "practice_question")
-    assert card["question"]["related_page"] == "concepts/elements.md"
+    card_set = next(event for event in events if event["type"] == "practice_set")
+    assert all(q["related_page"] == "concepts/elements.md" for q in card_set["questions"])
 
 
 def test_chat_sse_question_answer_and_due_review_update_wiki(monkeypatch, tmp_path):
@@ -185,8 +195,9 @@ def test_chat_sse_question_answer_and_due_review_update_wiki(monkeypatch, tmp_pa
         )]
 
     monkeypatch.setattr("routes.tests._generate_questions", fake_generate)
-    from main import app
     from fastapi.testclient import TestClient
+
+    from main import app
 
     client = TestClient(app)
 
@@ -208,11 +219,12 @@ def test_chat_sse_question_answer_and_due_review_update_wiki(monkeypatch, tmp_pa
         ]
 
     practice_events = ask("给我一道题", "conversation-practice")
-    practice = next(event for event in practice_events if event["type"] == "practice_question")
-    assert practice["mode"] == "practice"
-    assert "answer" not in practice["question"]
-    question_id = practice["question"]["question_id"]
-    session_id = practice["session_id"]
+    practice_set = next(event for event in practice_events if event["type"] == "practice_set")
+    assert practice_set["mode"] == "practice"
+    assert practice_set["total"] == 1
+    assert "answer" not in practice_set["questions"][0]
+    question_id = practice_set["questions"][0]["question_id"]
+    session_id = practice_set["questions"][0]["session_id"]
     attempt_id = "e2e-practice-attempt"
 
     missing_confidence = client.post(
@@ -313,3 +325,85 @@ def test_chat_sse_question_answer_and_due_review_update_wiki(monkeypatch, tmp_pa
     wiki = tmp_path / project_id / "wiki"
     assert "练习反馈" in (wiki / "teaching" / "assessment" / "AssessmentResult.md").read_text(encoding="utf-8")
     assert "复习完成" in (wiki / "learning" / "activity" / next((p.name for p in (wiki / "learning" / "activity").glob("*.md")), "")).read_text(encoding="utf-8")
+
+
+def test_agent_mode_recognizes_quiz_wordings():
+    from models.chat import ChatMessage, ChatRequest
+    from routes.chat import _agent_mode
+
+    def mode_of(text: str) -> str:
+        return _agent_mode(ChatRequest(
+            messages=[ChatMessage(role="user", content=text)],
+            options={"agent_mode": "auto"},
+        ))
+
+    # "考察" previously missed the keyword routing and fell into the RAG flow,
+    # so quiz requests rendered as plain markdown instead of cards.
+    assert mode_of("考察一下我") == "practice"
+    assert mode_of("你考察我吧") == "practice"
+    assert mode_of("测一测我") == "practice"
+
+
+def test_parse_question_count_understands_wording():
+    from routes.chat import _parse_question_count
+
+    assert _parse_question_count("出 3 道题") == 3
+    assert _parse_question_count("考我五道") == 5
+    assert _parse_question_count("来两道题") == 2
+    assert _parse_question_count("给我出10道题") == 10
+    assert _parse_question_count("来一百道题") == 10  # clamped
+    assert _parse_question_count("考察一下我") == 1
+    assert _parse_question_count("") == 1
+
+
+def test_streaming_practice_issues_requested_card_count(tmp_path, monkeypatch):
+    """A count-bearing quiz request issues exactly that many cards."""
+    from config import settings
+
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    issued = []
+
+    async def fake_generate(req, project_id, user_id, context):
+        from models.tests import TestQuestion
+
+        index = len(issued)
+        issued.append(index)
+        return [TestQuestion(
+            id=f"q{index}", type="short_answer", prompt=f"题目{index + 1}",
+            answer="A", explanation="", related_page="concepts/elements.md",
+        )]
+
+    monkeypatch.setattr("routes.tests._generate_questions", fake_generate)
+    from storage.wiki_store import ensure_dirs, write_wiki_page
+
+    ensure_dirs(project_id="p")
+    write_wiki_page(
+        "concepts/elements.md", "元素", "concept",
+        "# 元素\n\n元素是具有相同核电荷数的一类原子的总称。", project_id="p",
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/chat/stream?project_id=p",
+            json={
+                "messages": [{"role": "user", "content": "出 3 道题"}],
+                "conversation_id": "cards-test",
+                "user_id": "u1",
+                "options": {"agent_mode": "auto"},
+            },
+        )
+    assert response.status_code == 200, response.text
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: {")
+    ]
+    card_set = next(event for event in events if event["type"] == "practice_set")
+    assert card_set["total"] == 3
+    assert len(card_set["questions"]) == 3
+    assert len(issued) == 3

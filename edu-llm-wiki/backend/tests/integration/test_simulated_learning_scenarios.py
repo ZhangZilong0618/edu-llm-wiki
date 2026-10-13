@@ -114,12 +114,16 @@ def test_imported_material_is_used_by_normal_dialogue_projection(tmp_path, monke
 
     page = (root / "wiki" / "concepts" / "elements.md").read_text(encoding="utf-8")
     activity = list((root / "wiki" / "learning" / "activity").glob("*.md"))
+    dialogue_record = (root / "wiki" / "teaching" / "learning-events" / "DialogueRecord.md").read_text(encoding="utf-8")
+    # The knowledge page stays pure authored content…
     assert "元素是具有相同核电荷数的一类原子的总称" in page
-    assert "学习活动（自动汇总）" in page
-    assert "对话涉及" in page
-    assert "学习语义快照" in page
-    assert "关联知识页: `concepts/elements.md`" in page
-    assert "最近事件: dialogue_completed（对话学习）" in page
+    for absent in ("学习活动（自动汇总）", "对话涉及", "学习语义快照", "学习洞察"):
+        assert absent not in page
+    # …while the dialogue projections live on the teaching pages.
+    assert "对话涉及" in dialogue_record
+    assert "学习语义快照" in dialogue_record
+    assert "关联知识页: `concepts/elements.md`" in dialogue_record
+    assert "最近事件: dialogue_completed（对话学习）" in dialogue_record
     assert activity and "对话完成" in activity[0].read_text(encoding="utf-8")
     with connect(project_id) as conn:
         event_types = {row[0] for row in conn.execute(
@@ -231,8 +235,9 @@ def test_simulated_learner_practice_and_review_update_mastery_and_pages(
     assessment = (wiki / "teaching" / "assessment" / "AssessmentResult.md").read_text(encoding="utf-8")
     learning_state = (wiki / "teaching" / "mastery-tracking" / "LearningState.md").read_text(encoding="utf-8")
     activity = "\n".join(p.read_text(encoding="utf-8") for p in (wiki / "learning" / "activity").glob("*.md"))
-    assert "题目发放" in related
-    assert "练习反馈" in related
+    # The knowledge page stays pure authored content: no event projections.
+    for absent in ("题目发放", "练习反馈", "学习洞察", "学习语义快照"):
+        assert absent not in related
     assert "练习反馈" in assessment
     assert "学习语义快照" in assessment
     assert "知识点标识:" in assessment
@@ -244,8 +249,6 @@ def test_simulated_learner_practice_and_review_update_mastery_and_pages(
     # TeachingObject pages expose an aggregate learning insight in addition
     # to the audit lines, so a reviewer can see what changed without opening
     # the private event ledger.
-    assert "学习洞察" in related
-    assert "关联事件:" in related
     assert "学习洞察" in assessment
     assert "关联事件:" in assessment
     assert "学习洞察" in learning_state

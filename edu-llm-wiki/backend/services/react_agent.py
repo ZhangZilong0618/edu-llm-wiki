@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mcp import ClientSession
 
@@ -53,6 +53,7 @@ class ReactResult:
     evidence: EvidenceRegistry
     steps: int = 0
     tool_calls: int = 0
+    practice_cards: list = field(default_factory=list)
 
 
 REACT_SYSTEM_PROMPT = r"""You are a wiki tutor that retrieves evidence yourself before answering (the ReAct pattern: reason, act, observe, repeat until the evidence suffices, then answer).
@@ -72,6 +73,11 @@ The MCP server provides wiki retrieval tools: search, read pages, follow graph e
 - ``read_page`` observations begin with the page's citation number ``[n]``. Only pages you have read can be cited; reuse the exact ``[n]``.
 - Stop calling tools as soon as the evidence covers the question — then answer.
 
+## Quiz Policy
+When the learner asks to be quizzed or to practise in ANY wording ("考考我", "考察一下我",
+"出题", "来 3 道题", "test me"), you MUST call ``issue_practice_questions`` — never
+write the questions yourself. The tool renders graded, BKT/SM-2-tracking cards.
+
 ## Learning-Plan Policy
 When the learner asks about their learning plan or path ("规划学习路径", "我的学习路径", "把 X 提前", "调整路径"):
 1. ALWAYS call ``get_learning_plan`` first. If it reports no plan exists, call ``rebuild_learning_plan``.
@@ -81,7 +87,7 @@ When the learner asks about their learning plan or path ("规划学习路径", "
 
 ## Answer Rules
 - Answer based on the pages you read. If they do not contain enough information, say so honestly.
-- Use [[wikilink]] syntax to reference wiki pages.
+- Whenever you mention a wiki page or knowledge topic in the answer, wrap it as [[页面标题]] (wikilink) — plain-text page names are NOT clickable; wikilinks are the only way the learner can open the page from chat.
 - Cite with the ``[n]`` numbers from ``read_page``, e.g. [1], [2].
 - Use LaTeX for mathematical formulas: inline $...$ and block $$...$$. Never write bare LaTeX commands like \sigma without $...$ delimiters.
 - At the VERY END of your response, add a hidden comment listing which page numbers you used:
@@ -161,6 +167,7 @@ async def run_react_agent(
     scope=None,
     model: str | None = None,
     max_steps: int = 8,
+    practice_cards: list | None = None,
     on_status=None,
     abort_signal: asyncio.Event | None = None,
 ) -> ReactResult:
@@ -172,11 +179,13 @@ async def run_react_agent(
     """
     budget = budget or {}
     evidence = EvidenceRegistry(page_budget=int(budget.get("page_budget", 20_000)))
+    practice_cards = practice_cards if practice_cards is not None else []
     server = build_wiki_tool_server(
         project_id=project_id,
         user_id=user_id,
         evidence=evidence,
         max_page_size=int(budget.get("max_page_size", 5_000)),
+        practice_cards=practice_cards,
     )
     system = REACT_SYSTEM_PROMPT.format(
         mode_instruction=mode_instruction or "Answer directly and concisely, with enough explanation to be useful.",

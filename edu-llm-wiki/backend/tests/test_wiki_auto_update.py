@@ -12,6 +12,7 @@ from services.wiki_auto_update import (
     record_review,
     rebuild_projection,
     replay_failed_events,
+    strip_projection_blocks_from_knowledge_pages,
 )
 from services.ontology_v2 import TEACHING_CLASS_GROUPS
 from storage.wiki_store import ensure_dirs, write_wiki_page
@@ -45,7 +46,9 @@ def test_dialogue_projection_is_idempotent_and_preserves_page_body(monkeypatch, 
 
     page = (Path(tmp_path) / "p" / "wiki" / "concepts" / "heat.md").read_text(encoding="utf-8")
     assert "这是人工维护的正文。" in page
-    assert page.count("对话涉及") == 1
+    # Knowledge pages stay clean: dialogue projections go to teaching pages.
+    assert "对话涉及" not in page
+    assert "学习语义快照" not in page
     assert (Path(tmp_path) / "p" / "wiki" / "learning" / "activity").exists()
     # Learner pages are pseudonymous; a caller-provided user id must never be
     # exposed in a shared Wiki filename.
@@ -88,12 +91,17 @@ def test_attempt_projection_writes_related_page_and_is_bounded(monkeypatch, tmp_
     assert result["status"] == "updated"
     assert duplicate["status"] == "duplicate"
     page = (Path(tmp_path) / "p" / "wiki" / "concepts" / "heat.md").read_text(encoding="utf-8")
-    assert "练习反馈" in page
-    assert page.count("练习反馈") == 1
+    # Knowledge pages stay clean; attempts project onto teaching pages only.
+    assert "练习反馈" not in page
+    assert "学习洞察" not in page
+    teaching_events = (
+        Path(tmp_path) / "p" / "wiki" / "teaching" / "learning-events" / "ExerciseAttempt.md"
+    ).read_text(encoding="utf-8")
+    assert teaching_events.count("练习反馈") == 1
 
 
 def test_learning_insight_aggregates_safe_state_and_counts(monkeypatch, tmp_path):
-    """Knowledge and TeachingObject pages expose useful state, not just logs."""
+    """TeachingObject pages expose aggregate state; knowledge pages stay clean."""
     monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
     close_all()
     ensure_dirs(project_id="p")
@@ -115,15 +123,24 @@ def test_learning_insight_aggregates_safe_state_and_counts(monkeypatch, tmp_path
 
     wiki = Path(tmp_path) / "p" / "wiki"
     page = (wiki / "concepts" / "heat.md").read_text(encoding="utf-8")
-    assert "## 学习洞察" in page
-    assert "关联事件: 2 次" in page
-    assert "最近知识点: `kc-heat`" in page
-    assert "最近得分: 0.750" in page
-    assert "BKT 掌握度: 0.640" in page
-    assert "SM-2 下次复习:" in page
+    # The knowledge page stays pure authored content.
+    assert "教师维护的正文。" in page
+    for absent in ("## 学习洞察", "## 学习语义快照", "## 自动学习摘要"):
+        assert absent not in page
     assert "private question" not in page
     assert "private answer" not in page
     assert "private-user@example.com" not in page
+
+    # The same aggregates now live on the teaching event pages.
+    exercise_attempt = (
+        wiki / "teaching" / "learning-events" / "ExerciseAttempt.md"
+    ).read_text(encoding="utf-8")
+    assert "## 学习洞察" in exercise_attempt
+    assert "关联事件: 1 次" in exercise_attempt
+    assert "最近知识点: `kc-heat`" in exercise_attempt
+    assert "最近得分: 0.750" in exercise_attempt
+    assert "BKT 掌握度: 0.640" in exercise_attempt
+    assert "SM-2 下次复习:" in exercise_attempt
 
     assessment = (
         wiki / "teaching" / "assessment" / "AssessmentResult.md"
@@ -289,9 +306,10 @@ def test_learning_event_projection_is_idempotent_and_updates_teaching_pages(monk
 
     wiki = Path(tmp_path) / "p" / "wiki"
     page = (wiki / "concepts" / "heat.md").read_text(encoding="utf-8")
-    assert "学习活动（自动汇总）" in page
-    assert page.count("学习活动（自动汇总）") == 1
-    assert (wiki / "teaching" / "learning-events" / "LearningEvent.md").exists()
+    # Knowledge pages stay clean; the projection lands on teaching pages.
+    assert "学习活动（自动汇总）" not in page
+    teaching_event = (wiki / "teaching" / "learning-events" / "LearningEvent.md").read_text(encoding="utf-8")
+    assert teaching_event.count("学习活动（自动汇总）") == 1
     assert (wiki / "teaching" / "learning-support" / "LearningActivity.md").exists()
     with connect("p") as conn:
         row = conn.execute(
@@ -345,20 +363,24 @@ def test_rebuild_projection_replays_ledger_without_overwriting_authored_body(mon
     # Simulate a lost generated projection while preserving teacher content.
     activity.unlink()
     learner.unlink()
-    page.write_text(page.read_text(encoding="utf-8").replace("<!-- wiki-auto:learning-summary:start -->", "<!-- removed -->"), encoding="utf-8")
+    teaching = wiki / "teaching" / "learning-events" / "DialogueRecord.md"
     rebuilt = rebuild_projection("p")
     assert rebuilt == {"status": "rebuilt", "events": 1, "skipped": 0}
     assert list((wiki / "learning" / "activity").glob("*.md"))
     assert list((wiki / "learning" / "learners").glob("u_*.md"))
     restored = page.read_text(encoding="utf-8")
     assert "教师维护的正文。" in restored
-    assert "对话涉及" in restored
-    assert "## 学习洞察" in restored
-    assert "关联事件: 1 次" in restored
+    # The knowledge page rebuilds to pure authored content: no event blocks.
+    for absent in ("对话涉及", "## 学习洞察", "学习语义快照", "自动学习摘要"):
+        assert absent not in restored
+    teaching_restored = teaching.read_text(encoding="utf-8")
+    assert "对话涉及" in teaching_restored
+    assert "## 学习洞察" in teaching_restored
+    assert "关联事件: 1 次" in teaching_restored
     assert "private response" not in "\n".join(p.read_text(encoding="utf-8") for p in wiki.rglob("*.md"))
     # A second rebuild is stable and does not duplicate event markers.
     rebuild_projection("p")
-    assert restored.count("对话涉及") == page.read_text(encoding="utf-8").count("对话涉及")
+    assert teaching_restored.count("对话涉及") == teaching.read_text(encoding="utf-8").count("对话涉及")
 
 
 def test_replay_failed_events_uses_redacted_payload_and_closes_ledger(monkeypatch, tmp_path):
@@ -394,3 +416,42 @@ def test_replay_failed_events_uses_redacted_payload_and_closes_ledger(monkeypatc
     all_text = "\n".join(p.read_text(encoding="utf-8") for p in wiki.rglob("*.md"))
     assert "sensitive query" not in all_text
     assert "sensitive answer" not in all_text
+
+
+def test_strip_projection_blocks_from_knowledge_pages(monkeypatch, tmp_path):
+    """Legacy event blocks are retired from knowledge pages, teaching untouched."""
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+    close_all()
+    ensure_dirs(project_id="p")
+    legacy = (
+        "# 原子\n\n教师正文。\n\n"
+        "<!-- wiki-auto:learning-summary:start -->\n## 自动学习摘要\n- 旧事件行\n"
+        "<!-- wiki-auto:learning-summary:end -->\n\n"
+        "<!-- wiki-auto:semantic-snapshot:start -->\n## 学习语义快照\n- 最近事件: 对话\n"
+        "<!-- wiki-auto:semantic-snapshot:end -->\n\n"
+        "<!-- wiki-auto:learning-insight:start -->\n## 学习洞察\n- 关联事件: 1 次\n"
+        "<!-- wiki-auto:learning-insight:end -->\n"
+    )
+    write_wiki_page("concepts/atom.md", "原子", "concept", legacy, project_id="p")
+    teaching = (
+        Path(tmp_path) / "p" / "wiki" / "teaching" / "learning-events" / "LearningEvent.md"
+    )
+    teaching.write_text(
+        teaching.read_text(encoding="utf-8")
+        + "\n<!-- wiki-auto:learning-insight:start -->\n## 学习洞察\n- 保留\n"
+        "<!-- wiki-auto:learning-insight:end -->\n",
+        encoding="utf-8",
+    )
+
+    cleaned = strip_projection_blocks_from_knowledge_pages("p")
+
+    assert cleaned == 1
+    page = (Path(tmp_path) / "p" / "wiki" / "concepts" / "atom.md").read_text(encoding="utf-8")
+    assert "教师正文" in page
+    for absent in ("自动学习摘要", "学习语义快照", "学习洞察", "wiki-auto:"):
+        assert absent not in page
+    teaching_body = teaching.read_text(encoding="utf-8")
+    assert "## 学习洞察" in teaching_body
+    assert "保留" in teaching_body
+    # Idempotent: a second pass finds nothing left to clean.
+    assert strip_projection_blocks_from_knowledge_pages("p") == 0

@@ -300,8 +300,17 @@ async def create_question(
     kc_id: str | None = None,
     topic: str | None = None,
     difficulty: str = "mixed",
+    question_types: list[str] | None = None,
+    card_style: str = "",
 ) -> dict:
-    """Generate and persist one question, preferring the due review queue."""
+    """Generate and persist one question, preferring the due review queue.
+
+    ``question_types`` narrows generation to the learner's named card type
+    ("出个选择题" → ["multiple_choice"]); None lets the generator mix freely.
+    ``card_style="true_false"`` renders a 判断题 as a multiple-choice card
+    with exactly two options (正确/错误) — the card system has no separate
+    true/false type, so the style is enforced through the generation prompt.
+    """
     review_card: TestQuestion | None = None
     review_card_session: str | None = None
     if mode == "review":
@@ -372,13 +381,22 @@ async def create_question(
         if "\n" in prompt_topic or len(prompt_topic) > 80:
             heading = re.search(r"(?m)^###\s+([^\n]+)", context)
             prompt_topic = heading.group(1).strip() if heading else ""
+        instructions = []
+        if prompt_topic:
+            instructions.append(f"围绕《{prompt_topic}》出题，题目必须主要考查这个主题，不要考查其他知识点。")
+        if card_style == "true_false":
+            instructions.append(
+                "题型为判断题：题干必须是一个完整、可独立判断对错的陈述句，"
+                "options 固定为且仅为两项：[\"A. 正确\", \"B. 错误\"]，"
+                "answer 只能是 A 或 B。严禁出四个选项的选择题。"
+            )
         req = TestCreateRequest(
             question_count=1,
-            question_types=["short_answer", "multiple_choice", "fill_blank"],
+            question_types=question_types or ["short_answer", "multiple_choice", "fill_blank"],
             difficulty=difficulty,
             page_path=page_path,
             node_id=kc_id,
-            natural_prompt=(f"围绕《{prompt_topic}》出题，题目必须主要考查这个主题，不要考查其他知识点。" if prompt_topic else None),
+            natural_prompt=("".join(instructions) or None),
             mode="practice",
         )
         try:
