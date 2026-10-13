@@ -1,7 +1,6 @@
-from collections.abc import AsyncIterator
-
 import asyncio
 import json
+from collections.abc import AsyncIterator
 
 import httpx
 

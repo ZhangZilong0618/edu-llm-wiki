@@ -268,6 +268,10 @@ def test_chat_sse_question_answer_and_due_review_update_wiki(monkeypatch, tmp_pa
             "options": {
                 "agent_mode": "auto",
                 "assessment_context_question_id": question_id,
+                # This follow-up asserts the legacy pipeline's assessment-context
+                # restoration; the default ``react`` mode injects the same
+                # context through the ReAct system prompt instead.
+                "retrieval_mode": "graph",
             },
         },
     )

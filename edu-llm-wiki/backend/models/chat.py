@@ -19,7 +19,9 @@ class ChatScope(BaseModel):
 class ChatOptions(BaseModel):
     citation_required: bool = True
     answer_style: str = "concise"  # concise | detailed | socratic
-    retrieval_mode: Literal["none", "vector", "graph"] = "graph"
+    # ``react`` runs the MCP-tool ReAct agent (the default). ``graph``/``vector``
+    # /``none`` keep the legacy pipeline for ablations and integrations.
+    retrieval_mode: Literal["none", "vector", "graph", "react"] = "react"
     include_learner_state: bool = True
     model: str | None = None
     # ``agent_mode`` is additive to the legacy top-level ``mode`` field. It

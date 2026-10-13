@@ -8,7 +8,9 @@ from routes import chat
 
 def test_chat_options_expose_ablation_controls():
     options = ChatOptions()
-    assert options.retrieval_mode == "graph"
+    # ``react`` is the MCP-tool ReAct agent; graph/vector/none remain the
+    # legacy-pipeline ablation conditions.
+    assert options.retrieval_mode == "react"
     assert options.include_learner_state is True
 
 

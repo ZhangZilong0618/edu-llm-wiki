@@ -19,10 +19,11 @@ from models.chat import (
     PracticeQuestionRequest,
 )
 from services.context_budget import compute_budget
-from services.ingest_engine import _strip_images
 from services.graph_qa import GraphEvidence, collect_graph_evidence
+from services.ingest_engine import _strip_images
 from services.language import language_instruction
 from services.llm_client import chat_complete, stream_chat
+from services.react_agent import ReactAgentError, run_react_agent
 from services.search_engine import _page_body, keyword_search
 from storage.wiki_store import is_private_learner_page_path, list_wiki_pages, read_wiki_page, wiki_path
 
@@ -531,6 +532,97 @@ def _format_learner_profile(project_id: str, user_id: str) -> str:
     )
 
 
+def _learner_profile_for(req: ChatRequest, project_id: str) -> str:
+    """Resolve the learner profile block honouring the ablation switch."""
+    if not req.options.include_learner_state:
+        return "(Learner state disabled for this ablation condition.)"
+    return _format_learner_profile(project_id, req.user_id)
+
+
+def _cited_from_evidence(pages: list[dict], query: str) -> list[dict]:
+    """Turn the ReAct evidence registry into the shared CitedPage shape."""
+    return [
+        {
+            "path": page["path"],
+            "title": page["title"],
+            "snippet": page["snippet"],
+            "anchor": _best_anchor(query, page["content"], page["title"]),
+        }
+        for page in pages
+    ]
+
+
+def _record_exposure_for_pages(project_id: str, user_id: str, pages: list[dict]) -> None:
+    """Record page exposures for the learner state (best-effort)."""
+    try:
+        from services.graph_store import make_node_id, record_exposure
+
+        for page in pages:
+            record_exposure(
+                project_id=project_id,
+                user_id=user_id,
+                node_id=make_node_id(project_id, page["path"]),
+            )
+    except Exception:
+        pass
+
+
+async def _try_react_answer(
+    req: ChatRequest,
+    project_id: str,
+    *,
+    last_user_msg: str,
+    messages: list[dict],
+    assessment_context: dict | None,
+    on_status=None,
+    abort_signal: "asyncio.Event | None" = None,
+) -> tuple[str, list[dict]] | None:
+    """Run the MCP-tool ReAct agent; return (answer, cited) or None to fall back.
+
+    Any agent failure (provider without function calling, outage) resolves to
+    ``None`` so chat degrades to the legacy graph pipeline instead of erroring.
+    """
+    try:
+        result = await run_react_agent(
+            last_user_msg,
+            messages,
+            project_id=project_id,
+            user_id=req.user_id,
+            budget=compute_budget(req.context_budget),
+            mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
+            language_instruction=language_instruction(),
+            learner_profile=_learner_profile_for(req, project_id),
+            assessment_context=_assessment_prompt_context(assessment_context),
+            purpose=_wiki_purpose(project_id),
+            scope=req.scope,
+            model=req.options.model,
+            on_status=on_status,
+            abort_signal=abort_signal,
+        )
+        cited = _cited_from_evidence(result.evidence.pages, last_user_msg)
+        _record_exposure_for_pages(project_id, req.user_id, result.evidence.pages)
+        return result.answer, cited
+    except asyncio.CancelledError:
+        raise
+    except ReactAgentError as exc:
+        print(f"[Chat] ReAct agent unavailable: {exc}")
+        return None
+    except Exception as exc:
+        print(f"[Chat] ReAct agent failed unexpectedly: {exc}")
+        return None
+
+
+def _wiki_purpose(project_id: str) -> str:
+    """Read the wiki purpose block (best-effort, used by the ReAct prompt)."""
+    try:
+        purpose_path = wiki_path(project_id) / "purpose.md"
+        if purpose_path.exists():
+            return _strip_images(purpose_path.read_text(encoding="utf-8"))[:2000]
+    except Exception:
+        pass
+    return "Not defined"
+
+
 async def _run_rag_pipeline(
     query: str,
     budget: dict,
@@ -892,6 +984,43 @@ async def chat(
     # this turn references it. The client can send only a scoped question ID.
     assessment_context = await asyncio.to_thread(_assessment_context, req, project_id)
 
+    # ReAct agent: the model drives retrieval itself through MCP tools and
+    # returns the final answer. Falls back to the pipeline below on failure.
+    react_result = None
+    if req.options.retrieval_mode == "react":
+        react_result = await _try_react_answer(
+            req,
+            project_id,
+            last_user_msg=last_user_msg,
+            messages=messages,
+            assessment_context=assessment_context,
+        )
+
+    if react_result is not None:
+        raw_answer, react_cited = react_result
+        response, actual_cited = _filter_actual_citations(raw_answer, react_cited)
+        try:
+            from services.wiki_auto_update import record_dialogue
+
+            await asyncio.to_thread(
+                record_dialogue,
+                project_id,
+                req.user_id,
+                query=last_user_msg,
+                response=response,
+                conversation_id=req.conversation_id,
+                cited_pages=actual_cited,
+                mode=agent_mode,
+                event_id=f"{req.conversation_id}:{len(req.messages)}",
+            )
+        except Exception:
+            pass
+        return ChatResponse(
+            content=response,
+            cited_pages=[CitedPage(**c) for c in actual_cited],
+            conversation_id=req.conversation_id,
+        )
+
     # Full RAG pipeline
     budget = compute_budget(req.context_budget)
     pages_context, cited, page_list, index, purpose, learner_profile = await _run_rag_pipeline(
@@ -1077,19 +1206,59 @@ async def chat_stream(
         except Exception:
             pass
 
-    pipeline_task = asyncio.create_task(
-        _run_rag_pipeline(
+    # The ReAct agent and the legacy pipeline share one background task plus
+    # one status queue, so the SSE loop stays a single shape. A react failure
+    # inside the task transparently reruns the legacy pipeline.
+    async def pipeline_task_coro() -> tuple[str, str, list[dict], dict]:
+        """Returns ("react", answer, cited, _) or ("legacy", pages_context, _, bundle)."""
+        if req.options.retrieval_mode == "react":
+            try:
+                react = await _try_react_answer(
+                    req,
+                    project_id,
+                    last_user_msg=last_user_msg,
+                    messages=messages,
+                    assessment_context=assessment_context,
+                    on_status=on_status,
+                    abort_signal=abort_event,
+                )
+            except asyncio.CancelledError:
+                raise
+            if react is not None:
+                answer, cited = react
+                return "react", answer, cited, {}
+            await on_status("工具调用不可用，回退到图谱检索管线")
+        (
+            pages_context,
+            cited,
+            page_list,
+            index,
+            purpose,
+            learner_profile,
+        ) = await _run_rag_pipeline(
             _assessment_retrieval_query(last_user_msg, assessment_context),
             budget,
             project_id=project_id,
             user_id=req.user_id,
             scope=req.scope,
-            retrieval_mode=req.options.retrieval_mode,
+            retrieval_mode=(
+                "graph" if req.options.retrieval_mode == "react" else req.options.retrieval_mode
+            ),
             include_learner_state=req.options.include_learner_state,
             on_status=on_status,
             abort_signal=abort_event,
         )
-    )
+        bundle = {
+            "pages_context": pages_context,
+            "page_list": page_list,
+            "index": index,
+            "purpose": purpose,
+            "learner_profile": learner_profile,
+            "cited": cited,
+        }
+        return "legacy", "", [], bundle
+
+    pipeline_task = asyncio.create_task(pipeline_task_coro())
 
     async def _watch_disconnect() -> None:
         try:
@@ -1128,7 +1297,47 @@ async def chat_stream(
             yield "data: [DONE]\n\n"
             return
 
-        pages_context, cited, page_list, index, purpose, learner_profile = pipeline_task.result()
+        kind, react_answer, react_cited, bundle = pipeline_task.result()
+        if kind == "react":
+            cleaned, actual_cited = _filter_actual_citations(react_answer, react_cited)
+            try:
+                yield f"data: {json.dumps({'type': 'sources', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in actual_cited]}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'status', 'stage': 'answer', 'text': '回答已生成'}, ensure_ascii=False)}\n\n"
+                # The whole answer already exists; replay it in chunks so the
+                # client keeps its typing-stream UX without a second model call.
+                for start in range(0, len(cleaned), 64):
+                    yield f"data: {json.dumps({'type': 'content', 'text': cleaned[start:start + 64]}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.03)
+                try:
+                    from services.wiki_auto_update import record_dialogue
+
+                    await asyncio.to_thread(
+                        record_dialogue,
+                        project_id,
+                        req.user_id,
+                        query=last_user_msg,
+                        response=cleaned,
+                        conversation_id=req.conversation_id,
+                        cited_pages=actual_cited,
+                        mode=agent_mode,
+                        event_id=f"{req.conversation_id}:{len(req.messages)}",
+                    )
+                except Exception:
+                    pass
+                yield f"data: {json.dumps({'type': 'replace', 'text': cleaned}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'final_citations', 'pages': [{'path': c['path'], 'title': c['title'], 'snippet': c['snippet'], 'anchor': c.get('anchor')} for c in actual_cited]}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+            finally:
+                abort_event.set()
+                watcher.cancel()
+            return
+
+        pages_context = bundle["pages_context"]
+        cited = bundle["cited"]
+        page_list = bundle["page_list"]
+        index = bundle["index"]
+        purpose = bundle["purpose"]
+        learner_profile = bundle["learner_profile"]
 
         system = SYSTEM_PROMPT.format(
             mode_instruction=_mode_instruction(req.mode, req.options.answer_style),
