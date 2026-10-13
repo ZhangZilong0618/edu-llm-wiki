@@ -5,7 +5,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
@@ -130,12 +130,12 @@ def _report_vector_index_task(task: asyncio.Task) -> None:
 def _ensure_vector_indices():
     """Build vector index for any project that doesn't have one yet."""
 
-    from services.vector_store import index_pages, table_exists
     # Import lazily so startup module loading stays cheap.  Ingest workers use
     # this same process-wide lock when they create the first project table;
     # without sharing it, startup rebuild and first import could both drop and
     # recreate the same LanceDB table concurrently.
     from services.ingest_engine import _VECTOR_SYNC_LOCK
+    from services.vector_store import index_pages, table_exists
     from storage.wiki_store import list_projects, list_wiki_pages, read_wiki_page
 
     try:
@@ -232,3 +232,45 @@ def _migrate_to_projects():
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+# ---------------------------------------------------------------------------
+# Frontend static serving
+#
+# When a built frontend exists (frontend/dist), this single uvicorn process
+# serves the UI and the API on one origin, so the packaged Windows app needs
+# no separate web server. In development the Vite dev server handles the UI
+# and proxies /api here, and this mount simply stays dormant.
+# ---------------------------------------------------------------------------
+from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+def _frontend_dist_available() -> bool:
+    return (_DIST_DIR / "index.html").is_file()
+
+
+if _frontend_dist_available():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_DIST_DIR / "assets"),
+        name="frontend-assets",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        # Never shadow the API: unknown API routes stay 404 instead of
+        # returning the SPA shell.
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = (_DIST_DIR / full_path).resolve()
+        try:
+            candidate.relative_to(_DIST_DIR)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not found") from None
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        # SPA history fallback: every other route renders the app shell.
+        return FileResponse(_DIST_DIR / "index.html")
