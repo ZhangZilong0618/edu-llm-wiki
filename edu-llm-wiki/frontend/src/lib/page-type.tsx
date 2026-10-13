@@ -129,7 +129,6 @@ export const COMMON_RESEARCH_ACTIONS: ResearchAction[] = [
   { id: "explain", label: "深入解释", description: "Explain it more clearly with examples and intuition." },
   { id: "prerequisites", label: "补齐前置", description: "List what you need to learn first to understand the current page." },
   { id: "related", label: "相关知识", description: "Map its relationships with other pages in the wiki." },
-  { id: "practice", label: "生成练习", description: "Generate practice questions around the current page." },
   { id: "completeness", label: "检查完整性", description: "Point out which teaching elements are missing from the current page." },
   { id: "custom", label: "自定义", description: "Deep-dive into the current page using your own prompt." },
 ]

@@ -220,6 +220,66 @@ CREATE TABLE IF NOT EXISTS attempts_raw (
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_user_kc ON attempts_raw(project_id, user_id, kc_id, ts DESC);
 
+-- Server-owned chat practice cards and their idempotent submissions. The
+-- expected answer and KC never come from the browser on answer submission.
+CREATE TABLE IF NOT EXISTS agent_questions (
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    session_id TEXT,
+    kc_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    question_type TEXT NOT NULL DEFAULT 'short_answer',
+    options_json TEXT,
+    answer_json TEXT,
+    explanation TEXT,
+    related_page TEXT,
+    concepts_json TEXT,
+    difficulty TEXT,
+    hints_json TEXT,
+    mode TEXT NOT NULL DEFAULT 'practice',
+    created_at REAL NOT NULL,
+    PRIMARY KEY (project_id, user_id, question_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_questions_session
+    ON agent_questions(project_id, user_id, session_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_attempts (
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    answer_json TEXT,
+    score REAL NOT NULL,
+    max_score REAL NOT NULL,
+    feedback TEXT,
+    result_json TEXT,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (project_id, user_id, attempt_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_attempts_question
+    ON agent_attempts(project_id, user_id, question_id, created_at DESC);
+
+-- Idempotency ledger for the wiki projection.  Conversation and assessment
+-- events can be delivered more than once (SSE reconnects, browser retries),
+-- so the file projection claims an event before touching a markdown page.
+CREATE TABLE IF NOT EXISTS wiki_update_events (
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT,
+    created_at REAL NOT NULL,
+    projection_status TEXT NOT NULL DEFAULT 'complete',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    claimed_at REAL,
+    completed_at REAL,
+    last_error TEXT,
+    PRIMARY KEY (project_id, user_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_update_events_time
+    ON wiki_update_events(project_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS confidence_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id TEXT NOT NULL,
@@ -289,6 +349,10 @@ def connect(project_id: str) -> Iterator[sqlite3.Connection]:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.row_factory = sqlite3.Row
             conn.executescript(_SCHEMA_SQL)
+            # Add columns introduced after the initial chat schema without
+            # requiring users to delete their learning database.
+            if "mode" not in {str(row[1]) for row in conn.execute("PRAGMA table_info(agent_questions)")}:
+                conn.execute("ALTER TABLE agent_questions ADD COLUMN mode TEXT NOT NULL DEFAULT 'practice'")
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('version', ?)",
                 (str(SCHEMA_VERSION),),

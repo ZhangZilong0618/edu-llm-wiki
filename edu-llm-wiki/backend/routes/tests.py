@@ -678,10 +678,21 @@ async def _score_short_answers(session: TestSession, attempts: list[TestAttempt]
             attempt.level = level if level in {"empty", "weak", "partial", "good"} else "partial"
             attempt.feedback = str(result.get("feedback") or "已完成 AI 批改。")
         else:
-            user_text = _plain(str(attempt.user_answer or ""))
-            ref_terms = [term for term in re.split(r"\s+", _plain(str(q.answer))) if len(term) >= 2][:20]
-            hits = sum(1 for term in ref_terms if term in user_text)
-            score = min(1, hits / max(4, len(ref_terms[:8])))
+            raw_user_answer = attempt.user_answer
+            if isinstance(raw_user_answer, list):
+                raw_user_answer = "；".join(str(value) for value in raw_user_answer)
+            user_text = _plain(str(raw_user_answer or ""))
+            reference_text = _plain(str(q.answer))
+            # A Chinese reference answer often contains no whitespace. Check
+            # exact/complete containment first, then fall back to mixed
+            # English-word and contiguous-Chinese-segment matching.
+            if _is_same_answer(user_text, reference_text):
+                score = 1.0
+            else:
+                ref_terms = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", reference_text)[:20]
+                scored_terms = ref_terms[:8]
+                hits = sum(1 for term in scored_terms if term in user_text)
+                score = min(1, hits / max(4, len(scored_terms)))
             attempt.score = round(score, 2)
             attempt.level = "good" if score >= 0.8 else "partial" if score > 0 else "weak"
             attempt.feedback = "已按参考答案关键词进行本地估分；AI 批改不可用时会使用该兜底。"
@@ -718,7 +729,11 @@ async def list_tests(project_id: str = Query("default")) -> list[TestSummary]:
 
 
 @router.post("", response_model=TestSession)
-async def create_test(req: TestCreateRequest, project_id: str = Query("default")) -> TestSession:
+async def create_test(
+    req: TestCreateRequest,
+    project_id: str = Query("default"),
+    user_id: str = Query("default"),
+) -> TestSession:
     _apply_natural_prompt(req)
     extracted, context = _candidate_context(req, project_id)
     coverage = _wiki_coverage(project_id)
@@ -749,6 +764,24 @@ async def create_test(req: TestCreateRequest, project_id: str = Query("default")
         created_at=_now(),
     )
     _write_session(session, project_id)
+    # Keep the unified learning Wiki projection in sync for callers that still
+    # use the legacy test endpoint. The JSON test session remains authoritative;
+    # a projection failure must not make question generation fail.
+    try:
+        from services.wiki_auto_update import record_question as project_question
+
+        for question in questions:
+            project_question(
+                project_id,
+                user_id,
+                question_id=question.id,
+                kc_id=req.node_id,
+                related_page=question.related_page,
+                mode=req.mode,
+                event_id=f"{session.id}:{question.id}",
+            )
+    except Exception:
+        pass
     return session
 
 
@@ -857,7 +890,8 @@ async def submit_test(
         )
         if not related:
             continue
-        await asyncio.to_thread(
+        attempt_key = f"{session.id}:{question.id}"
+        learning_update = await asyncio.to_thread(
             record_v3_attempt,
             project_id=project_id,
             user_id=user_id,
@@ -867,8 +901,51 @@ async def submit_test(
             response=_answer_text(attempt.user_answer),
             expected=_answer_text(attempt.correct_answer),
             confidence=attempt.confidence,
+            # Preserve the question id in attempts_raw for BKT refitting and
+            # historical API consumers. The Wiki assessment projection below
+            # namespaces it with the session id for replay safety.
             attempt_id=question.id,
+            idempotency_key=attempt_key,
+            idempotency_data={
+                "question_id": question.id,
+                "answer": attempt.user_answer,
+                "feedback": attempt.feedback,
+            },
         )
+        try:
+            projection_kwargs = {
+                "project_id": project_id,
+                "user_id": user_id,
+                "kc_id": _resolve_kc_id(project_id, related, nodes),
+                "related_page": question.related_page,
+                "evaluation": {
+                    "score": attempt.score,
+                    "max_score": attempt.max_score or 1.0,
+                    "feedback": attempt.feedback,
+                    "correct": (attempt.score or 0) >= 0.7 * (attempt.max_score or 1.0),
+                },
+                "learning_update": learning_update,
+            }
+            if session.mode == "review":
+                from services.wiki_auto_update import record_review as project_review
+
+                await asyncio.to_thread(
+                    project_review,
+                    review_id=attempt_key,
+                    **projection_kwargs,
+                )
+            else:
+                from services.wiki_auto_update import record_attempt as project_attempt
+
+                await asyncio.to_thread(
+                    project_attempt,
+                    attempt_id=attempt_key,
+                    question_id=question.id,
+                    mode=session.mode,
+                    **projection_kwargs,
+                )
+        except Exception:
+            pass
 
     # Opportunistically refit BKT parameters so the LearningPanel's
     # "已掌握" count updates without requiring a manual "拟合并" click.

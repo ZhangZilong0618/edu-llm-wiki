@@ -20,6 +20,7 @@ isA/partOf/derivesFrom)的环经可达性检测打 cyclic 标记,不丢弃,
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,11 @@ from config import settings
 from services.extraction import load_llm_json
 from services.llm_client import chat_complete
 from services.ontology_v2 import RELATION_SPECS
+
+# Relation extraction is enrichment only.  It must not hold an import open
+# when the configured model is unavailable; the deterministic graph rebuild
+# can continue with zero candidate relations.
+LLM_RELATION_TIMEOUT_SECONDS = 15.0
 
 #: 类名 -> 中文(RELATION_SPECS 的 domain/range 用类名)
 _CLASS_ZH = {"Concept": "概念", "Fact": "事实", "Formula": "公式", "Principle": "原理"}
@@ -117,12 +123,20 @@ async def extract_relations(atoms: list[dict], *, source_title: str) -> list[dic
         atom_count=len(atoms),
         atoms_table=render_atoms_table(atoms),
     )
-    raw = await chat_complete(
-        system_prompt="You are an expert educational knowledge-graph builder. Output ONLY valid JSON.",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.15,
-        max_tokens=12_000,
-    )
+    try:
+        raw = await asyncio.wait_for(
+            chat_complete(
+                system_prompt="You are an expert educational knowledge-graph builder. Output ONLY valid JSON.",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.15,
+                max_tokens=12_000,
+            ),
+            timeout=LLM_RELATION_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        return []
+    except Exception:
+        return []
     try:
         result = await load_llm_json(raw, expected="object")
     except Exception:

@@ -105,18 +105,18 @@ export function BodyShell({
           {verified.length > 0 && (
             <ul className="space-y-1 text-[var(--muted-foreground)]">
               {verified.slice(0, 6).map((r, i) => (
-                <li key={`v-${i}`} className="flex gap-2">
+                <li key={`v-${i}`} className="flex min-w-0 flex-col items-start gap-1 sm:flex-row sm:gap-2">
                   <span className="shrink-0 font-mono text-[10px] text-green-700">
                     ✓
                   </span>
-                  <span className="shrink-0">
+                  <span className="min-w-0 max-w-full break-words sm:max-w-[45%] [overflow-wrap:anywhere]">
                     {basename(r.file)} · p. {r.page}
                   </span>
-                  <span className="truncate italic">「{r.quote}」</span>
+                  <span className="min-w-0 flex-1 whitespace-pre-wrap break-words italic [overflow-wrap:anywhere]">「{r.quote}」</span>
                 </li>
               ))}
               {verified.length > 6 && (
-                <li className="text-[10px] text-[var(--muted-foreground)]">
+                <li className="break-words text-[10px] text-[var(--muted-foreground)] [overflow-wrap:anywhere]">
                   {verified.length - 6} more verified citations…
                 </li>
               )}
@@ -129,19 +129,19 @@ export function BodyShell({
                 onClick={() => setShowUnverified((v) => !v)}
                 className="text-[10px] text-amber-700 underline hover:text-amber-800"
               >
-                {showUnverified ? "Collapse" : "Expand"}UnverifiedCitation ({unverified.length})
+                {showUnverified ? "Collapse" : "Expand"} Unverified Citation ({unverified.length})
               </button>
               {showUnverified && (
                 <ul className="mt-1.5 space-y-1 text-[var(--muted-foreground)]">
                   {unverified.map((r, i) => (
-                    <li key={`u-${i}`} className="flex gap-2">
+                    <li key={`u-${i}`} className="flex min-w-0 flex-col items-start gap-1 sm:flex-row sm:gap-2">
                       <span className="shrink-0 font-mono text-[10px] text-amber-700">
                         ?
                       </span>
-                      <span className="shrink-0">
+                      <span className="min-w-0 max-w-full break-words sm:max-w-[45%] [overflow-wrap:anywhere]">
                         {basename(r.file)} · p. {r.page}
                       </span>
-                      <span className="truncate italic">「{r.quote}」</span>
+                      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words italic [overflow-wrap:anywhere]">「{r.quote}」</span>
                     </li>
                   ))}
                 </ul>
@@ -153,7 +153,7 @@ export function BodyShell({
 
       {page.sources.length > 0 && (
         <div className="mt-2 text-[10px] text-[var(--muted-foreground)]">
-          Source file: {page.sources.map((s) => basename(s)).join(" · ")}
+          <span className="break-words [overflow-wrap:anywhere]">Source file: {page.sources.map((s) => basename(s)).join(" · ")}</span>
         </div>
       )}
     </div>

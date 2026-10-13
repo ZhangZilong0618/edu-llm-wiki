@@ -5,14 +5,16 @@
     ├── KnowledgeUnit 知识单元 —— 学什么
     │     Concept 概念 · Fact 事实 · Formula 公式 · Principle 原理
     └── TeachingObject 教学应用对象 —— 谁在学/学得怎样/如何测量/接下来学什么
-          ├── 学习者画像与状态  Learner · LearnerProfile · ProfileAssertion
-          │                     LearningEvent(DialogueRecord/ExerciseAttempt)
-          │                     LearningState · MasteryEvidence
-          ├── 习题与评价        Exercise(Option/Target/Rubric) · AssessmentResult
-          │                     MasteryUpdateRule · CoverageSnapshot(Record)
-          ├── 学习路径规划      LearningPath(Step) · PathAdjustmentRecord
-          └── 共用对象          LearningObjective · LearningResource
-                                LearningActivity · CognitiveLevel(6 个体)
+          ├── LearnerIdentity    Learner · LearnerProfile · ProfileAssertion
+          ├── MasteryTracking    LearningState · MasteryEvidence
+          ├── LearningEvents    LearningEvent · DialogueRecord · ExerciseAttempt
+          ├── AssessmentObjects Exercise · Option · Target · Rubric · Result · Rule
+          ├── LearningPlanning  CoverageSnapshot/Record · LearningPath/Step
+          │                     PathAdjustmentRecord · LearningObjective
+          └── LearningSupport   LearningResource · LearningActivity · CognitiveLevel
+
+TeachingObject 的二级分类分组共 6 类、业务类共 23 个；分组表
+``TEACHING_CLASS_GROUPS`` 是 OWL 层级、Wiki 目录和事件路由的共同事实源。
 
     对象属性:知识层 14(三层关系体系)+ 逆属性 hasPrerequisite
             + 教学层 26,共 41。
@@ -166,7 +168,10 @@ CLASS_LABELS: dict[str, tuple[str, str]] = {
 
 
 # =========================================================================
-# 教学应用对象层:24 个类
+# 教学应用对象层:分组类 + 业务类。
+#
+# 分组类不是额外业务实体，而是为 Wiki 目录、检索过滤和事件路由提供
+# 稳定的分类锚点。业务类仍保持原语义，分组类只承载 subClassOf 层级。
 # =========================================================================
 
 TEACHING_CLASS_LABELS: dict[str, tuple[str, str]] = {
@@ -325,6 +330,132 @@ TEACHING_CLASS_LABELS: dict[str, tuple[str, str]] = {
         "可能识别某概念却不能用于分析——掌握按层级分开维护正是为此。",
     ),
 }
+
+# TeachingObject 的二级分类。顺序同时是 Wiki 目录的默认顺序；不要在
+# 消费者中复制这张表，否则新增教学对象时很容易漏掉目录和路由。
+TEACHING_CLASS_GROUPS: dict[str, dict[str, object]] = {
+    "LearnerIdentity": {
+        "zh": "学习者身份与画像",
+        "folder": "learner-identity",
+        "classes": ("Learner", "LearnerProfile", "ProfileAssertion"),
+    },
+    "MasteryTracking": {
+        "zh": "掌握状态与证据",
+        "folder": "mastery-tracking",
+        "classes": ("LearningState", "MasteryEvidence"),
+    },
+    "LearningEvents": {
+        "zh": "学习事件",
+        "folder": "learning-events",
+        "classes": ("LearningEvent", "DialogueRecord", "ExerciseAttempt"),
+    },
+    "AssessmentObjects": {
+        "zh": "习题与评价",
+        "folder": "assessment",
+        "classes": (
+            "Exercise", "ExerciseOption", "ExerciseTarget", "ScoringRubric",
+            "AssessmentResult", "MasteryUpdateRule",
+        ),
+    },
+    "LearningPlanning": {
+        "zh": "覆盖与学习路径",
+        "folder": "learning-planning",
+        "classes": (
+            "KnowledgeCoverageSnapshot", "KnowledgeCoverageRecord", "LearningPath",
+            "LearningPathStep", "PathAdjustmentRecord", "LearningObjective",
+        ),
+    },
+    "LearningSupport": {
+        "zh": "资源、活动与认知",
+        "folder": "learning-support",
+        "classes": ("LearningResource", "LearningActivity", "CognitiveLevel"),
+    },
+}
+
+for _group_name, _group in TEACHING_CLASS_GROUPS.items():
+    TEACHING_CLASS_LABELS[_group_name] = (
+        str(_group["zh"]),
+        f"TeachingObject 的二级分类，供 Wiki 目录、检索和事件路由使用。"
+        f"包含：{'、'.join(_group['classes'])}。",
+    )
+
+
+def validate_teaching_taxonomy(onto=None) -> None:
+    """Ensure the taxonomy and generated OWL hierarchy stay in sync.
+
+    The mapping is the source of truth for Wiki directories and event
+    routing, but that alone cannot catch a class added to the mapping and
+    forgotten in :func:`build_ontology` (or attached to another group).  When
+    an ontology is supplied, validate both sides of that contract.
+    """
+    group_names = set(TEACHING_CLASS_GROUPS)
+    expected = set(TEACHING_CLASS_LABELS) - {"TeachingObject"} - group_names
+    assigned = [
+        class_name
+        for group in TEACHING_CLASS_GROUPS.values()
+        for class_name in group["classes"]
+    ]
+    duplicate = sorted({name for name in assigned if assigned.count(name) > 1})
+    unknown = sorted(set(assigned) - expected)
+    missing = sorted(expected - set(assigned))
+    if duplicate or unknown or missing:
+        raise ValueError(
+            "Invalid TeachingObject taxonomy: "
+            f"duplicate={duplicate}, unknown={unknown}, missing={missing}"
+        )
+
+    if onto is None:
+        return
+
+    expected_classes = set(assigned) | group_names | {"TeachingObject"}
+    ontology_classes = {
+        cls.name for cls in onto.classes() if getattr(cls, "name", None)
+    }
+    absent = sorted(expected_classes - ontology_classes)
+    if absent:
+        raise ValueError(
+            "TeachingObject taxonomy references classes absent from OWL: "
+            f"{absent}"
+        )
+
+    def ancestors(name: str) -> set[str]:
+        cls = getattr(onto, name, None)
+        if cls is None:
+            return set()
+        return {
+            ancestor.name
+            for ancestor in cls.ancestors()
+            if getattr(ancestor, "name", None)
+        }
+
+    bad_groups = [
+        f"{group_name} (not below TeachingObject)"
+        for group_name in group_names
+        if "TeachingObject" not in ancestors(group_name)
+    ]
+    if bad_groups:
+        raise ValueError(f"Invalid TeachingObject group hierarchy: {bad_groups}")
+
+    group_for_class = {
+        class_name: group_name
+        for group_name, group in TEACHING_CLASS_GROUPS.items()
+        for class_name in group["classes"]
+    }
+    hierarchy_errors: list[str] = []
+    for class_name, expected_group in group_for_class.items():
+        actual_groups = sorted(ancestors(class_name) & group_names)
+        if actual_groups != [expected_group]:
+            hierarchy_errors.append(
+                f"{class_name}: expected {expected_group}, got {actual_groups or 'none'}"
+            )
+    if hierarchy_errors:
+        raise ValueError(
+            "TeachingObject taxonomy does not match OWL inheritance: "
+            f"{hierarchy_errors}"
+        )
+
+
+validate_teaching_taxonomy()
 
 #: 认知层级个体:(IRI 短名, 中文标签)
 COGNITIVE_LEVELS: tuple[tuple[str, str], ...] = (
@@ -840,6 +971,9 @@ def build_ontology(*, world: World | None = None):
     """
     onto = (world or World()).get_ontology(BASE_IRI)
     if list(onto.classes()):  # 已构建(classes() 是生成器,不能直接作真值)
+        # Existing worlds may contain an older schema.  Validate it before
+        # returning so stale TBoxes cannot produce partial Wiki directories.
+        validate_teaching_taxonomy(onto)
         return onto
 
     # ---- 类:知识单元层 ----
@@ -864,16 +998,35 @@ def build_ontology(*, world: World | None = None):
         class TeachingObject(Thing):
             pass
 
-        class Learner(TeachingObject):
+        # 二级分类锚点只表达目录/语义分组，不改变业务对象的含义。
+        class LearnerIdentity(TeachingObject):
             pass
 
-        class LearnerProfile(TeachingObject):
+        class MasteryTracking(TeachingObject):
             pass
 
-        class ProfileAssertion(TeachingObject):
+        class LearningEvents(TeachingObject):
             pass
 
-        class LearningEvent(TeachingObject):
+        class AssessmentObjects(TeachingObject):
+            pass
+
+        class LearningPlanning(TeachingObject):
+            pass
+
+        class LearningSupport(TeachingObject):
+            pass
+
+        class Learner(LearnerIdentity):
+            pass
+
+        class LearnerProfile(LearnerIdentity):
+            pass
+
+        class ProfileAssertion(LearnerIdentity):
+            pass
+
+        class LearningEvent(LearningEvents):
             pass
 
         class DialogueRecord(LearningEvent):
@@ -882,55 +1035,55 @@ def build_ontology(*, world: World | None = None):
         class ExerciseAttempt(LearningEvent):
             pass
 
-        class LearningState(TeachingObject):
+        class LearningState(MasteryTracking):
             pass
 
-        class MasteryEvidence(TeachingObject):
+        class MasteryEvidence(MasteryTracking):
             pass
 
-        class Exercise(TeachingObject):
+        class Exercise(AssessmentObjects):
             pass
 
-        class ExerciseOption(TeachingObject):
+        class ExerciseOption(AssessmentObjects):
             pass
 
-        class ExerciseTarget(TeachingObject):
+        class ExerciseTarget(AssessmentObjects):
             pass
 
-        class ScoringRubric(TeachingObject):
+        class ScoringRubric(AssessmentObjects):
             pass
 
-        class AssessmentResult(TeachingObject):
+        class AssessmentResult(AssessmentObjects):
             pass
 
-        class MasteryUpdateRule(TeachingObject):
+        class MasteryUpdateRule(AssessmentObjects):
             pass
 
-        class KnowledgeCoverageSnapshot(TeachingObject):
+        class KnowledgeCoverageSnapshot(LearningPlanning):
             pass
 
-        class KnowledgeCoverageRecord(TeachingObject):
+        class KnowledgeCoverageRecord(LearningPlanning):
             pass
 
-        class LearningPath(TeachingObject):
+        class LearningPath(LearningPlanning):
             pass
 
-        class LearningPathStep(TeachingObject):
+        class LearningPathStep(LearningPlanning):
             pass
 
-        class PathAdjustmentRecord(TeachingObject):
+        class PathAdjustmentRecord(LearningPlanning):
             pass
 
-        class LearningObjective(TeachingObject):
+        class LearningObjective(LearningPlanning):
             pass
 
-        class LearningResource(TeachingObject):
+        class LearningResource(LearningSupport):
             pass
 
-        class LearningActivity(TeachingObject):
+        class LearningActivity(LearningSupport):
             pass
 
-        class CognitiveLevel(TeachingObject):
+        class CognitiveLevel(LearningSupport):
             pass
 
         class zhLabel(AnnotationProperty):
@@ -1044,6 +1197,11 @@ def build_ontology(*, world: World | None = None):
         root = getattr(onto, root_name)
         if Thing in root.is_a:
             root.is_a.remove(Thing)
+
+    # Verify the generated hierarchy itself, not just the Python mapping.
+    # This keeps Wiki, event routing, the ontology API, and OWL inheritance in
+    # lockstep when a new TeachingObject class is introduced.
+    validate_teaching_taxonomy(onto)
 
     return onto
 

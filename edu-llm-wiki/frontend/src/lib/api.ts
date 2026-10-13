@@ -280,6 +280,26 @@ export const api = {
       }
     }
   },
+  /** Request a server-owned practice/review question. The backend keeps the
+   * expected answer and knowledge-component mapping; the browser receives
+   * only the prompt metadata needed to render the card. */
+  getPracticeQuestion: (input: PracticeQuestionRequest, userId = "default") =>
+    request<PracticeQuestionResponse>(`${BASE}/chat/practice/question?${p()}&user_id=${encodeURIComponent(userId)}`, {
+      method: "POST",
+      headers: adminTokenHeader(),
+      body: JSON.stringify(input),
+    }),
+  /** Submit one practice answer. The server grades it and updates BKT/SM-2. */
+  submitPracticeAnswer: (
+    sessionId: string,
+    input: PracticeAnswerRequest,
+    userId = "default",
+  ) =>
+    request<PracticeEvaluation>(`${BASE}/chat/practice/${encodeURIComponent(sessionId)}/answer?${p()}&user_id=${encodeURIComponent(userId)}`, {
+      method: "POST",
+      headers: adminTokenHeader(),
+      body: JSON.stringify(input),
+    }),
   recognizeChatImage: async (file: File) => {
     const form = new FormData()
     form.append("file", file)
@@ -635,6 +655,64 @@ export interface GraphEventEnvelope {
   project_id: string
   payload: Record<string, unknown>
   created_at: number
+}
+
+export type AgentMode = "ask" | "practice" | "review"
+
+export interface PracticeQuestion {
+  id: string
+  question_id?: string
+  kc_id?: string | null
+  prompt: string
+  type?: "multiple_choice" | "fill_blank" | "short_answer" | string
+  options?: string[]
+  hints?: string[]
+  related_page?: string | null
+  difficulty?: string | null
+  session_id?: string | null
+}
+
+export interface PracticeQuestionRequest {
+  session_id?: string | null
+  mode: "practice" | "review"
+  page_path?: string | null
+  kc_id?: string | null
+  difficulty?: string
+}
+
+export interface PracticeQuestionResponse {
+  question: PracticeQuestion | null
+  session_id?: string | null
+  status?: "ready" | "empty" | string
+  message?: string
+  due_count?: number
+}
+
+export interface PracticeAnswerRequest {
+  question_id: string
+  answer: string | string[]
+  confidence: number
+  hint_ladder?: number
+  attempt_id?: string
+}
+
+export interface PracticeEvaluation {
+  question_id?: string
+  score: number
+  max_score?: number
+  correct?: boolean
+  feedback?: string
+  correct_answer?: string | string[] | null
+  explanation?: string
+  quality?: number
+  learning_update?: {
+    bkt?: { p_known?: number; p_t?: number; p_g?: number; p_s?: number }
+    sr?: { due_at?: number; interval_seconds?: number; reps?: number; ef?: number }
+    tags?: string[]
+  }
+  bkt?: { p_known?: number; p_t?: number; p_g?: number; p_s?: number }
+  sr?: { due_at?: number; interval_seconds?: number; reps?: number; ef?: number }
+  tags?: string[]
 }
 
 

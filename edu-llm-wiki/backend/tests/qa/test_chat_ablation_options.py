@@ -85,6 +85,13 @@ def test_vector_retrieval_mode_uses_search_without_graph(tmp_path, monkeypatch):
         lambda path, project_id="default": {"title": "A", "content": "A full content"},
     )
     monkeypatch.setattr(chat, "_page_body", lambda path, project_id="default": "A full content")
+    # Vector results are restricted to the public Wiki page allowlist so stale
+    # private learner snapshots cannot re-enter chat through an old index.
+    monkeypatch.setattr(
+        chat,
+        "list_wiki_pages",
+        lambda project_id="default": [{"path": "a.md", "title": "A", "type": "concept"}],
+    )
 
     async def fail_graph(*args, **kwargs):
         raise AssertionError("graph retrieval must not run in the vector condition")

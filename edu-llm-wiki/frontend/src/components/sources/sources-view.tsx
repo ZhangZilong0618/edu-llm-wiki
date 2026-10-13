@@ -817,7 +817,11 @@ function IngestProgressPanel({
         {progress.stages.map((s) => {
           const info = STAGE_LABELS[s.stage]
           const isExpanded = expandedStages.has(s.stage)
-          const hasDetails = s.details && (s.details.concepts?.length || s.details.formulas?.length)
+          const hasDetails = s.details && (
+            s.details.concepts?.length ||
+            s.details.formulas?.length ||
+            s.details.principles?.length
+          )
           const hasPages = s.pages && s.pages.items.length > 0
           const hasLogs = !!s.logs
 
@@ -853,43 +857,43 @@ function IngestProgressPanel({
               </button>
 
               {isExpanded && hasLogs && (
-                <pre className="ml-6 mb-1 max-h-40 overflow-auto rounded bg-slate-950 px-2 py-1.5 text-[10px] leading-relaxed text-slate-100 whitespace-pre-wrap">
+                <pre className="ml-6 mb-1 max-h-40 min-w-0 max-w-[calc(100%_-_1.5rem)] overflow-auto rounded bg-slate-950 px-2 py-1.5 text-[10px] leading-relaxed text-slate-100 whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
                   {s.logs}
                 </pre>
               )}
 
               {isExpanded && hasDetails && s.details && (
-                <div className="ml-6 mb-1 px-2 py-1.5 rounded bg-white/60 text-[11px] space-y-1">
+                <div className="ml-6 mb-1 min-w-0 max-w-[calc(100%_-_1.5rem)] overflow-hidden rounded bg-white/60 px-2 py-1.5 text-[11px] space-y-1">
                   {s.details.concepts && s.details.concepts.length > 0 && (
-                    <div>
+                    <div className="min-w-0 break-words [overflow-wrap:anywhere]">
                       <span className="font-medium text-[var(--foreground)]">Concept: </span>
-                      <span className="text-[var(--muted-foreground)]">{s.details.concepts.join(", ")}</span>
+                      <span className="text-[var(--muted-foreground)] break-words [overflow-wrap:anywhere]">{s.details.concepts.join(", ")}</span>
                     </div>
                   )}
                   {s.details.formulas && s.details.formulas.length > 0 && (
-                    <div>
+                    <div className="min-w-0 break-words [overflow-wrap:anywhere]">
                       <span className="font-medium text-[var(--foreground)]">Formula: </span>
-                      <span className="text-[var(--muted-foreground)]">{s.details.formulas.join(", ")}</span>
+                      <span className="text-[var(--muted-foreground)] break-words [overflow-wrap:anywhere]">{s.details.formulas.join(", ")}</span>
                     </div>
                   )}
                   {s.details.principles && s.details.principles.length > 0 && (
-                    <div>
+                    <div className="min-w-0 break-words [overflow-wrap:anywhere]">
                       <span className="font-medium text-[var(--foreground)]">Principle: </span>
-                      <span className="text-[var(--muted-foreground)]">{s.details.principles.join(", ")}</span>
+                      <span className="text-[var(--muted-foreground)] break-words [overflow-wrap:anywhere]">{s.details.principles.join(", ")}</span>
                     </div>
                   )}
                 </div>
               )}
 
               {isExpanded && hasPages && s.pages && (
-                <div className="ml-6 mb-1 max-h-32 overflow-y-auto rounded bg-white/60 text-[11px]">
+                <div className="ml-6 mb-1 max-h-32 min-w-0 max-w-[calc(100%_-_1.5rem)] overflow-y-auto overflow-x-hidden rounded bg-white/60 text-[11px]">
                   {s.pages.items.map((p, i) => (
-                    <div key={i} className="flex items-center gap-2 px-2 py-0.5 border-b last:border-0">
+                    <div key={i} className="flex min-w-0 items-center gap-2 border-b px-2 py-0.5 last:border-0">
                       <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${
                         p.action === "New" ? "bg-green-400" : p.action === "skip" ? "bg-gray-300" : "bg-blue-400"
                       }`} />
                       <span className="text-[var(--muted-foreground)] w-6 text-right shrink-0">{p.page_type}</span>
-                      <span className="truncate">{p.title}</span>
+                      <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{p.title}</span>
                       <span className="text-[10px] text-[var(--muted-foreground)] shrink-0">{p.action}</span>
                     </div>
                   ))}

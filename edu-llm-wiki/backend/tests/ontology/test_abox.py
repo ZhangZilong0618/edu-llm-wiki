@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import pytest
+from owlready2 import Thing, World
 
 from services.ontology.abox import (
     ABox,
     OntologyViolation,
     get_abox,
 )
+from services.ontology.edu_onto import BASE_IRI
+from services.ontology_v2 import TEACHING_CLASS_GROUPS
 
 
 @pytest.fixture()
@@ -51,6 +54,65 @@ def test_persistence_roundtrip(tmp_path):
     assert box2.relations_of("doc_1")["teaches"] == ["atom_A"]
     assert box2.list_learners() == ["li"]
     box2.close()
+
+
+def test_old_sqlite_is_upgraded_with_teaching_taxonomy(tmp_path):
+    """Opening a pre-taxonomy World adds all v2 directory classes in place."""
+    path = tmp_path / "legacy.sqlite"
+    old_world = World(filename=str(path))
+    old_onto = old_world.get_ontology(BASE_IRI)
+    with old_onto:
+        # A minimal legacy TBox is sufficient to exercise the migration path;
+        # the real v1 classes are retained by the same idempotent operation.
+        class LegacyMarker(Thing):
+            pass
+    old_world.save()
+    old_world.close()
+
+    box = ABox.open("legacy", path=path)
+    assert box.onto.TeachingObject is not None
+    for group_name, metadata in TEACHING_CLASS_GROUPS.items():
+        group = getattr(box.onto, group_name)
+        assert box.onto.TeachingObject in group.ancestors()
+        for class_name in metadata["classes"]:
+            cls = getattr(box.onto, class_name)
+            assert group in cls.ancestors()
+    box.close()
+
+
+def test_open_persists_taxonomy_upgrade_before_cached_world_closes(tmp_path):
+    """Opening a legacy file flushes the TeachingObject schema immediately.
+
+    The API caches ABox worlds for the process lifetime, so relying solely on
+    ``ABox.close`` would leave a migrated hierarchy in memory but absent from
+    ``ontology.sqlite`` after a crash or forced restart.
+    """
+    path = tmp_path / "legacy-persist.sqlite"
+    old_world = World(filename=str(path))
+    old_onto = old_world.get_ontology(BASE_IRI)
+    with old_onto:
+        class LegacyMarker(Thing):
+            pass
+    old_world.save()
+    old_world.close()
+
+    box = ABox.open("legacy-persist", path=path)
+    # Close the underlying world without invoking ABox.close: the assertion
+    # below proves __init__ already flushed the schema migration.
+    box.world.close()
+
+    reopened = World(filename=str(path))
+    try:
+        onto = reopened.get_ontology(BASE_IRI)
+        names = {cls.name for cls in onto.classes()}
+        assert "TeachingObject" in names
+        assert all(
+            class_name in names
+            for metadata in TEACHING_CLASS_GROUPS.values()
+            for class_name in metadata["classes"]
+        )
+    finally:
+        reopened.close()
 
 
 def test_get_abox_caches_handle(tmp_path):

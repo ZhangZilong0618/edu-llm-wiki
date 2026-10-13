@@ -275,6 +275,16 @@ async def search(
     if include_vector and settings.embedding_enabled:
         try:
             vector_results = await _vector_search(query, top_k, project_id=project_id)
+            # Existing LanceDB indexes may predate the learner-snapshot
+            # visibility rule. Never let stale private vectors bypass the
+            # shared public-page listing filter.
+            visible_paths = {
+                page["path"] for page in list_wiki_pages(project_id=project_id)
+            }
+            vector_results = [
+                result for result in vector_results
+                if result.get("path") in visible_paths
+            ]
             vector_hits = len(vector_results)
 
             # Merge: boost existing, add new
@@ -299,6 +309,11 @@ async def search(
         )
     except Exception:
         pass
+
+    # Graph expansion can return nodes from an index that predates current
+    # visibility rules. Keep the public Wiki listing as the final allowlist.
+    visible_paths = {page["path"] for page in list_wiki_pages(project_id=project_id)}
+    results = [result for result in results if result.get("path") in visible_paths]
 
     mode = "hybrid" if vector_hits > 0 else "keyword"
     return {

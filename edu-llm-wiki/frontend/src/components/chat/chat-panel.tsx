@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { api } from "@/lib/api"
+import { api, type PracticeEvaluation, type PracticeQuestion } from "@/lib/api"
 import { useAppStore } from "@/stores/app-store"
-import { Markdown } from "@/components/markdown"
+import { InlineMarkdown, Markdown } from "@/components/markdown"
 import { toast } from "@/components/ui/toast"
 import { useUserStore } from "@/stores/user-store"
-import { Send, Loader2, Plus, Trash2, MessageSquare, MessageCircle, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X, Bot } from "lucide-react"
+import { Send, Loader2, Plus, Trash2, MessageSquare, Square, BookOpen, ImagePlus, User, RefreshCw, Pencil, Copy, Download, Link as LinkIcon, X, Bot, Brain, Lightbulb, CheckCircle2, CircleAlert } from "lucide-react"
 
 interface CitedSource {
   path: string
@@ -20,9 +20,95 @@ interface Message {
   role: "user" | "assistant"
   content: string
   cited?: CitedSource[]
+  practice?: PracticeQuestion
+  practiceMode?: "practice" | "review"
+  evaluation?: PracticeEvaluation
+  practiceAttempt?: { answer: string; id: string }
+  practiceDismissed?: boolean
+  practiceSkipped?: boolean
+  assessmentContextQuestionId?: string
 }
 
 type ScopeType = "whole_wiki" | "current_page" | "selected_source"
+
+function displayOption(option: string): string {
+  // Generated questions often include their own A./B. marker. The card adds
+  // the marker for a stable layout, so remove the duplicate from the text.
+  return option.replace(/^\s*[A-Za-z][.)、:：]\s*/, "").trim()
+}
+
+function isAssessmentFollowup(text: string): boolean {
+  const value = text.trim().toLowerCase()
+  if (!value) return false
+  const compact = value.replace(/[\s\p{P}\p{S}]+/gu, "")
+
+  // Explicit references stay attached even when the learner asks a longer,
+  // specific question. Generic requests such as "explain" are accepted only
+  // as short follow-ups, so a new topic like "Why is SM-2 useful?" does not
+  // inherit the previous question by accident.
+  const explicitReferences = [
+    "这题", "本题", "这道题", "这个题", "刚才的题", "刚才那题", "上一题",
+    "我的答案", "我选的", "这个答案", "参考答案", "为什么选", "为什么对",
+    "为什么错", "哪里错", "哪儿错", "批改", "为什么b正确", "b为什么正确",
+    "b是正确", "this question", "that question", "my answer", "this option",
+  ]
+  if (explicitReferences.some((term) => compact.includes(term.replace(/[\s\p{P}\p{S}]+/gu, "")))) return true
+
+  const shortFollowups = new Set([
+    "详细解释", "详细解释一下", "解释一下", "展开解释", "展开解释一下", "展开说", "展开讲", "讲详细", "再讲讲",
+    "为什么", "为何", "然后呢", "还有呢", "那为什么", "那为什么呢", "为什么呢", "能解释吗",
+    "explain", "why", "elaborate", "more detail", "and then",
+  ])
+  if (shortFollowups.has(value.replace(/[？?。！!，,\s]+$/g, ""))) return true
+  return value.length <= 24 && /^(可以|请|能不能|能否|那|所以)?(再|详细|展开|具体)?(解释|讲|说明)(一下|下|清楚|详细)?(吗|呢)?[？?。！!]*$/.test(value)
+}
+
+function assessmentFollowupQuestionId(messages: Message[], text: string): string | undefined {
+  if (!isAssessmentFollowup(text)) return undefined
+
+  // A marked assistant explanation establishes a multi-turn follow-up chain.
+  // Require every intervening learner turn to remain a question follow-up;
+  // any unrelated question breaks the chain.
+  const lastContextReplyIndex = messages.reduce((last, message, index) =>
+    message.role === "assistant" && message.assessmentContextQuestionId ? index : last, -1)
+  if (lastContextReplyIndex >= 0) {
+    const contextQuestionId = messages[lastContextReplyIndex].assessmentContextQuestionId
+    const laterUserTurns = messages.slice(lastContextReplyIndex + 1).filter((message) => message.role === "user")
+    if (laterUserTurns.every((message) => isAssessmentFollowup(message.content))) return contextQuestionId
+    return undefined
+  }
+
+  // For the first follow-up, the most recent practice card must be completed.
+  // The first learner turn after the card is their submitted answer; later
+  // turns must all refer back to the same assessment.
+  let cardIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "assistant" && messages[index].practice) {
+      cardIndex = index
+      break
+    }
+  }
+  if (cardIndex < 0) return undefined
+  const card = messages[cardIndex]
+  if (!card.evaluation) return undefined
+  const questionId = card.practice?.question_id || card.practice?.id
+  if (!questionId) return undefined
+
+  const laterUserTurns = messages.slice(cardIndex + 1).filter((message) => message.role === "user")
+  if (laterUserTurns.length === 0) return undefined
+  if (laterUserTurns.slice(1).some((message) => !isAssessmentFollowup(message.content))) return undefined
+  return questionId
+}
+
+function isCurrentPendingPractice(messages: Message[], question: PracticeQuestion | null): boolean {
+  if (!question) return false
+  const pending = [...messages].reverse().find((message) =>
+    message.practice && !message.evaluation && !message.practiceDismissed && !message.practiceSkipped)
+  if (!pending?.practice) return false
+  const pendingId = pending.practice.question_id || pending.practice.id
+  const activeId = question.question_id || question.id
+  return Boolean(pendingId && activeId && pendingId === activeId)
+}
 
 let idCounter = Date.now()
 function nextId() { return `${++idCounter}-${Math.random().toString(36).slice(2, 8)}` }
@@ -33,8 +119,11 @@ export function ChatPanel() {
   const convId = useAppStore((s) => s.currentConversationId)
   const setConvId = useAppStore((s) => s.setCurrentConversationId)
   const selectedPage = useAppStore((s) => s.selectedPage)
+  const wikiPageCount = useAppStore((s) => s.wikiPages.length)
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const pendingChatPrompt = useAppStore((s) => s.pendingChatPrompt)
+  const setPendingChatPrompt = useAppStore((s) => s.setPendingChatPrompt)
   const selectedSource = useAppStore((s) => s.selectedSource)
   const importSelectedSource = useAppStore((s) => s.importSelectedSource)
 
@@ -45,15 +134,25 @@ export function ChatPanel() {
   const [stoppedAt, setStoppedAt] = useState<Map<string, number>>(() => new Map())
   const [convTitle, setConvTitle] = useState("")
   const [loadingConversations, setLoadingConversations] = useState(true)
+  const [loadingConversation, setLoadingConversation] = useState(false)
   const [scopeType, setScopeType] = useState<ScopeType>("whole_wiki")
   const [chatStatus, setChatStatus] = useState<string | null>(null)
   const [recognizingImage, setRecognizingImage] = useState(false)
+  const [practiceQuestion, setPracticeQuestion] = useState<PracticeQuestion | null>(null)
+  const [practiceSessionId, setPracticeSessionId] = useState<string | null>(null)
+  const [practiceHintLevel, setPracticeHintLevel] = useState(0)
+  const [practiceConfidence, setPracticeConfidence] = useState<number | null>(null)
+  const [gradingPractice, setGradingPractice] = useState(false)
+  const practiceAttemptRef = useRef<{ answer: string; id: string } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const autoResizeTextarea = useCallback(() => {
     const ta = textareaRef.current
     if (!ta) return
-    ta.style.height = "auto"
+    // Reset to zero before measuring. Using `auto` can retain the previous
+    // max height after a viewport resize, leaving an empty composer almost
+    // 200px tall on narrow screens.
+    ta.style.height = "0px"
     const maxHeight = 8 * 24 // ~8 lines at 1.5 line-height
     ta.style.height = `${Math.min(ta.scrollHeight, maxHeight)}px`
     ta.style.overflowY = ta.scrollHeight > maxHeight ? "auto" : "hidden"
@@ -62,6 +161,7 @@ export function ChatPanel() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const skipLoadRef = useRef(false)
+  const conversationLoadIdRef = useRef(0)
   const convIdRef = useRef(convId)
   const convTitleRef = useRef(convTitle)
 
@@ -92,6 +192,18 @@ export function ChatPanel() {
     source_name: scopeType === "selected_source" ? selectedSourceName : null,
   }
 
+  // A page/material can disappear while the chat stays mounted (switching
+  // projects, closing a source preview, or using the mobile layout). Keep the
+  // selector and the request scope in sync instead of leaving a disabled,
+  // blank option selected while silently falling back to the whole wiki.
+  useEffect(() => {
+    if (scopeType === "current_page" && !selectedPage) {
+      setScopeType("whole_wiki")
+    } else if (scopeType === "selected_source" && !selectedSourceName) {
+      setScopeType("whole_wiki")
+    }
+  }, [scopeType, selectedPage, selectedSourceName])
+
   // Load conversation list on mount / project change
   useEffect(() => {
     setLoadingConversations(true)
@@ -103,6 +215,7 @@ export function ChatPanel() {
 
   // Load conversation when switching
   useEffect(() => {
+    const loadId = ++conversationLoadIdRef.current
     // A convId change triggered by handleSend creating a new conversation
     // must NOT abort the stream that handleSend just started — the
     // skipLoadRef flag marks exactly that case, so bail out before touching
@@ -121,20 +234,51 @@ export function ChatPanel() {
     regenerateNextRef.current = false
     setStreaming(null)
     setChatStatus(null)
+    setPracticeQuestion(null)
+    setPracticeSessionId(null)
+    setPracticeHintLevel(0)
+    setPracticeConfidence(null)
+    practiceAttemptRef.current = null
 
     if (!convId) {
       setMessages([])
       setConvTitle("")
+      setInput("")
+      setLoadingConversation(false)
       return
     }
+    setLoadingConversation(true)
+    setMessages([])
+    setConvTitle("")
+    setInput("")
     api.getConversation(convId).then((c) => {
-      setMessages(c.messages || [])
+      if (loadId !== conversationLoadIdRef.current) return
+      const loadedMessages = (c.messages || []) as Message[]
+      setMessages(loadedMessages)
+      const pendingPractice = [...loadedMessages].reverse().find((message) => message.practice && !message.evaluation && !message.practiceDismissed && !message.practiceSkipped)
+      if (pendingPractice?.practice) {
+        setPracticeQuestion(pendingPractice.practice)
+        setPracticeSessionId(pendingPractice.practice.session_id || null)
+        setPracticeHintLevel(0)
+        setPracticeConfidence(null)
+        practiceAttemptRef.current = pendingPractice.practiceAttempt || null
+        setInput(pendingPractice.practiceAttempt?.answer || "")
+      } else {
+        setInput("")
+        setPracticeQuestion(null)
+        setPracticeSessionId(null)
+        setPracticeHintLevel(0)
+        setPracticeConfidence(null)
+        practiceAttemptRef.current = null
+      }
       setConvTitle(c.title || "")
       wasRefreshedRef.current = true // already in the list (or will be on first save)
       setStoppedMessageIds(new Set())
       setUnreadCount(0)
       lastSeenIndex.current = (c.messages || []).length
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => {
+      if (loadId === conversationLoadIdRef.current) setLoadingConversation(false)
+    })
   }, [convId])
 
   // Auto-scroll: only when the user is already at (or near) the bottom of
@@ -186,6 +330,13 @@ export function ChatPanel() {
               role: m.role,
               content: m.content,
               cited: m.cited,
+              practice: m.practice,
+              practiceMode: m.practiceMode,
+              evaluation: m.evaluation,
+              practiceAttempt: m.practiceAttempt,
+      practiceDismissed: m.practiceDismissed,
+      practiceSkipped: m.practiceSkipped,
+      assessmentContextQuestionId: m.assessmentContextQuestionId,
             })),
           }).catch(() => {})
         }
@@ -198,6 +349,18 @@ export function ChatPanel() {
   useEffect(() => {
     autoResizeTextarea()
   }, [autoResizeTextarea, input.length])
+
+  // The available width changes when the app collapses its side panels on a
+  // small viewport. Re-measure after that layout change so a placeholder that
+  // briefly wrapped into many lines does not leave the composer oversized.
+  useEffect(() => {
+    const ta = textareaRef.current
+    const parent = ta?.parentElement
+    if (!parent || typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(() => autoResizeTextarea())
+    observer.observe(parent)
+    return () => observer.disconnect()
+  }, [autoResizeTextarea])
 
   // Auto-save with debounce. We deliberately do NOT refetch the entire
   // conversation list on every content save -- only when the title
@@ -212,7 +375,19 @@ export function ChatPanel() {
       api.saveConversation({
         id,
         title: nextTitle,
-        messages: msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, cited: m.cited })),
+        messages: msgs.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          cited: m.cited,
+          practice: m.practice,
+          practiceMode: m.practiceMode,
+          evaluation: m.evaluation,
+          practiceAttempt: m.practiceAttempt,
+          practiceDismissed: m.practiceDismissed,
+          practiceSkipped: m.practiceSkipped,
+          assessmentContextQuestionId: m.assessmentContextQuestionId,
+        })),
       }).then(() => {
         const wasFirstSave = !wasRefreshedRef.current
         if (nextTitle !== convTitleRef.current) {
@@ -226,6 +401,118 @@ export function ChatPanel() {
       }).catch(() => {})
     }, 500)
   }, [convTitle, setConversations])
+
+  const submitPracticeAnswer = useCallback(async () => {
+    if (!practiceQuestion || streaming || gradingPractice || !input.trim()) return
+    if (practiceConfidence == null) {
+      toast({ type: "error", message: "请先选择信心程度（1–5）再提交答案" })
+      return
+    }
+    const questionId = practiceQuestion.id || practiceQuestion.question_id
+    if (!questionId) return
+    const answer = input.trim()
+    const attemptId = practiceAttemptRef.current?.answer === answer
+      ? practiceAttemptRef.current.id
+      : crypto.randomUUID()
+    practiceAttemptRef.current = { answer, id: attemptId }
+    setGradingPractice(true)
+    const attemptMessages = messagesRef.current.map((message) =>
+      message.practice?.id === questionId || message.practice?.question_id === questionId
+        ? { ...message, practiceAttempt: { answer, id: attemptId } }
+        : message,
+    )
+    // Keep the imperative snapshot in lockstep with the optimistic React
+    // update. A very fast local grading response can resolve before the
+    // effect that mirrors `messages` runs; without this assignment the
+    // evaluation append could otherwise be based on the pre-attempt array.
+    messagesRef.current = attemptMessages
+    setMessages(attemptMessages)
+    autoSave(attemptMessages, convTitle)
+    const userMsg: Message = { id: nextId(), role: "user", content: answer }
+    setInput("")
+    setChatStatus("正在批改答案…")
+    try {
+      const sessionId = practiceSessionId || practiceQuestion.session_id
+      if (!sessionId) throw new Error("练习会话已过期，请重新出题。")
+      const evaluation = await api.submitPracticeAnswer(sessionId, {
+        question_id: questionId,
+        answer,
+        confidence: practiceConfidence,
+        hint_ladder: practiceHintLevel,
+        attempt_id: attemptId,
+      }, userId)
+      practiceAttemptRef.current = null
+      const nextMessages = [...messagesRef.current, userMsg].map((message) =>
+        message.practice?.id === questionId || message.practice?.question_id === questionId
+          ? { ...message, evaluation, practiceAttempt: undefined }
+          : message,
+      )
+      messagesRef.current = nextMessages
+      setMessages(nextMessages)
+      setPracticeQuestion(null)
+      setPracticeSessionId(null)
+      setPracticeHintLevel(0)
+      setPracticeConfidence(null)
+      autoSave(nextMessages, convTitle)
+    } catch (e: any) {
+      setInput(answer)
+      toast({ type: "error", message: e?.message || "答案批改失败" })
+    } finally {
+      setGradingPractice(false)
+      setChatStatus(null)
+    }
+  }, [autoSave, convTitle, gradingPractice, input, practiceConfidence, practiceHintLevel, practiceQuestion, practiceSessionId, streaming, userId])
+
+  const requestAnotherPractice = useCallback((messageId: string) => {
+    if (streaming || gradingPractice) return
+    // Keep the completed/current card visible in the conversation. Starting
+    // another question only moves the active answer target to the new card;
+    // it must not mark the previous card dismissed and make its prompt and
+    // explanation disappear from the transcript.
+    const currentMessages = messagesRef.current
+    if (!currentMessages.some((message) => message.id === messageId && message.practice)) return
+    setMessages(currentMessages)
+    setPracticeQuestion(null)
+    setPracticeSessionId(null)
+    setPracticeHintLevel(0)
+    setPracticeConfidence(null)
+    practiceAttemptRef.current = null
+    setInput("再来一道题")
+    autoSave(currentMessages, convTitle)
+    textareaRef.current?.focus()
+    setTimeout(() => handleSendRef.current?.(), 0)
+  }, [autoSave, convTitle, gradingPractice, streaming])
+
+  const pausePracticeForChat = useCallback((messageId: string) => {
+    if (streaming || gradingPractice) return
+    const currentMessages = messagesRef.current.map((message) =>
+      message.id === messageId ? { ...message, practiceSkipped: true } : message,
+    )
+    setMessages(currentMessages)
+    setPracticeQuestion(null)
+    setPracticeSessionId(null)
+    setPracticeHintLevel(0)
+    setPracticeConfidence(null)
+    practiceAttemptRef.current = null
+    setInput("")
+    autoSave(currentMessages, convTitle)
+  }, [autoSave, convTitle, gradingPractice, streaming])
+
+  const resumePractice = useCallback((message: Message) => {
+    if (streaming || gradingPractice || !message.practice || message.evaluation) return
+    const currentMessages = messagesRef.current.map((item) =>
+      item.id === message.id ? { ...item, practiceSkipped: false } : item,
+    )
+    setMessages(currentMessages)
+    setPracticeQuestion(message.practice)
+    setPracticeSessionId(message.practice.session_id || null)
+    setPracticeHintLevel(0)
+    setPracticeConfidence(null)
+    practiceAttemptRef.current = message.practiceAttempt || null
+    setInput(message.practiceAttempt?.answer || "")
+    autoSave(currentMessages, convTitle)
+    textareaRef.current?.focus()
+  }, [autoSave, convTitle, gradingPractice, streaming])
 
   const handleStop = () => {
     if (abortRef.current) {
@@ -270,7 +557,32 @@ export function ChatPanel() {
   // without re-appending the last user message (used by "regenerate").
   const regenerateNextRef = useRef(false)
   const handleSend = useCallback(async () => {
-    if (!input.trim() || streaming) return
+    if (!input.trim() || streaming || gradingPractice || loadingConversation) return
+
+    // A normal chat send must never be interpreted as an answer just because
+    // an unfinished card exists. Pause that card, keep it in the transcript,
+    // and let the learner resume it explicitly when they want to continue.
+    let baseMsgs = messages
+    if (isCurrentPendingPractice(messages, practiceQuestion)) {
+      const activeId = practiceQuestion?.question_id || practiceQuestion?.id
+      const activeMessage = [...messages].reverse().find((message) => {
+        const questionId = message.practice?.question_id || message.practice?.id
+        return Boolean(message.practice && questionId && questionId === activeId && !message.evaluation)
+      })
+      if (activeMessage) {
+        baseMsgs = messages.map((message) =>
+          message.id === activeMessage.id ? { ...message, practiceSkipped: true } : message,
+        )
+        messagesRef.current = baseMsgs
+        setMessages(baseMsgs)
+        autoSave(baseMsgs, convTitle)
+      }
+      setPracticeQuestion(null)
+      setPracticeSessionId(null)
+      setPracticeHintLevel(0)
+      setPracticeConfidence(null)
+      practiceAttemptRef.current = null
+    }
 
     let currentConvId = convId
     if (!currentConvId) {
@@ -280,7 +592,6 @@ export function ChatPanel() {
     }
 
     const assistantId = nextId()
-    let baseMsgs = messages
     if (regenerateNextRef.current) {
       // The user message we are regenerating from is already the last item
       // in `messages` (the errored / stopped assistant was filtered out
@@ -289,9 +600,15 @@ export function ChatPanel() {
       regenerateNextRef.current = false
     } else {
       const userMsg: Message = { id: nextId(), role: "user", content: input }
-      baseMsgs = [...messages, userMsg]
+      baseMsgs = [...baseMsgs, userMsg]
     }
-    const newMsgs = [...baseMsgs, { id: assistantId, role: "assistant" as const, content: "" }]
+    const assessmentContextQuestionId = assessmentFollowupQuestionId(messages, input)
+    const newMsgs = [...baseMsgs, {
+      id: assistantId,
+      role: "assistant" as const,
+      content: "",
+      assessmentContextQuestionId,
+    }]
     setMessages(newMsgs)
     setInput("")
     setStreaming(assistantId)
@@ -321,20 +638,41 @@ export function ChatPanel() {
         role: m.role,
         content: m.content,
       }))
-
       let lastContent = ""
       for await (const event of api.chatStream(apiMessages, controller.signal, {
-        mode: "ask",
+        mode: "auto",
         scope: effectiveScope,
         user_id: userId,
         conversation_id: currentConvId ?? "default",
         options: {
           citation_required: true,
           answer_style: "concise",
+          agent_mode: "auto",
+          assessment_context_question_id: assessmentContextQuestionId,
         },
       })) {
         if (event.type === "status") {
           setChatStatus(event.text)
+        } else if (event.type === "practice_question") {
+          const raw = (event.question || event.payload || event) as Partial<PracticeQuestion> & { session_id?: string }
+          if (raw.prompt) {
+            const question = { ...raw, id: raw.id || raw.question_id || nextId() } as PracticeQuestion
+            setPracticeQuestion(question)
+            practiceAttemptRef.current = null
+            setPracticeSessionId((event.session_id || raw.session_id || null) as string | null)
+            setPracticeHintLevel(0)
+            setPracticeConfidence(null)
+            setMessages((prev) => prev.map((message) => message.id === assistantId
+              ? { ...message, content: "", practice: question, practiceMode: event.mode === "review" ? "review" : "practice" }
+              : message,
+            ))
+          }
+        } else if (event.type === "queue_empty") {
+          setPracticeQuestion(null)
+          setPracticeSessionId(null)
+          setPracticeHintLevel(0)
+          setPracticeConfidence(null)
+          setChatStatus(null)
         } else if (event.type === "cited" || event.type === "sources" || event.type === "final_citations") {
           setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, cited: event.pages } : m))
         } else if (event.type === "content") {
@@ -346,12 +684,12 @@ export function ChatPanel() {
         } else if (event.type === "error") {
           // Pipeline or LLM stream failed mid-flight; surface a clear error
           // and stop streaming so the UI can recover.
-          toast({ type: "error", message: event.message || "Request failed; please try again later" })
+          toast({ type: "error", message: event.message || "请求失败，请稍后重试" })
           let latest: Message[] = messages
           setMessages((prev) => {
             const next = prev.map((m) =>
               m.id === assistantId && !m.content
-                ? { ...m, content: `Error: ${event.message || "Request failed"}` }
+                ? { ...m, content: `错误：${event.message || "请求失败"}` }
                 : m
             )
             latest = next
@@ -375,21 +713,31 @@ export function ChatPanel() {
       userStoppedRef.current = false
       if (e?.name === "AbortError") {
         if (!userStopped) {
-          toast({ type: "error", message: "Connection lost; the reply was truncated." })
+          toast({ type: "error", message: "连接中断，回答可能不完整。" })
         }
         setStreaming(null)
         return
       }
-      const message = e?.message || "Request failed; please try again later"
+      const message = e?.message || "请求失败，请稍后重试"
       toast({ type: "error", message })
       setMessages((prev) => prev.map((m) =>
-        m.id === assistantId && !m.content ? { ...m, content: `Error: ${message}` } : m
+        m.id === assistantId && !m.content ? { ...m, content: `错误：${message}` } : m
       ))
     }
     setStreaming(null)
     setChatStatus(null)
-  }, [input, messages, streaming, convId, convTitle, autoSave, setConvId, chatScope, userId])
+  }, [input, messages, practiceQuestion, gradingPractice, streaming, loadingConversation, convId, convTitle, autoSave, setConvId, chatScope, userId])
   handleSendRef.current = handleSend
+
+  // Page-level actions enter the same composer used for normal chat. Keep the
+  // handoff one-shot so switching conversations cannot replay an old prompt.
+  useEffect(() => {
+    if (!pendingChatPrompt) return
+    if (selectedPage) setScopeType("current_page")
+    setInput(pendingChatPrompt)
+    setPendingChatPrompt(null)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [pendingChatPrompt, selectedPage, setPendingChatPrompt])
 
   const openPage = async (raw: string) => {
     if (!raw) return
@@ -437,6 +785,7 @@ export function ChatPanel() {
   }
 
   const handleNewConv = () => {
+    if (gradingPractice) return
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
@@ -582,17 +931,17 @@ export function ChatPanel() {
   const handleImageUpload = async (file: File | null | undefined) => {
     if (!file) return
     setRecognizingImage(true)
-    setChatStatus("Recognizing image...")
+    setChatStatus("正在识别图片…")
     try {
       const res = await api.recognizeChatImage(file)
       const extracted = res.text.trim()
       if (!extracted) {
-        toast({ type: "error", message: "No usable text recognized" })
+        toast({ type: "error", message: "没有识别到可用文字" })
         return
       }
-      const block = `I photographed and uploaded a question. Please answer based on the recognized content, and point out anything I should confirm.\n\n## OCR result\n\n${extracted}`
+      const block = `我拍了一张题目图片。请根据识别出的内容作答，并指出需要我确认的地方。\n\n## OCR 结果\n\n${extracted}`
       setInput((prev) => prev.trim() ? `${prev.trim()}\n\n${block}` : block)
-      toast({ type: "success", message: "Image recognized; result filled into the input box" })
+      toast({ type: "success", message: "图片识别完成，结果已填入输入框" })
     } catch (e: any) {
       toast({ type: "error", message: e?.message || "Image recognition failed" })
     } finally {
@@ -613,20 +962,31 @@ export function ChatPanel() {
     return null
   }, [messages])
 
+  // Only the newest question card can start another question. Keeping this
+  // separate from `practiceQuestion` also leaves the action available after
+  // the current card has been graded, when that state is intentionally reset.
+  const latestPracticeId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].practice) return messages[i].id
+    }
+    return null
+  }, [messages])
+
   const isEmpty = messages.length === 0 && !convId
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-w-0">
       {/* Conversation sidebar */}
-      <div className="w-44 shrink-0 border-r flex flex-col bg-[var(--sidebar)]">
+      <div className="hidden sm:flex sm:w-44 shrink-0 border-r flex-col bg-[var(--sidebar)]">
         <div className="p-2 border-b flex gap-1.5">
           <button
             onClick={handleNewConv}
+            disabled={gradingPractice}
             aria-label="New Conversation"
             title="New Conversation"
-            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-dashed border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
+            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded-lg border border-dashed border-[var(--border)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Plus size={12} /> New Chat
+            <Plus size={12} /> <span className="hidden sm:inline">新对话</span>
           </button>
           <button
             onClick={exportConv}
@@ -641,36 +1001,45 @@ export function ChatPanel() {
         <div className="flex-1 overflow-y-auto">
           {loadingConversations ? (
             <div className="flex items-center justify-center gap-1 px-3 py-6 text-xs text-[var(--muted-foreground)]">
-              <Loader2 size={12} className="animate-spin" /> Loading conversation…
+              <Loader2 size={12} className="animate-spin" /> 正在加载对话…
             </div>
           ) : null}
           {!loadingConversations && conversations.length === 0 ? (
             <p className="px-3 py-6 text-xs text-[var(--muted-foreground)] text-center">
-              No saved conversations
+              暂无已保存的对话
             </p>
           ) : null}
           {conversations.map((c) => (
             <div
               key={c.id}
-              onClick={() => setConvId(c.id)}
-              className={`group flex items-center gap-2 px-3 py-2 cursor-pointer text-xs transition-colors ${
+              onClick={() => { if (!gradingPractice) setConvId(c.id) }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  if (!gradingPractice) setConvId(c.id)
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open conversation ${c.title}`}
+              className={`group flex items-center gap-2 px-3 py-2 cursor-pointer text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[var(--primary)] ${
                 convId === c.id
                   ? "bg-[var(--accent)] text-[var(--foreground)]"
                   : "text-[var(--sidebar-foreground)] hover:bg-[var(--accent)]"
               }`}
             >
               <MessageSquare size={12} className="shrink-0" />
-              <span className="flex-1 truncate">{c.title}</span>
+              <span className="hidden sm:block flex-1 truncate">{c.title}</span>
               <button
                 onClick={(e) => { e.stopPropagation(); handleRenameConv(c.id, c.title) }}
-                className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] transition-opacity"
+                className="hidden sm:block shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--accent)] text-[var(--muted-foreground)] transition-opacity"
                 title="Rename"
               >
                 <Pencil size={11} />
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDeleteConv(c.id) }}
-                className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-500 transition-opacity"
+                className="hidden sm:block shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-red-500 transition-opacity"
                 title="Delete"
               >
                 <Trash2 size={11} />
@@ -681,30 +1050,35 @@ export function ChatPanel() {
       </div>
 
       {/* Chat area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="relative flex min-w-0 flex-1 flex-col">
         {/* Scope */}
-        <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b bg-[var(--background)]">
-          <div className="flex items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs text-[var(--primary-foreground)]">
-            <MessageCircle size={12} />
-            Ask
-          </div>
-          <div className="ml-2 h-4 w-px bg-[var(--border)]" />
+        <div className="shrink-0 flex min-w-0 flex-wrap items-center gap-2 px-3 py-1.5 border-b bg-[var(--background)]">
+          <button
+            type="button"
+            onClick={handleNewConv}
+            disabled={gradingPractice}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50 sm:hidden"
+            aria-label="New Conversation"
+            title="New Conversation"
+          >
+            <Plus size={13} />
+          </button>
           <select
             value={scopeType}
             onChange={(e) => setScopeType(e.target.value as ScopeType)}
             className="h-7 rounded-md border bg-[var(--background)] px-2 text-xs text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
             title="Knowledge scope"
           >
-            <option value="whole_wiki">Whole Wiki</option>
-            <option value="current_page" disabled={!selectedPage}>Current Page</option>
-            <option value="selected_source" disabled={!selectedSourceName}>Selected Source</option>
+            <option value="whole_wiki">全部知识库</option>
+            <option value="current_page" disabled={!selectedPage}>当前页面</option>
+            <option value="selected_source" disabled={!selectedSourceName}>当前材料</option>
           </select>
-          <span className="min-w-0 truncate text-[11px] text-[var(--muted-foreground)]">
+          <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--muted-foreground)]">
             {scopeType === "current_page" && selectedPage ? selectedPage.title : null}
             {scopeType === "selected_source" && selectedSourceName ? selectedSourceName : null}
-            {scopeType === "whole_wiki" ? "Using all wiki pages" : null}
+            {scopeType === "whole_wiki" ? "使用全部知识页面" : null}
           </span>
-          <span className="ml-auto flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
+          <span className="ml-auto hidden items-center gap-1.5 text-[10px] text-[var(--muted-foreground)] sm:flex">
             {llmModel ? (
               <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5" title={`LLM model: ${llmModel}`}>
                 <Bot size={10} /> {llmModel}
@@ -717,23 +1091,49 @@ export function ChatPanel() {
         </div>
 
         {/* Messages */}
-        <div ref={scrollHostRef} className="relative flex-1 overflow-y-auto p-4 space-y-4">
+        <div ref={scrollHostRef} className="relative flex-1 min-w-0 overflow-y-auto p-4 space-y-4">
           {isEmpty && (
             <div className="flex items-center justify-center h-full text-sm text-[var(--muted-foreground)]">
               <div className="text-center">
                 <BookOpen className="h-10 w-10 mx-auto mb-3 opacity-20" />
-                <p className="text-lg mb-2">Knowledge Wiki Assistant</p>
-                <p>Ask with citations from your selected scope.</p>
+                <p className="text-lg mb-2">知识库对话助手</p>
+                <p>基于当前范围提问，回答会附带引用。</p>
                 <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
                   Current learner:<span className="font-medium text-[var(--foreground)]">{userId}</span>
                 </p>
                 <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-                  Knowledge base empty? Go to <button
-                    type="button"
-                    onClick={() => useAppStore.getState().setActiveView("sources")}
-                    className="font-medium text-[var(--primary)] underline-offset-2 hover:underline"
-                  >Import Materials</button> Answers will appear here after you upload a document.
+                  {wikiPageCount === 0 ? (
+                    <>知识库还是空的？前往 <button
+                      type="button"
+                      onClick={() => useAppStore.getState().setActiveView("sources")}
+                      className="font-medium text-[var(--primary)] underline-offset-2 hover:underline"
+                    >导入材料</button> 添加文档。</>
+                  ) : (
+                    <>你可以提问，或使用下面的快捷入口从 {wikiPageCount} 个知识页面开始学习。</>
+                  )}
                 </p>
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInput("请基于当前知识库出一道题测试我。")
+                      requestAnimationFrame(() => textareaRef.current?.focus())
+                    }}
+                    className="rounded-full border border-[var(--primary)]/40 px-3 py-1.5 text-[11px] text-[var(--primary)] hover:bg-[var(--primary)]/10"
+                  >
+                    出一道题
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInput("帮我复习今天到期的内容。")
+                      requestAnimationFrame(() => textareaRef.current?.focus())
+                    }}
+                    className="rounded-full border px-3 py-1.5 text-[11px] text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                  >
+                    复习到期内容
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -741,10 +1141,10 @@ export function ChatPanel() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              className={`flex min-w-0 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm ${
+                className={`min-w-0 max-w-[85%] break-words rounded-xl px-4 py-2.5 text-sm [overflow-wrap:anywhere] ${
                   msg.role === "user"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "bg-[var(--muted)] text-[var(--foreground)]"
@@ -760,66 +1160,217 @@ export function ChatPanel() {
                         (Stopped)
                       </span>
                     ) : null}
-                    <Markdown>{msg.content || "..."}</Markdown>
-                    {!streaming && msg.id === lastAssistantId && (!msg.content?.trim() || msg.content.startsWith("Error:") || stoppedMessageIds.has(msg.id)) ? (
+                    {msg.content ? <Markdown>{msg.content}</Markdown> : msg.practice ? null : <Markdown>...</Markdown>}
+                    {msg.practice && !msg.practiceDismissed ? (
+                      <div className="mt-3 min-w-0 overflow-hidden rounded-lg border border-[var(--primary)]/30 bg-[var(--background)] p-3 [overflow-wrap:anywhere]">
+                        {(() => {
+                          const questionId = msg.practice?.id || msg.practice?.question_id
+                          const activeQuestionId = practiceQuestion?.id || practiceQuestion?.question_id
+                          const isActivePractice = Boolean(questionId && activeQuestionId && questionId === activeQuestionId)
+                          const selectedOption = isActivePractice
+                            ? input.trim().match(/^([A-H])(?:\.|\s|$)/i)?.[1]?.toUpperCase() || ""
+                            : ""
+                          return (
+                            <>
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--primary)]">
+                            <Brain size={14} className="shrink-0" />
+                            <span className="break-words">{msg.practiceMode === "review" ? "复习题" : "练习题"}</span>
+                            {msg.practice.difficulty ? <span className="break-words rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px]">{msg.practice.difficulty}</span> : null}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => requestAnotherPractice(msg.id)}
+                            disabled={!!streaming || gradingPractice || latestPracticeId !== msg.id}
+                            className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
+                          >
+                            再来一道题
+                          </button>
+                          {!msg.evaluation && !isActivePractice ? (
+                            <button
+                              type="button"
+                              onClick={() => resumePractice(msg)}
+                              disabled={!!streaming || gradingPractice}
+                              className="rounded border border-[var(--primary)]/40 px-2 py-1 text-[10px] text-[var(--primary)] hover:bg-[var(--primary)]/10 disabled:opacity-50"
+                            >
+                              继续答题
+                            </button>
+                          ) : null}
+                          {isActivePractice && !msg.evaluation ? (
+                            <button
+                              type="button"
+                              onClick={() => pausePracticeForChat(msg.id)}
+                              disabled={!!streaming || gradingPractice}
+                              className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
+                            >
+                              暂停答题
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="min-w-0 break-words text-sm text-[var(--foreground)] [overflow-wrap:anywhere] [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_.katex-display]:my-2 [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_p]:my-1 [&_p]:leading-relaxed">
+                          <Markdown>{msg.practice.prompt}</Markdown>
+                        </div>
+                        {msg.practice.options?.length ? (
+                          <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+                            {msg.practice.options.map((option, index) => (
+                              <button
+                                key={`${option}-${index}`}
+                                type="button"
+                                onClick={() => setInput(String.fromCharCode(65 + index))}
+                                disabled={!!msg.evaluation || !!streaming || gradingPractice || !isActivePractice}
+                                className={`min-w-0 break-words rounded-md border px-2.5 py-2 text-left text-xs hover:border-[var(--primary)] hover:bg-[var(--accent)] disabled:opacity-60 [overflow-wrap:anywhere] ${selectedOption === String.fromCharCode(65 + index) ? "border-[var(--primary)] bg-[var(--accent)]" : ""}`}
+                              >
+                                <span className="mr-1.5 font-medium">{String.fromCharCode(65 + index)}.</span>{" "}
+                                <span className="inline-block min-w-0 max-w-full align-middle overflow-x-auto [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_.katex]:whitespace-nowrap">
+                                  <InlineMarkdown>{displayOption(option)}</InlineMarkdown>
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {!msg.evaluation && isActivePractice ? (
+                          <>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              {msg.practice.hints?.length ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPracticeHintLevel((level) => Math.min(level + 1, msg.practice?.hints?.length || 0))}
+                                  disabled={practiceHintLevel >= msg.practice.hints.length || !!streaming || gradingPractice || !isActivePractice}
+                                  className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
+                                >
+                                  <Lightbulb size={11} /> 提示 {practiceHintLevel}/{msg.practice.hints.length}
+                                </button>
+                              ) : null}
+                              <span className="text-[10px] text-[var(--muted-foreground)]">答题信心（提交时必选）</span>
+                              {[1, 2, 3, 4, 5].map((value) => (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  aria-label={`信心 ${value}/5`}
+                                  onClick={() => setPracticeConfidence(value)}
+                                  disabled={!!streaming || gradingPractice || !isActivePractice}
+                                  className={`h-5 w-5 rounded-full border text-[10px] disabled:opacity-60 ${isActivePractice && practiceConfidence === value ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "text-[var(--muted-foreground)] hover:border-[var(--primary)]"}`}
+                                >
+                                  {value}
+                                </button>
+                              ))}
+                              {isActivePractice && practiceConfidence == null ? (
+                                <span className="w-full text-[10px] text-amber-700">仅提交这道题时需要选择 1–5</span>
+                              ) : null}
+                            </div>
+                            {isActivePractice && practiceHintLevel > 0 && msg.practice.hints ? (
+                              <div className="mt-2 min-w-0 break-words rounded bg-[var(--accent)] px-2.5 py-2 text-xs text-[var(--muted-foreground)] [overflow-wrap:anywhere] [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_.katex-display]:my-1 [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_p]:my-1 [&_p]:leading-relaxed">
+                                <Lightbulb size={11} className="mr-1 inline" />
+                                <Markdown>{msg.practice.hints.slice(0, practiceHintLevel).join(" ")}</Markdown>
+                              </div>
+                            ) : null}
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[10px] text-[var(--muted-foreground)]">普通消息仍由下方发送按钮发送</span>
+                              <button
+                                type="button"
+                                onClick={submitPracticeAnswer}
+                                disabled={!input.trim() || !!streaming || gradingPractice}
+                                className="rounded-md bg-[var(--primary)] px-3 py-1.5 text-xs text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                提交答案
+                              </button>
+                            </div>
+                          </>
+                        ) : msg.evaluation ? (
+                          <div className="mt-3 rounded-md border bg-[var(--muted)] px-3 py-2 text-xs">
+                            <div className="flex flex-wrap items-center gap-1 font-medium">
+                              {msg.evaluation.correct ? <CheckCircle2 size={13} className="text-emerald-600" /> : <CircleAlert size={13} className="text-amber-600" />}
+                              {msg.evaluation.correct ? "答对了" : "继续巩固"}
+                              {typeof msg.evaluation.score === "number" ? ` · ${Math.round(msg.evaluation.score * 100)}%` : null}
+                            </div>
+                            {msg.evaluation.feedback ? (
+                              <div className="mt-1 min-w-0 break-words text-[var(--muted-foreground)] [overflow-wrap:anywhere] [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_.katex-display]:my-1 [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_p]:my-1 [&_p]:leading-relaxed">
+                                <Markdown>{msg.evaluation.feedback}</Markdown>
+                              </div>
+                            ) : null}
+                            {msg.evaluation.correct_answer != null && String(Array.isArray(msg.evaluation.correct_answer) ? msg.evaluation.correct_answer.join(" / ") : msg.evaluation.correct_answer).trim() ? (
+                              <div className="mt-2 min-w-0 break-words [overflow-wrap:anywhere] [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_.katex-display]:my-1 [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_p]:my-1 [&_p]:leading-relaxed">
+                                <span className="font-medium">参考答案：</span>
+                                <Markdown>{Array.isArray(msg.evaluation.correct_answer) ? msg.evaluation.correct_answer.join(" / ") : String(msg.evaluation.correct_answer)}</Markdown>
+                              </div>
+                            ) : null}
+                            {msg.evaluation.explanation ? (
+                              <div className="mt-1 min-w-0 break-words text-[var(--muted-foreground)] [overflow-wrap:anywhere] [&_.katex]:inline-block [&_.katex]:max-w-full [&_.katex]:overflow-x-auto [&_.katex-display]:my-1 [&_.katex-display]:max-w-full [&_.katex-display]:overflow-x-auto [&_p]:my-1 [&_p]:leading-relaxed">
+                                <span className="font-medium text-[var(--foreground)]">解析：</span>
+                                <Markdown>{msg.evaluation.explanation}</Markdown>
+                              </div>
+                            ) : null}
+                            {msg.evaluation.learning_update?.bkt?.p_known != null ? (
+                              <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+                                掌握度 {Math.round(msg.evaluation.learning_update.bkt.p_known * 100)}% · 已安排下一次复习
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    ) : null}
+                    {!streaming && msg.id === lastAssistantId && (!msg.content?.trim() || msg.content.startsWith("Error:") || msg.content.startsWith("错误：") || stoppedMessageIds.has(msg.id)) ? (
                       <button
                         type="button"
                         onClick={() => regenerate(msg)}
                         className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                         title="Regenerate"
                       >
-                        <RefreshCw size={10} /> {msg.content?.startsWith("Error:") ? "Retry" : "Continue"}
+                        <RefreshCw size={10} /> {msg.content?.startsWith("Error:") || msg.content?.startsWith("错误：") ? "重试" : "继续"}
                       </button>
                     ) : null}
-                    {msg.content && !msg.content.startsWith("Error:") ? (
+                    {msg.content && !msg.content.startsWith("Error:") && !msg.content.startsWith("错误：") ? (
                       <button
                         type="button"
                         onClick={() => copyMessage(msg.content)}
                         className="ml-2 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                        title="Copy Answer"
+                        title="复制答案"
                       >
-                        <Copy size={10} /> Copy
+                        <Copy size={10} /> 复制
                       </button>
                     ) : null}
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</p>
                 )}
 
                 {msg.cited && msg.cited.length > 0 && (
-                  <details className="mt-2 border-t border-[var(--border)] pt-2">
-                    <summary className="cursor-pointer list-none text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-                      Sources ({msg.cited.length})
+                  <details className="mt-2 w-full min-w-0 max-w-full overflow-hidden border-t border-[var(--border)] pt-2">
+                    <summary className="cursor-pointer list-none break-words text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] [overflow-wrap:anywhere]">
+                      来源 ({msg.cited.length})
                     </summary>
-                    <div className="mt-1 space-y-1">
+                    <div className="mt-1 min-w-0 max-w-full space-y-1">
                       {msg.cited.map((c, i) => (
                         <div
-                          key={c.path}
-                          className="group flex items-start gap-1 rounded border border-transparent px-1 py-1 hover:border-[var(--border)] hover:bg-[var(--accent)]"
+                          key={`${c.path}-${c.anchor || "source"}-${i}`}
+                          className="group flex min-w-0 max-w-full items-start gap-1 rounded border border-transparent px-1 py-1 hover:border-[var(--border)] hover:bg-[var(--accent)]"
                         >
                           <button
                             type="button"
                             onClick={() => openPage(c.anchor ? `${c.path}#${c.anchor}` : c.path)}
-                            className="flex-1 text-left text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                            title={c.anchor ? `Open ${c.path} (at ${c.anchor})` : `Open ${c.path}`}
+                            className="min-w-0 flex-1 break-words text-left text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] [overflow-wrap:anywhere]"
+                            title={c.anchor ? `打开 ${c.path}（定位到 ${c.anchor}）` : `打开 ${c.path}`}
                           >
-                            <span className="font-medium">[{i + 1}] {c.title}</span>
+                            <span className="block break-words font-medium [overflow-wrap:anywhere]">[{i + 1}] {c.title}</span>
                             {c.anchor ? (
                               <span
                                 className="ml-1 rounded bg-[var(--primary)]/10 px-1 py-0.5 text-[9px] font-medium text-[var(--primary)]"
-                                title={`Click to jump to this section`}
+                                title="点击跳转到此小节"
                               >
                                 §{c.anchor}
                               </span>
                             ) : null}
-                            <span className="block truncate opacity-80">— {c.snippet.slice(0, 100)}…</span>
-                            <span className="block truncate opacity-60">{c.path}</span>
+                            <span className="block break-words opacity-80 [overflow-wrap:anywhere]">— {c.snippet.slice(0, 100)}…</span>
+                            <span className="block break-words opacity-60 [overflow-wrap:anywhere]">{c.path}</span>
                           </button>
                           <button
                             type="button"
                             onClick={() => copyMessage(c.path, "Path copied")}
-                            className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 hover:bg-[var(--background)] hover:text-[var(--foreground)] group-hover:opacity-100"
-                            title="Copy Citation Path"
+                            className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-60 hover:bg-[var(--background)] hover:text-[var(--foreground)] sm:opacity-0 sm:group-hover:opacity-100"
+                            title="复制引用路径"
                           >
                             <LinkIcon size={11} />
                           </button>
@@ -835,7 +1386,7 @@ export function ChatPanel() {
             <div className="flex justify-start">
               <div className="bg-[var(--muted)] rounded-xl px-4 py-2.5 flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin text-[var(--muted-foreground)]" />
-                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "Thinking..."}</span>
+                <span className="text-[11px] text-[var(--muted-foreground)]">{chatStatus || "思考中…"}</span>
               </div>
             </div>
           )}
@@ -850,15 +1401,15 @@ export function ChatPanel() {
               setUnreadCount(0)
             }}
             className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border bg-[var(--background)] px-3 py-1 text-[11px] text-[var(--muted-foreground)] shadow hover:text-[var(--foreground)]"
-            title="Jump to latest message"
+            title="跳转到最新消息"
           >
-            {unreadCount > 0 ? `${unreadCount} new messages ↓` : "Jump to Latest ↓"}
+            {unreadCount > 0 ? `${unreadCount} 条新消息 ↓` : "跳转到最新 ↓"}
           </button>
         ) : null}
 
         {/* Input */}
-        <div className="shrink-0 p-3 border-t">
-          <div className="flex gap-2">
+        <div className="shrink-0 border-t p-3">
+          <div className="flex min-w-0 items-end gap-2">
             <input
               ref={imageInputRef}
               type="file"
@@ -871,11 +1422,11 @@ export function ChatPanel() {
               onClick={() => imageInputRef.current?.click()}
               disabled={!!streaming || recognizingImage}
               className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg border text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] disabled:opacity-50 transition-colors"
-              title="Take a photo or upload an image of the problem"
+              title="拍照或上传题目图片"
             >
               {recognizingImage ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
             </button>
-            <div className="relative flex-1">
+            <div className="relative min-w-0 flex-1">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -883,10 +1434,11 @@ export function ChatPanel() {
                   setInput(e.target.value)
                   autoResizeTextarea()
                 }}
+                disabled={gradingPractice}
                 maxLength={4000}
                 onKeyDown={handleKeyDown}
-                placeholder={convId ? "Ask a follow-up..." : "Ask a question about your knowledge base..."}
-                className="w-full resize-none rounded-lg border px-3 py-2 pr-7 text-sm bg-[var(--background)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                placeholder={convId ? "继续对话或追问…（答题请点题卡里的“提交答案”）" : "询问知识库内容…"}
+                className="w-full resize-none rounded-lg border bg-[var(--background)] px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                 rows={2}
               />
               {input.length > 0 ? (
@@ -900,14 +1452,14 @@ export function ChatPanel() {
                   <X size={12} />
                 </button>
               ) : null}
+              {input.length > 300 ? (
+                <p
+                  className={`pointer-events-none absolute bottom-1.5 right-2 text-[10px] ${input.length > 1500 ? "text-amber-600" : "text-[var(--muted-foreground)]"}`}
+                >
+                  {input.length}/4000{input.length > 1500 ? " · Suggest splitting before sending" : ""}
+                </p>
+              ) : null}
             </div>
-            {input.length > 300 ? (
-              <p
-                className={`mt-1 text-right text-[10px] ${input.length > 1500 ? "text-amber-600" : "text-[var(--muted-foreground)]"}`}
-              >
-                {input.length}/4000{input.length > 1500 ? " · Suggest splitting before sending" : ""}
-              </p>
-            ) : null}
             {streaming ? (
               <button
                 onClick={handleStop}
@@ -920,8 +1472,9 @@ export function ChatPanel() {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={!input.trim() || gradingPractice}
                 aria-label="Send Message"
+                title="发送消息"
                 className="shrink-0 w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 transition-opacity"
               >
                 <Send size={14} />

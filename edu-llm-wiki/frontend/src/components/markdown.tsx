@@ -796,7 +796,13 @@ export function Markdown({
 }
 
 export function InlineMarkdown({ children }: { children: string }) {
-  const processed = useMemo(() => wrapBareLatexCommands(convertLatexDelimiters(processWikiLinks(stripFrontmatter(children)))), [children])
+  const processed = useMemo(() => {
+    const inlineSafeMath = convertLatexDelimiters(processWikiLinks(stripFrontmatter(children)))
+      // Answer choices stay inside a button, so turn display delimiters into
+      // inline math before remark-math can emit a block element inside a span.
+      .replace(/\$\$([\s\S]*?)\$\$/g, (_match, math: string) => `$${math}$`)
+    return wrapBareLatexCommands(inlineSafeMath)
+  }, [children])
 
   return (
     <ReactMarkdown

@@ -3,7 +3,7 @@
 - GET  /api/ontology/schema            本体 schema 摘要(生成层/前端用,
                                         从单一事实来源派生)
 - POST /api/ontology/reason            逐学习者推理(就绪/迁移/预警)
-- GET  /api/ontology/tree              五区目录树(可带学习者状态)
+- GET  /api/ontology/tree              知识目录 + TeachingObject 六组(可带学习者状态)
 
 处理器用同步 def(FastAPI 自动放线程池)——HermiT 推理是阻塞的 Java
 子进程调用,不能占事件循环。
@@ -28,10 +28,28 @@ class ReasonRequest(BaseModel):
 
 @router.get("/schema")
 def ontology_schema(project_id: str = Query("default")):
-    """本体 schema 摘要(关系词汇表 + 页面模板 + 原子类型)。"""
+    """本体 schema 摘要，TeachingObject 分组直接派生自 ontology_v2。"""
+    from services.ontology_v2 import TEACHING_CLASS_GROUPS, TEACHING_CLASS_LABELS
+
     return {
         "version": VERSION,
         "atom_types": list(KNOWLEDGE_CLASS_NAMES),
+        "teaching_object_groups": [
+            {
+                "name": group_name,
+                "zh": str(group["zh"]),
+                "folder": str(group["folder"]),
+                "classes": [
+                    {
+                        "name": class_name,
+                        "zh": TEACHING_CLASS_LABELS.get(class_name, (class_name, ""))[0],
+                        "description": TEACHING_CLASS_LABELS.get(class_name, (class_name, ""))[1],
+                    }
+                    for class_name in group.get("classes", ())
+                ],
+            }
+            for group_name, group in TEACHING_CLASS_GROUPS.items()
+        ],
         "relations": [
             {
                 "name": s.name,
@@ -62,14 +80,14 @@ def reason(req: ReasonRequest, project_id: str = Query("default")):
 
 @router.get("/tree")
 def tree(project_id: str = Query("default"), learner: str | None = Query(None)):
-    """五区目录树;带 learner 时附学习区(就绪/迁移/已掌握/预警)。"""
+    """知识目录与六组教学对象;带 learner 时附状态视图。"""
     # derive 模块(S3)尚未实现,惰性导入避免阻塞整个后端启动
     try:
         from services.ontology.derive import generate_tree
     except ImportError as exc:
         raise HTTPException(
             status_code=501,
-            detail="derive.py 未实现:目录树派生器(v1.1 S3)待完成",
+            detail="ontology tree projection is unavailable",
         ) from exc
     try:
         abox = get_abox(project_id)

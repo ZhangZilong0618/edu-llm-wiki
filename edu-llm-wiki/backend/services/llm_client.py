@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator
 
 import asyncio
+import json
+
 import httpx
 
 from config import settings
@@ -173,6 +175,190 @@ async def chat_complete(
     if not resp.choices:
         return ""
     return resp.choices[0].message.content or ""
+
+
+def _openai_tools(mcp_tools: list[dict]) -> list[dict]:
+    """Convert MCP tool definitions to the OpenAI function-calling shape."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description") or "",
+                "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+            },
+        }
+        for tool in mcp_tools
+    ]
+
+
+def _anthropic_tools(mcp_tools: list[dict]) -> list[dict]:
+    """Convert MCP tool definitions to the Anthropic tool shape."""
+    return [
+        {
+            "name": tool["name"],
+            "description": tool.get("description") or "",
+            "input_schema": tool.get("input_schema") or {"type": "object", "properties": {}},
+        }
+        for tool in mcp_tools
+    ]
+
+
+def _openai_tool_message(message: dict) -> dict:
+    """Serialise one internal message for the OpenAI wire format.
+
+    Internal assistant turns carry ``tool_calls`` with ``arguments`` as a
+    dict for easy manipulation; the OpenAI API wants them as a JSON string.
+    """
+    tool_calls = message.get("tool_calls")
+    if not tool_calls:
+        return message
+    return {
+        "role": "assistant",
+        "content": message.get("content") or None,
+        "tool_calls": [
+            {
+                "id": call["id"],
+                "type": "function",
+                "function": {
+                    "name": call["name"],
+                    "arguments": json.dumps(call.get("arguments") or {}, ensure_ascii=False),
+                },
+            }
+            for call in tool_calls
+        ],
+    }
+
+
+def _anthropic_messages(messages: list[dict]) -> list[dict]:
+    """Convert internal (OpenAI-style) messages to Anthropic content blocks.
+
+    Tool results must arrive inside a user turn right after the assistant
+    turn that requested them, so consecutive tool messages are merged into a
+    single user message of ``tool_result`` blocks.
+    """
+    out: list[dict] = []
+    for message in messages:
+        role = message["role"]
+        if role == "tool":
+            block = {
+                "type": "tool_result",
+                "tool_use_id": message.get("tool_call_id", ""),
+                "content": message.get("content", ""),
+            }
+            if out and out[-1]["role"] == "user" and isinstance(out[-1]["content"], list):
+                out[-1]["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+        elif role == "assistant" and message.get("tool_calls"):
+            blocks = []
+            text = (message.get("content") or "").strip()
+            if text:
+                blocks.append({"type": "text", "text": text})
+            for call in message["tool_calls"]:
+                blocks.append({
+                    "type": "tool_use",
+                    "id": call["id"],
+                    "name": call["name"],
+                    "input": call.get("arguments") or {},
+                })
+            out.append({"role": "assistant", "content": blocks})
+        else:
+            out.append({"role": role, "content": message.get("content", "")})
+    return out
+
+
+async def chat_complete_tools(
+    system_prompt: str,
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    tool_choice: str = "auto",
+    abort_signal: "asyncio.Event | None" = None,
+) -> dict:
+    """One LLM turn with tool calling over MCP-style tool definitions.
+
+    ``tools`` uses the MCP tool shape ({name, description, input_schema}).
+    ``messages`` uses the OpenAI shape, including assistant turns with
+    ``tool_calls`` [{id, name, arguments(dict)}] and tool results
+    ({role: "tool", tool_call_id, content}).
+
+    Returns {"content": str, "tool_calls": [...], "stop_reason": "tool_calls"
+    or "stop"} so the ReAct loop can treat both providers uniformly.
+    """
+    provider = settings.llm_provider
+    model = model or settings.llm_model
+    max_tokens = max_tokens or settings.llm_max_tokens
+    temperature = temperature if temperature is not None else settings.llm_temperature
+
+    if provider == "anthropic":
+        client = get_llm_client()
+        resp = await _await_with_abort(
+            client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=_anthropic_messages(messages),
+                tools=_anthropic_tools(tools),
+                temperature=temperature,
+            ),
+            abort_signal,
+        )
+        text = "\n".join(
+            block.text for block in resp.content if getattr(block, "type", "") == "text"
+        ).strip()
+        tool_calls = [
+            {"id": block.id, "name": block.name, "arguments": dict(block.input or {})}
+            for block in resp.content if getattr(block, "type", "") == "tool_use"
+        ]
+        return {
+            "content": text,
+            "tool_calls": tool_calls,
+            "stop_reason": "tool_calls" if resp.stop_reason == "tool_use" else "stop",
+        }
+
+    client = get_llm_client()
+    full_messages = [{"role": "system", "content": system_prompt}] + [
+        _openai_tool_message(message) for message in messages
+    ]
+    kwargs = dict(
+        model=model,
+        messages=full_messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        tools=_openai_tools(tools),
+    )
+    if tool_choice != "auto":
+        kwargs["tool_choice"] = tool_choice
+    resp = await _await_with_abort(client.chat.completions.create(**kwargs), abort_signal)
+    if not resp.choices:
+        return {"content": "", "tool_calls": [], "stop_reason": "stop"}
+    msg = resp.choices[0].message
+    tool_calls = []
+    for index, call in enumerate(msg.tool_calls or []):
+        raw_arguments = call.function.arguments
+        if isinstance(raw_arguments, str):
+            try:
+                arguments = json.loads(raw_arguments or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+        else:
+            arguments = dict(raw_arguments or {})
+        tool_calls.append({
+            # Some OpenAI-compatible gateways omit the call id; synthesise one
+            # so the tool result can still be matched to the request.
+            "id": call.id or f"call_{index}",
+            "name": call.function.name,
+            "arguments": arguments if isinstance(arguments, dict) else {},
+        })
+    return {
+        "content": msg.content or "",
+        "tool_calls": tool_calls,
+        "stop_reason": "tool_calls" if tool_calls else "stop",
+    }
 
 
 async def test_connection(data) -> tuple[bool, str]:

@@ -4,17 +4,18 @@
 // clusters, readiness progress and SR queue.
 import { useEffect, useState } from "react"
 import { toast } from "@/components/ui/toast"
-import { Brain, AlertTriangle, Sparkles, Target, Trophy, RefreshCw, CheckCircle2, ListChecks, Download } from "lucide-react"
+import { Brain, AlertTriangle, Sparkles, Target, RefreshCw, CheckCircle2, ListChecks, Download } from "lucide-react"
 import { api } from "@/lib/api"
 import { useUserStore } from "@/stores/user-store"
 import { PosteriorBar } from "./posterior-bar"
-import { ReviewSession } from "./review-session"
+import { useAppStore } from "@/stores/app-store"
 export function LearningPanel({ userId, projectId }: { userId?: string; projectId?: string }) {
   const activeUser = useUserStore((s) => s.userId)
   const effectiveUser = userId ?? activeUser
+  const setActiveView = useAppStore((s) => s.setActiveView)
+  const setPendingChatPrompt = useAppStore((s) => s.setPendingChatPrompt)
   const [state, setState] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [reviewOpen, setReviewOpen] = useState(false)
   const [tick, setTick] = useState(0)
   const [resetting, setResetting] = useState(false)
   const [refitting, setRefitting] = useState(false)
@@ -176,8 +177,14 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
         </div>
       )}
       <div className="flex gap-1.5">
-        <button onClick={() => setReviewOpen(true)} className="flex flex-1 items-center justify-center gap-1 rounded border bg-[var(--primary)] px-2 py-1 text-[11px] text-[var(--primary-foreground)]">
-          <Trophy size={11} /> Start Review
+        <button
+          onClick={() => {
+            setPendingChatPrompt("请复习我当前到期的卡片。")
+            setActiveView("chat")
+          }}
+          className="flex flex-1 items-center justify-center gap-1 rounded border bg-[var(--primary)] px-2 py-1 text-[11px] text-[var(--primary-foreground)]"
+        >
+          <Sparkles size={11} /> 在聊天中复习
         </button>
         <button
           type="button"
@@ -208,13 +215,6 @@ export function LearningPanel({ userId, projectId }: { userId?: string; projectI
           <Download size={11} /> Export
         </button>
       </div>
-      {reviewOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setReviewOpen(false)}>
-          <div className="max-h-[80vh] w-[28rem] overflow-auto rounded-lg bg-[var(--background)] p-4" onClick={(e) => e.stopPropagation()}>
-            <ReviewSession userId={effectiveUser} projectId={projectId} onComplete={() => setReviewOpen(false)} />
-          </div>
-        </div>
-      )}
     </section>
   )
 }

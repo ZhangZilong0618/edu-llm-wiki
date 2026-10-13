@@ -29,6 +29,13 @@ from services.language import language_instruction
 from services.llm_client import chat_complete
 from services.ontology_v2 import CLASS_LABELS
 
+# A document import must have a bounded failure mode.  The normal chat client
+# allows a much longer network timeout because interactive answers can stream,
+# but a stalled model must never leave the ingest SSE request open indefinitely.
+# Keep this local constant so deployments do not need a new configuration key
+# just to get a safe fallback; callers/tests can still monkeypatch it.
+LLM_EXTRACTION_TIMEOUT_SECONDS = 15.0
+
 #: 四类知识单元的抽取顺序(与前端 PAGE_TYPE_ORDER 对齐)
 KNOWLEDGE_UNIT_CLASSES = ("Concept", "Fact", "Formula", "Principle")
 
@@ -206,23 +213,31 @@ async def load_llm_json(raw: str, *, expected: str) -> object:
     try:
         return json.loads(repaired)
     except json.JSONDecodeError as first_error:
-        fixed = await chat_complete(
-            system_prompt=(
-                "You repair malformed JSON. Return ONLY valid JSON. "
-                "Do not add markdown fences, comments, explanations, or new content."
-            ),
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"The following should be a valid JSON {expected}, but parsing failed with:\n"
-                    f"{first_error}\n\n"
-                    "Repair syntax only. Preserve all keys, values, language, and structure as much as possible.\n\n"
-                    f"{repaired[:60000]}"
+        try:
+            fixed = await asyncio.wait_for(
+                chat_complete(
+                    system_prompt=(
+                        "You repair malformed JSON. Return ONLY valid JSON. "
+                        "Do not add markdown fences, comments, explanations, or new content."
+                    ),
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"The following should be a valid JSON {expected}, but parsing failed with:\n"
+                            f"{first_error}\n\n"
+                            "Repair syntax only. Preserve all keys, values, language, and structure as much as possible.\n\n"
+                            f"{repaired[:60000]}"
+                        ),
+                    }],
+                    temperature=0,
+                    max_tokens=8192,
                 ),
-            }],
-            temperature=0,
-            max_tokens=8192,
-        )
+                timeout=LLM_EXTRACTION_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            return None
+        except Exception:
+            return None
         try:
             return json.loads(repair_json(fixed))
         except json.JSONDecodeError as second_error:
@@ -306,12 +321,24 @@ async def extract_chunk(content: str, *, source_title: str, page_range: str) -> 
         output_schema=render_output_schema(),
         language_instruction=language_instruction(),
     )
-    raw = await chat_complete(
-        system_prompt="You are an expert educational knowledge extractor. Output ONLY valid JSON.",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.15,
-        max_tokens=12_000,
-    )
+    try:
+        raw = await asyncio.wait_for(
+            chat_complete(
+                system_prompt="You are an expert educational knowledge extractor. Output ONLY valid JSON.",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.15,
+                max_tokens=12_000,
+            ),
+            timeout=LLM_EXTRACTION_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        # The caller deterministically falls back to the local extractor.  An
+        # empty plan is intentional and is distinguishable from malformed JSON.
+        return {}
+    except Exception:
+        # A missing/unavailable provider should not make an uploaded document
+        # disappear.  Preserve the same fallback contract as a timeout.
+        return {}
     try:
         plan = await load_llm_json(raw, expected="object")
     except Exception:

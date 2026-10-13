@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useAppStore } from "@/stores/app-store"
 import { api } from "@/lib/api"
 import { toast } from "@/components/ui/toast"
-import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, Search, X } from "lucide-react"
+import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, Search, X, Layers3 } from "lucide-react"
 import type { SearchResult } from "@/types/wiki"
 import { displayWikiTitle } from "@/lib/wiki-title"
 import { PageBadges } from "@/lib/page-badges"
@@ -15,12 +15,28 @@ export function KnowledgeTree() {
   const setActiveView = useAppStore((s) => s.setActiveView)
   const { searchQuery, setSearchQuery, searchResults, setSearchResults, isSearching, setIsSearching } = useAppStore()
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(() => new Set(["source"]))
+  const teachingGroupLabels: Record<string, string> = {
+    "learner-identity": "学习者身份",
+    "mastery-tracking": "掌握度跟踪",
+    "learning-events": "学习事件",
+    assessment: "评估与答题",
+    "learning-planning": "学习规划",
+    "learning-support": "学习支持",
+  }
 
   const grouped: Record<string, typeof wikiPages> = {}
   for (const p of wikiPages) {
     const t = p.type || "unknown"
+    if (t === "teaching_object") continue
     if (!grouped[t]) grouped[t] = []
     grouped[t].push(p)
+  }
+  const teachingPages = wikiPages.filter((p) => (p.type || "") === "teaching_object")
+  const teachingGroups: Record<string, typeof wikiPages> = {}
+  for (const page of teachingPages) {
+    const folder = page.path.split("/")[1] || "other"
+    if (!teachingGroups[folder]) teachingGroups[folder] = []
+    teachingGroups[folder].push(page)
   }
 
   const handleSelect = async (p: typeof wikiPages[0]) => {
@@ -202,6 +218,56 @@ export function KnowledgeTree() {
           </div>
         )
       })}
+      {teachingPages.length > 0 && (
+        <div className="mb-3">
+          <button
+            onClick={() => toggleType("__teaching_object__")}
+            className="flex w-full items-center gap-1 rounded px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
+          >
+            {collapsedTypes.has("__teaching_object__") ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            <span style={{ color: "#0f766e" }}><Layers3 size={14} /></span>
+            <span>教学应用对象</span>
+            <span
+              className="text-[9px] font-normal opacity-60"
+              title="这里是全局 EDU-ONTO 本体模板；本项目的学习记录和自定义内容仍按项目独立保存"
+            >
+              系统模板
+            </span>
+            <span className="ml-auto text-[10px] opacity-50">{teachingPages.length}</span>
+          </button>
+          {!collapsedTypes.has("__teaching_object__") && (
+            <div className="mt-1 space-y-1 pl-2">
+              {Object.entries(teachingGroups).sort(([a], [b]) => a.localeCompare(b)).map(([folder, pages]) => {
+                const groupKey = `__teaching_group__${folder}`
+                const collapsed = collapsedTypes.has(groupKey)
+                return (
+                  <div key={folder} className="min-w-0">
+                    <button
+                      onClick={() => toggleType(groupKey)}
+                      className="flex w-full min-w-0 items-center gap-1 rounded px-2 py-1 text-[11px] text-[var(--muted-foreground)] hover:bg-[var(--accent)]"
+                    >
+                      {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                      <span className="min-w-0 flex-1 truncate text-left">{teachingGroupLabels[folder] || folder}</span>
+                      <span className="text-[10px] opacity-50">{pages.length}</span>
+                    </button>
+                    {!collapsed && pages.map((p) => (
+                      <button
+                        key={p.path}
+                        onClick={() => handleSelect(p)}
+                        className="flex w-full min-w-0 items-center gap-1.5 rounded px-6 py-1 text-sm transition-colors hover:bg-[var(--accent)]"
+                        style={{ color: selectedPage?.path === p.path ? "var(--primary)" : "var(--sidebar-foreground)", fontWeight: selectedPage?.path === p.path ? 500 : 400 }}
+                      >
+                        <span className="min-w-0 flex-1 truncate text-left">{displayWikiTitle(p)}</span>
+                        <PageBadges difficulty={p.difficulty} prerequisiteCount={p.prerequisites?.length} misconceptionCount={p.common_misconceptions?.length} lastReviewed={p.last_reviewed} />
+                      </button>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
       {wikiPages.length === 0 && (
         <div className="p-3 space-y-3">
           <p className="text-xs text-[var(--muted-foreground)]">

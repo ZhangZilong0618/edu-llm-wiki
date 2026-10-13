@@ -35,6 +35,7 @@ from owlready2 import (
 )
 
 from services.ontology.edu_onto import (
+    BASE_IRI,
     DATA_PROPERTY_NAMES,
     KNOWLEDGE_CLASS_NAMES,
     RELATION_SPECS,
@@ -91,7 +92,16 @@ class ABox:
         self.project_id = project_id
         self.world = world
         self.path = path
+        # ``build_ontology`` upgrades old worlds in place by adding the
+        # TeachingObject taxonomy (and any missing parent edges).  Owlready2
+        # does not automatically flush those schema writes, so remember the
+        # pre-build class hierarchy and persist the upgrade immediately. This
+        # matters for the long-lived server cache: it may never call
+        # ``ABox.close`` before a process restart.
+        before_shape = _ontology_class_shape(world.get_ontology(BASE_IRI))
         self.onto = build_ontology(world=world)
+        if path is not None and before_shape != _ontology_class_shape(self.onto):
+            self.world.save()
         #: 写计数——逐学习者推理缓存用它判断失效
         self.version = 0
 
@@ -424,6 +434,41 @@ class ABox:
 
 
 _OPEN: dict[str, ABox] = {}
+
+
+def _ontology_class_shape(onto) -> dict[str, tuple[str, ...]]:
+    """Return a stable class/parent fingerprint for migration detection.
+
+    Comparing only class names misses upgrades that add a taxonomy parent to
+    an existing v1 class (for example ``LearningPath``).  Restrict the
+    fingerprint to named ``is_a`` parents so equivalent class expressions and
+    inferred facts do not trigger an unnecessary save.
+    """
+    shape: dict[str, tuple[str, ...]] = {}
+    for cls in onto.classes():
+        parents = tuple(sorted(
+            parent.name
+            for parent in cls.is_a
+            if isinstance(parent, type) and getattr(parent, "name", None)
+        ))
+        shape[str(cls.name)] = parents
+    return shape
+
+
+def close_all() -> None:
+    """Flush and close every cached project ABox.
+
+    The API keeps one world per project to avoid concurrent SQLite writes.
+    Shutdown must close these worlds as well as the graph-store connections;
+    otherwise taxonomy migrations and recent ABox assertions can remain only
+    in the process and the SQLite file stays locked after a graceful stop.
+    """
+    for box in list(_OPEN.values()):
+        try:
+            box.close()
+        except Exception:
+            # Shutdown cleanup should not mask the original server exit.
+            pass
 
 
 def get_abox(project_id: str, *, path: str | Path | None = None) -> ABox:

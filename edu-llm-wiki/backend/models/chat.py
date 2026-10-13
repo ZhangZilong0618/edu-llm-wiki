@@ -1,5 +1,6 @@
 
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,13 @@ class ChatOptions(BaseModel):
     retrieval_mode: Literal["none", "vector", "graph"] = "graph"
     include_learner_state: bool = True
     model: str | None = None
+    # ``agent_mode`` is additive to the legacy top-level ``mode`` field. It
+    # lets clients request a structured practice/review turn while retaining
+    # the normal RAG answer flow for ``ask``.
+    agent_mode: Literal["auto", "ask", "practice", "review"] = "auto"
+    # Reference the latest completed conversational assessment. The server
+    # resolves the question and grading details from its own records.
+    assessment_context_question_id: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -28,9 +36,29 @@ class ChatRequest(BaseModel):
     conversation_id: str = "default"
     user_id: str = "default"
     context_budget: int = 32000  # max context in chars
-    mode: str = "ask"  # ask | practice
+    mode: str = "auto"  # auto | ask | practice | review
     scope: ChatScope = Field(default_factory=ChatScope)
     options: ChatOptions = Field(default_factory=ChatOptions)
+
+
+class PracticeQuestionRequest(BaseModel):
+    """Request one server-owned question for a chat practice turn."""
+
+    session_id: str | None = None
+    mode: Literal["practice", "review"] = "practice"
+    page_path: str | None = None
+    kc_id: str | None = None
+    difficulty: str = "mixed"
+
+
+class PracticeAnswerRequest(BaseModel):
+    """Submit an answer without sending the expected answer/KC from the UI."""
+
+    question_id: str
+    answer: str | list[str] = ""
+    confidence: int = Field(ge=1, le=5)
+    hint_ladder: int = 0
+    attempt_id: str = Field(default_factory=lambda: uuid4().hex)
 
 
 class CitedPage(BaseModel):
@@ -46,6 +74,11 @@ class ChatResponse(BaseModel):
     content: str
     cited_pages: list[CitedPage] = []
     conversation_id: str = "default"
+    # Structured tutoring payloads are optional so existing chat consumers
+    # can continue to render ordinary answers unchanged.
+    practice_question: dict | None = None
+    evaluation: dict | None = None
+    learning_update: dict | None = None
 
 
 class Conversation(BaseModel):

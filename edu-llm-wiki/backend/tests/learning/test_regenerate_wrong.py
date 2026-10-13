@@ -163,3 +163,9 @@ def test_submit_triggers_bkt_refit(monkeypatch, tmp_path):
             ("default", "u1"),
         ).fetchone()
         assert n_bkt[0] >= 1
+        events = conn.execute(
+            "SELECT event_type,user_id FROM wiki_update_events WHERE project_id=? ORDER BY event_type",
+            ("default",),
+        ).fetchall()
+        assert any(row[0] == "assessment_attempt" and row[1] == "u1" for row in events)
+        assert any(row[0] == "mastery_change" and row[1] == "u1" for row in events)

@@ -68,3 +68,44 @@ def test_chat_stream_rejects_bad_token(monkeypatch, tmp_path):
         json={"messages": [{"role": "user", "content": "hi"}], "context_budget": 8000},
     )
     assert resp.status_code == 401
+
+
+def test_chat_stream_greeting_provider_error_ends_sse_cleanly(monkeypatch, tmp_path):
+    """A provider failure must still yield an error event and ``[DONE]``."""
+    monkeypatch.setattr(settings, "api_token", "")
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+
+    async def broken_stream(**kwargs):
+        raise RuntimeError("provider unavailable")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(chat_routes, "stream_chat", broken_stream)
+    from main import app
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat/stream?project_id=default",
+        json={"messages": [{"role": "user", "content": "你好"}]},
+    )
+    assert resp.status_code == 200
+    assert '"type": "error"' in resp.text
+    assert "[DONE]" in resp.text
+
+
+def test_chat_nonstream_provider_error_returns_actionable_status(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "api_token", "")
+    monkeypatch.setattr(settings, "projects_dir", str(tmp_path))
+
+    async def broken_chat(**kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(chat_routes, "chat_complete", broken_chat)
+    from main import app
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat?project_id=default",
+        json={"messages": [{"role": "user", "content": "你好"}]},
+    )
+    assert resp.status_code == 502
+    assert "生成中断" in resp.json()["detail"]

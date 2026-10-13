@@ -330,7 +330,8 @@ export function PreviewPanel() {
   const setSelectedSource = useAppStore((s) => s.setSelectedSource)
   const setSelectedPage = useAppStore((s) => s.setSelectedPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
-  const setPendingTestPagePath = useAppStore((s) => s.setPendingTestPagePath)
+  const activeView = useAppStore((s) => s.activeView)
+  const setPendingChatPrompt = useAppStore((s) => s.setPendingChatPrompt)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [researchOpen, setResearchOpen] = useState(false)
   const [editingPage, setEditingPage] = useState(false)
@@ -437,6 +438,17 @@ export function PreviewPanel() {
             <Microscope size={13} />
             Explore Further
           </button>
+          {activeView === "chat" ? (
+            <button
+              type="button"
+              onClick={() => setSelectedPage(null)}
+              className="rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+              title="关闭页面预览"
+              aria-label="关闭页面预览"
+            >
+              <X size={14} />
+            </button>
+          ) : null}
         </div>
         {selectedPage.sources.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
@@ -450,7 +462,11 @@ export function PreviewPanel() {
       </div>
 
       {/* Content */}
-      <Group orientation="vertical" className="min-h-0 flex-1 overflow-hidden">
+      <Group
+        orientation="vertical"
+        resizeTargetMinimumSize={{ coarse: 28, fine: 20 }}
+        className="min-h-0 flex-1 overflow-hidden"
+      >
         <Panel
           id="wiki-preview-content"
           defaultSize={researchOpen ? "58%" : "100%"}
@@ -465,8 +481,8 @@ export function PreviewPanel() {
                 page={selectedPage}
                 onEdit={() => setEditingPage(true)}
                 onPractice={() => {
-                  setPendingTestPagePath(selectedPage.path)
-                  setActiveView("tests")
+                  setPendingChatPrompt(`请基于当前页面“${displayWikiTitle(selectedPage)}”出一道题测试我。`)
+                  setActiveView("chat")
                 }}
               />
             )}
@@ -474,7 +490,16 @@ export function PreviewPanel() {
         </Panel>
         {researchOpen && (
           <>
-            <Separator className="h-1.5 shrink-0 cursor-row-resize bg-[var(--border)] transition-colors hover:bg-[var(--primary)] data-[resize-handle-active]:bg-[var(--primary)]" />
+            <Separator
+              id="preview-research-separator"
+              aria-label="调整页面和深入探索区域高度"
+              className="group relative z-10 h-2.5 shrink-0 cursor-row-resize bg-transparent transition-colors hover:bg-[var(--primary)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--primary)] data-[separator=active]:bg-[var(--primary)]/10"
+            >
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 rounded bg-[var(--border)] transition-colors group-hover:bg-[var(--primary)] group-data-[separator=active]:bg-[var(--primary)]"
+              />
+            </Separator>
             <Panel id="wiki-preview-research" defaultSize="42%" minSize="24%" className="min-h-0 overflow-hidden">
               <ResearchPanel
                 page={selectedPage}
@@ -508,7 +533,7 @@ function PageBodyDispatch({ page, onEdit, onPractice }: { page: WikiPage; onEdit
           className="inline-flex items-center gap-1.5 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-2.5 py-1.5 text-xs text-[var(--primary)] hover:bg-[var(--primary)]/10"
         >
           <Sparkles size={12} />
-          Generate Questions for This Page
+          在聊天中出题
         </button>
         <button
           onClick={onEdit}

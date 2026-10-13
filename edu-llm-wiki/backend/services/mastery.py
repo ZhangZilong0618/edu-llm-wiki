@@ -251,6 +251,8 @@ def record_attempt(
     confidence: int | None = None,
     hint_ladder: int = 0,
     attempt_id: str | None = None,
+    idempotency_key: str | None = None,
+    idempotency_data: dict | None = None,
 ) -> dict:
     """Apply one attempt through BKT, SM-2, confidence, and misconception observers."""
     if max_score <= 0:
@@ -286,9 +288,41 @@ def record_attempt(
     due_at = _sr.next_due(_now(), sr_next.interval_seconds)
     tags = _err.classify_error(response, expected)
 
+    observer_result = {
+        "bkt": bkt_next,
+        "sr": {
+            "ef": sr_next.ease_factor,
+            "interval_seconds": sr_next.interval_seconds,
+            "reps": sr_next.repetitions,
+            "due_at": due_at,
+        },
+        "tags": tags,
+        "quality": quality,
+        "correct": correct,
+        "mastered": bkt_prior["p_known"] < 0.85 <= p_known,
+    }
+    idempotent_result = (
+        {**(idempotency_data or {}), "learning_update": observer_result}
+        if idempotency_key
+        else None
+    )
+
     with _connect(project_id) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if idempotency_key:
+                previous = conn.execute(
+                    """SELECT result_json FROM agent_attempts
+                       WHERE project_id=? AND user_id=? AND attempt_id=?""",
+                    (project_id, user_id, idempotency_key),
+                ).fetchone()
+                if previous:
+                    conn.execute("COMMIT")
+                    if previous[0]:
+                        import json
+
+                        return json.loads(previous[0])
+                    raise RuntimeError("idempotent attempt exists without a saved result")
             _upsert_bkt(conn, project_id, user_id, kc_id, bkt_next)
             _upsert_sr(
                 conn, project_id, user_id, kc_id,
@@ -309,6 +343,23 @@ def record_attempt(
                 _record_misconception(
                     conn, project_id, user_id, kc_id,
                     response, expected, tags, attempt_id,
+                )
+            if idempotency_key:
+                import json
+
+                data = idempotency_data or {}
+                conn.execute(
+                    """INSERT INTO agent_attempts(
+                        project_id,user_id,attempt_id,question_id,answer_json,score,
+                        max_score,feedback,result_json,created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        project_id, user_id, idempotency_key,
+                        data.get("question_id") or attempt_id,
+                        json.dumps(data.get("answer", response), ensure_ascii=False),
+                        score, max_score, data.get("feedback", ""),
+                        json.dumps(idempotent_result, ensure_ascii=False), _now(),
+                    ),
                 )
             conn.execute("COMMIT")
         except Exception:
@@ -342,19 +393,27 @@ def record_attempt(
         pass
     publish("mastery_change", project_id, **payload)
 
-    return {
-        "bkt": bkt_next,
-        "sr": {
-            "ef": sr_next.ease_factor,
-            "interval_seconds": sr_next.interval_seconds,
-            "reps": sr_next.repetitions,
-            "due_at": due_at,
-        },
-        "tags": tags,
-        "quality": quality,
-        "correct": correct,
-        "mastered": bkt_prior["p_known"] < 0.85 <= p_known,
-    }
+    # Keep the human-readable learner wiki in sync with graph-only test
+    # submissions as well as chat practice. This projection is deliberately
+    # best effort and has its own event ledger/idempotency key.
+    try:
+        from services.wiki_auto_update import handle_event
+
+        handle_event({
+            "event_type": "mastery_change",
+            "project_id": project_id,
+            "payload": {
+                **payload,
+                # Standalone tests reuse question ids (q1, q2) across
+                # sessions. Prefer the idempotency key so each completed
+                # attempt receives its own Wiki event.
+                "event_id": idempotency_key or attempt_id or f"mastery:{kc_id}:{due_at}",
+            },
+        })
+    except Exception:
+        pass
+
+    return idempotent_result or observer_result
 
 
 def _bkt_rows(project_id: str, user_id: str) -> list[dict]:
@@ -598,9 +657,31 @@ def queue_for_user(project_id: str, user_id: str, limit: int = 20) -> list[dict]
     """Return an enriched SM-2 review queue."""
     rows = _sr_due_today(project_id, user_id)[:limit]
     metadata = _node_metadata(project_id)
+    # A conversational card can create a valid KC/SR row before the graph
+    # index has been rebuilt. Recover its Wiki path from the server-owned card
+    # so a scoped Review request can still select the due item.
+    card_metadata: dict[str, dict[str, str]] = {}
+    if rows:
+        with _connect(project_id) as conn:
+            card_rows = conn.execute(
+                """SELECT kc_id,related_page,prompt FROM agent_questions
+                   WHERE project_id=? AND user_id=? AND related_page IS NOT NULL
+                   ORDER BY created_at DESC""",
+                (project_id, user_id),
+            ).fetchall()
+        for row in card_rows:
+            card_metadata.setdefault(row[0], {
+                "path": row[1] or "",
+                "title": row[2] or row[0],
+            })
     out: list[dict] = []
     for r in rows:
-        meta = metadata.get(r["kc_id"], {})
+        node_meta = metadata.get(r["kc_id"], {})
+        card_meta = card_metadata.get(r["kc_id"], {})
+        meta = {
+            "path": node_meta.get("path") or card_meta.get("path", ""),
+            "title": node_meta.get("title") or card_meta.get("title", ""),
+        }
         title = meta.get("title", r["kc_id"])
         out.append({
             **r,

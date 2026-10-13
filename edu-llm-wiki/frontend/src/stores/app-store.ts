@@ -1,11 +1,11 @@
 import { create } from "zustand"
 import type { SearchResult, WikiPage } from "@/types/wiki"
 
-export type ActiveView = "wiki" | "sources" | "search" | "graph" | "settings" | "learn" | "chat" | "tests"
+export type ActiveView = "wiki" | "sources" | "search" | "graph" | "settings" | "learn" | "chat"
 
 const PROJECT_STORAGE_KEY = "edu-llm-wiki.currentProject"
 const ACTIVE_VIEW_STORAGE_KEY = "edu-llm-wiki.activeView"
-const ACTIVE_VIEWS: ActiveView[] = ["wiki", "sources", "search", "graph", "settings", "learn", "chat", "tests"]
+const ACTIVE_VIEWS: ActiveView[] = ["wiki", "sources", "search", "graph", "settings", "learn", "chat"]
 
 function initialProject(): string {
   if (typeof window === "undefined") return "default"
@@ -55,10 +55,10 @@ interface AppState {
   setSelectedPage: (page: WikiPage | null) => void
   selectPage: (path: string) => Promise<void>
 
-  // Pending cross-view requests: a page-scoped "generate a test for this page"
-  // hop from PreviewPanel's footer button. Consumed by TestsView on mount.
-  pendingTestPagePath: string | null
-  setPendingTestPagePath: (path: string | null) => void
+  // One-shot prompt handoff into the unified chat composer. Page actions use
+  // this instead of opening a separate practice surface.
+  pendingChatPrompt: string | null
+  setPendingChatPrompt: (prompt: string | null) => void
 
   // Search
   searchQuery: string
@@ -207,8 +207,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   wikiPages: [],
   setWikiPages: (pages) => set({ wikiPages: pages }),
 
-  pendingTestPagePath: null,
-  setPendingTestPagePath: (path) => set({ pendingTestPagePath: path }),
+  pendingChatPrompt: null,
+  setPendingChatPrompt: (prompt) => set({ pendingChatPrompt: prompt }),
 
   conversations: [],
   setConversations: (list) => set({ conversations: list }),

@@ -1,11 +1,12 @@
 """API routes for wiki page CRUD."""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from models.wiki import WikiPageCreate, WikiPageUpdate
 from storage.wiki_store import (
     delete_wiki_page,
     ensure_dirs,
+    is_private_learner_page_path,
     list_wiki_pages,
     read_wiki_page,
     wiki_path,
@@ -13,6 +14,15 @@ from storage.wiki_store import (
 )
 
 router = APIRouter(prefix="/api/wiki", tags=["wiki"])
+
+
+def _require_admin_token(admin_token: str | None, x_admin_token: str | None) -> None:
+    """Protect maintenance projections when the deployment has a token."""
+    from config import settings
+
+    expected = (getattr(settings, "api_token", "") or "").strip()
+    if expected and (admin_token or x_admin_token or "").strip() != expected:
+        raise HTTPException(status_code=401, detail="admin_token missing or invalid")
 
 
 _FOLDER_BY_TYPE = {
@@ -37,7 +47,11 @@ async def get_page(relative_path: str, project_id: str = Query("default")):
     wikilink 通常只有标题不带目录(页面实际在 concepts/ 等子目录),
     去掉 .md 后缀与 #锚点 后做全库匹配;多个同名页取路径最浅的。
     """
+    if is_private_learner_page_path(relative_path):
+        raise HTTPException(status_code=404, detail="Page not found")
     page = read_wiki_page(relative_path, project_id=project_id)
+    if page and page.get("page_type") == "learner_profile":
+        raise HTTPException(status_code=404, detail="Page not found")
     if not page:
         stem = relative_path.split("#", 1)[0].strip().removesuffix(".md")
         # 防御双重编码:调用方若把已编码串再编码一次,服务端收到的字面量
@@ -63,7 +77,7 @@ async def get_page(relative_path: str, project_id: str = Query("default")):
                     candidates.append(str(meta.get("path")))
             for cand_path in sorted(candidates, key=len):
                 page = read_wiki_page(cand_path, project_id=project_id)
-                if page:
+                if page and page.get("page_type") != "learner_profile":
                     break
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
@@ -103,8 +117,10 @@ async def create_page(page: WikiPageCreate, project_id: str = Query("default")):
 @router.put("/pages/{relative_path:path}")
 async def update_page(relative_path: str, update: WikiPageUpdate, project_id: str = Query("default")):
     """Update an existing wiki page."""
+    if is_private_learner_page_path(relative_path):
+        raise HTTPException(status_code=404, detail="Page not found")
     existing = read_wiki_page(relative_path, project_id=project_id)
-    if not existing:
+    if not existing or existing.get("page_type") == "learner_profile":
         raise HTTPException(status_code=404, detail="Page not found")
 
     write_wiki_page(
@@ -129,6 +145,11 @@ async def update_page(relative_path: str, update: WikiPageUpdate, project_id: st
 @router.delete("/pages/{relative_path:path}")
 async def delete_page(relative_path: str, project_id: str = Query("default")):
     """Delete a wiki page."""
+    if is_private_learner_page_path(relative_path):
+        raise HTTPException(status_code=404, detail="Page not found")
+    existing = read_wiki_page(relative_path, project_id=project_id)
+    if existing and existing.get("page_type") == "learner_profile":
+        raise HTTPException(status_code=404, detail="Page not found")
     deleted = delete_wiki_page(relative_path, project_id=project_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Page not found")
@@ -168,3 +189,31 @@ async def update_schema(content: dict, project_id: str = Query("default")):
     p.write_text(content.get("content", ""), encoding="utf-8")
     return {"status": "updated"}
 
+
+@router.post("/system/learning-projection/rebuild")
+async def rebuild_learning_projection(
+    project_id: str = Query("default"),
+    include_failed: bool = Query(True),
+    admin_token: str | None = Query(None),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+):
+    """Recreate generated learning Wiki pages from the SQLite event ledger."""
+    _require_admin_token(admin_token, x_admin_token)
+    from services.wiki_auto_update import rebuild_projection
+
+    return rebuild_projection(project_id, include_failed=include_failed)
+
+
+@router.post("/system/learning-projection/replay-failed")
+async def replay_learning_projection(
+    project_id: str = Query("default"),
+    user_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    admin_token: str | None = Query(None),
+    x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
+):
+    """Retry failed or abandoned Wiki projection events."""
+    _require_admin_token(admin_token, x_admin_token)
+    from services.wiki_auto_update import replay_failed_events
+
+    return replay_failed_events(project_id, user_id=user_id, limit=limit)

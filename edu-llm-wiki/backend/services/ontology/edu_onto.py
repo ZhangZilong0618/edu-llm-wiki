@@ -318,6 +318,68 @@ _DATA_RANGE_BUILDERS = {
 # 构建函数
 # ---------------------------------------------------------------------------
 
+def _ensure_zh_label_property(onto) -> None:
+    """Ensure the annotation property used by the UI labels exists.
+
+    Databases created before the label annotation was introduced can still be
+    opened by :class:`ABox`; creating the property lazily keeps that migration
+    path safe.
+    """
+    prop = getattr(onto, "zhLabel", None)
+    if prop is not None:
+        return
+    with onto:
+        label_property = type("zhLabel", (AnnotationProperty,), {})
+        setattr(onto, "zhLabel", label_property)
+
+
+def _ensure_teaching_taxonomy(onto) -> None:
+    """Merge the v2 TeachingObject taxonomy into the v1 runtime ontology.
+
+    The ABox and reasoning services still use the v1 ontology IRI and class
+    names.  The Wiki directory, however, is generated from the v2 taxonomy.
+    This compatibility layer makes both views describe the same World: old
+    classes keep their existing parents and receive the corresponding v2 group
+    as an additional parent; missing v2 classes are created below that group.
+    The import is deliberately lazy so v1 remains importable in isolation.
+    """
+    from services.ontology_v2 import TEACHING_CLASS_GROUPS, validate_teaching_taxonomy
+
+    # Fail early if the source-of-truth mapping itself is malformed.  The
+    # ontology-free validation is independent of the v1/v2 IRI distinction.
+    validate_teaching_taxonomy()
+
+    with onto:
+        teaching_root = getattr(onto, "TeachingObject", None)
+        if not isinstance(teaching_root, type):
+            teaching_root = type("TeachingObject", (Thing,), {})
+            setattr(onto, "TeachingObject", teaching_root)
+
+        groups: dict[str, type] = {}
+        for group_name in TEACHING_CLASS_GROUPS:
+            group = getattr(onto, group_name, None)
+            if not isinstance(group, type):
+                group = type(group_name, (teaching_root,), {})
+                setattr(onto, group_name, group)
+            elif teaching_root not in group.is_a:
+                group.is_a.append(teaching_root)
+            groups[group_name] = group
+
+        for group_name, metadata in TEACHING_CLASS_GROUPS.items():
+            parent = groups[group_name]
+            for class_name in metadata["classes"]:
+                cls = getattr(onto, class_name, None)
+                if not isinstance(cls, type):
+                    cls = type(class_name, (parent,), {})
+                    setattr(onto, class_name, cls)
+                elif parent not in cls.is_a:
+                    # Multiple inheritance is intentional for the four v1
+                    # classes (Learner, LearningEvent, LearningObjective and
+                    # LearningPath): their old semantics remain intact while
+                    # the v2 directory gets a stable classification parent.
+                    cls.is_a.append(parent)
+
+
 def build_ontology(*, world: World | None = None):
     """程序化构建 EDU-ONTO TBox 并返回 owlready2 ontology 对象。
 
@@ -326,6 +388,18 @@ def build_ontology(*, world: World | None = None):
     """
     onto = (world or World()).get_ontology(BASE_IRI)
     if list(onto.classes()):  # 已构建(注意 classes() 返回生成器,不能直接作真值)
+        # ABox 世界可能是从旧版 ontology.sqlite 重载的。不能因为已有
+        # TBox 就直接返回，否则运行时会缺少新版 Wiki 目录所依赖的
+        # TeachingObject 分类。补齐分类后重建派生祖先表，保持旧推理
+        # 类和关系不变。
+        _ensure_teaching_taxonomy(onto)
+        _ensure_zh_label_property(onto)
+        _apply_labels_and_comments(onto)
+        for cls in onto.classes():
+            if Thing in cls.is_a:
+                cls.is_a.remove(Thing)
+        onto.edu_ancestor_map = _compute_ancestor_map(onto)
+        onto._edu_version = VERSION
         return onto
 
     with onto:
@@ -651,6 +725,9 @@ def build_ontology(*, world: World | None = None):
     with onto:
         class zhLabel(AnnotationProperty):
             pass
+    # v2 教学应用对象层与 v1 知识/推理层共用同一 World。追加分类只
+    # 增加父类关系和缺失类，不改动 v1 的类、属性、公理或推理规则。
+    _ensure_teaching_taxonomy(onto)
     _apply_labels_and_comments(onto)
 
     # ---- 清除显式 subClassOf owl:Thing ----
@@ -765,7 +842,13 @@ _INVERSE_PROPERTY_ZH = {
 
 
 def _apply_labels_and_comments(onto) -> None:
-    for name, (zh, comment) in _CLASS_LABELS.items():
+    # Keep v1's detailed descriptions while adding labels for every class
+    # introduced by the v2 TeachingObject taxonomy.  Import lazily to avoid a
+    # module cycle during startup.
+    from services.ontology_v2 import TEACHING_CLASS_LABELS
+
+    class_labels = {**_CLASS_LABELS, **TEACHING_CLASS_LABELS}
+    for name, (zh, comment) in class_labels.items():
         cls = getattr(onto, name, None)
         if cls is None:
             continue

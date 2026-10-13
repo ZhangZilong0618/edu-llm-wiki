@@ -76,6 +76,10 @@ export function ProjectSelector() {
       setError('Invalid characters: / \\ : * ? " < > |')
       return
     }
+    if (projects.some((project) => project.name === trimmed)) {
+      setError("A project with this name already exists")
+      return
+    }
     setError("")
     try {
       const proj = await api.createProject(trimmed)

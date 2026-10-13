@@ -18,6 +18,7 @@ from services.ontology import (
     RELATION_SPECS,
     build_ontology,
 )
+from services.ontology_v2 import TEACHING_CLASS_GROUPS
 from services.ontology.materialize import materialize_learner_view
 
 
@@ -44,7 +45,20 @@ def _sync(onto):
 def test_schema_locked():
     """类/属性/个体数量与预期一致 —— 本体 schema 漂移的守卫。"""
     onto = fresh_ontology()
-    assert len(list(onto.classes())) == 38
+    # Keep the schema guard focused on required names.  The TeachingObject
+    # taxonomy is intentionally extensible, so an exact class count would make
+    # adding a new directory entry a false regression.
+    class_names = {cls.name for cls in onto.classes()}
+    required_v1 = {
+        "KnowledgeAtom", "Fact", "Concept", "Principle", "Formula",
+        "Procedure", "KnowledgeClaim", "MisconceptionClaim", "Learner",
+        "MasteryAssertion", "LearningEvent", "AttemptEvent", "AssessmentItem",
+    }
+    required_taxonomy = {"TeachingObject"}
+    for group in TEACHING_CLASS_GROUPS.values():
+        required_taxonomy.update(group["classes"])
+    required_taxonomy.update(TEACHING_CLASS_GROUPS)
+    assert required_v1 | required_taxonomy <= class_names
     assert len(list(onto.object_properties())) == 34
     assert len(list(onto.data_properties())) == 12
     assert len(list(onto.individuals())) == 9  # 3 维度 + 6 认知层级

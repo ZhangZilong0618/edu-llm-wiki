@@ -11,6 +11,7 @@ Supports concurrent processing with configurable concurrency limit.
 import asyncio
 import json
 import re
+import threading
 from pathlib import Path
 
 from services.file_parser import parse_file
@@ -27,8 +28,19 @@ from storage.wiki_store import (
     sources_path,
     update_index,
     wiki_path,
+    list_wiki_pages,
     write_wiki_page,
 )
+
+# Core page generation is an optional enrichment step.  If the model stalls,
+# the deterministic page assembler below still writes usable pages from the
+# extracted plan instead of leaving an import request pending forever.
+LLM_PAGE_GENERATION_TIMEOUT_SECONDS = 20.0
+
+# A first import can trigger both the startup index builder and the per-import
+# sync worker.  Serialise those workers so a rebuild cannot drop a table while
+# another thread is inserting into it.
+_VECTOR_SYNC_LOCK = threading.Lock()
 
 
 def _strip_images(content: str) -> str:
@@ -75,18 +87,60 @@ async def _parse_source_content(source_path: Path, *, media_dir: str | None = No
 
 
 def _sync_vectors(pages: list[dict], *, project_id: str = "default"):
-    """Update vector index for newly created/updated pages."""
+    """Update vector index for newly created/updated pages.
+
+    Embedding model loading can take minutes on a first import.  Keep it out
+    of the ingest request: keyword/graph search and the Markdown pages are
+    immediately usable, while this daemon worker catches up in the background.
+    """
+    if not pages:
+        return
+
+    def run() -> None:
+        _sync_vectors_blocking(pages, project_id=project_id)
+
+    threading.Thread(
+        target=run,
+        name=f"wiki-vector-sync-{project_id}",
+        daemon=True,
+    ).start()
+
+
+def _sync_vectors_blocking(pages: list[dict], *, project_id: str = "default"):
+    """Perform vector updates in a worker thread; failures are non-fatal.
+
+    ``index_single_page`` expects an existing LanceDB table.  That assumption
+    is false for a project's first import, so create a complete index from the
+    current Wiki before attempting incremental updates.
+    """
     try:
-        from services.vector_store import index_single_page
-        for p in pages:
-            page_data = read_wiki_page(p["path"], project_id=project_id)
-            if page_data:
-                index_single_page({
-                    "path": p["path"],
-                    "title": p.get("title", ""),
-                    "type": p.get("page_type", p.get("type", "")),
-                    "content": page_data.get("content", ""),
-                }, project_id=project_id)
+        from services.vector_store import index_pages, index_single_page, table_exists
+
+        with _VECTOR_SYNC_LOCK:
+            if not table_exists(project_id=project_id):
+                all_pages: list[dict] = []
+                for listed in list_wiki_pages(project_id=project_id):
+                    page_data = read_wiki_page(listed["path"], project_id=project_id)
+                    if page_data:
+                        all_pages.append({
+                            "path": listed["path"],
+                            "title": listed.get("title", ""),
+                            "type": listed.get("type", ""),
+                            "content": page_data.get("content", ""),
+                        })
+                if all_pages:
+                    index_pages(all_pages, project_id=project_id)
+                return
+
+            for p in pages:
+                page_data = read_wiki_page(p["path"], project_id=project_id)
+                if page_data:
+                    index_single_page({
+                        "path": p["path"],
+                        "title": p.get("title", ""),
+                        "type": p.get("page_type", p.get("type", "")),
+                        "content": page_data.get("content", ""),
+                    }, project_id=project_id)
     except Exception as e:
         print(f"[ingest] Vector sync skipped: {e}")
 
@@ -798,15 +852,23 @@ async def _generate_core_page_batch(
         plan=json.dumps(batch, ensure_ascii=False, indent=2),
         language_instruction=language_instruction(),
     )
-    raw = await chat_complete(
-        system_prompt=(
-            "You are an expert educational wiki writer. "
-            "Output only a valid JSON array."
-        ),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=16_000,
-    )
+    try:
+        raw = await asyncio.wait_for(
+            chat_complete(
+                system_prompt=(
+                    "You are an expert educational wiki writer. "
+                    "Output only a valid JSON array."
+                ),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=16_000,
+            ),
+            timeout=LLM_PAGE_GENERATION_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        return []
+    except Exception:
+        return []
     try:
         pages = await load_llm_json(raw, expected="array")
     except Exception:
