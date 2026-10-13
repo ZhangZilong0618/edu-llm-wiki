@@ -8,8 +8,7 @@ import re
 import shutil
 import tempfile
 from datetime import datetime
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
 
 import yaml
@@ -64,7 +63,25 @@ def _teaching_groups() -> dict[str, dict[str, object]]:
     }
 
 
-def _ensure_teaching_index(wp: Path) -> None:
+def _retire_legacy_teaching_stub(body: str) -> str:
+    """Drop the pre-automation stub line that invited manual maintenance.
+
+    Pages created before system-managed semantics carried the sentence
+    "页面内容可由教师继续补充……". Taxonomy sync retires exactly that line;
+    any other authored body content is left in place.
+    """
+    legacy = "页面内容可由教师继续补充；系统只维护结构化元数据和事件投影。"
+    if legacy not in body:
+        return body
+    return re.sub(
+        r"(?m)^\s*(?:本页对应 EDU-ONTO v2 的 `[^`]+` 类。)?\s*"
+        + re.escape(legacy) + r"\s*$\n?",
+        "",
+        body,
+    ).rstrip() + "\n"
+
+
+def _ensure_teaching_index(wp: Path, project_id: str = "default") -> None:
     """Materialize the ontology taxonomy as stable wiki directory pages."""
     teaching = wp / "teaching"
     teaching.mkdir(parents=True, exist_ok=True)
@@ -131,9 +148,10 @@ def _ensure_teaching_index(wp: Path) -> None:
         write_or_sync_group_page(page, group_name, label, classes)
         # One stable page per ontology class lets the assistant attach
         # projections to a semantic object without putting generated text in
-        # authored knowledge pages.  Existing bodies are left intact so a
-        # teacher can enrich or replace the generated stub; only the
-        # ontology-owned frontmatter is synchronized below.
+        # authored knowledge pages. The body is system-maintained: taxonomy
+        # sync renders the ontology semantics, event projections come from
+        # the ledger, and legacy "teacher-supplemented" stubs are retired.
+        # Authored frontmatter keys outside the ontology-owned set survive.
         for class_name in classes:
             class_page = directory / f"{class_name}.md"
             label = labels.get(class_name, class_name)
@@ -147,18 +165,19 @@ def _ensure_teaching_index(wp: Path) -> None:
                         "auto_managed": True,
                     })
                     + f"\n# {label}\n\n"
-                    + f"本页对应 EDU-ONTO v2 的 `{class_name}` 类。\n\n"
-                    + "页面内容可由教师继续补充；系统只维护结构化元数据和事件投影。\n",
+                    + f"本页对应 EDU-ONTO v2 的 `{class_name}` 类,由系统自动维护:\n"
+                    + "本体定义、运行数据与学习事件投影全自动渲染,无需人工编辑。\n",
                     encoding="utf-8",
                 )
             else:
-                # Keep authored Markdown intact while refreshing the
-                # ontology-owned frontmatter.  This matters when a class is
-                # renamed or moved between TeachingObject groups: the page
-                # path is materialized from the new taxonomy, and its
-                # metadata must not continue to advertise the old group.
+                # Synchronize the ontology-owned frontmatter.  This matters
+                # when a class is renamed or moved between TeachingObject
+                # groups: the page path is materialized from the new taxonomy,
+                # and its metadata must not continue to advertise the old
+                # group.
                 raw = class_page.read_text(encoding="utf-8")
                 existing_fm, existing_body = parse_frontmatter(raw)
+                existing_body = _retire_legacy_teaching_stub(existing_body)
                 existing_fm.update({
                     "title": label,
                     "type": "teaching_object",
@@ -170,6 +189,14 @@ def _ensure_teaching_index(wp: Path) -> None:
                     make_frontmatter(existing_fm) + "\n" + existing_body.strip() + "\n",
                     encoding="utf-8",
                 )
+            # System-maintained semantics: ontology definition plus
+            # operational statistics, re-rendered on every taxonomy sync.
+            try:
+                from services.teaching_semantic import refresh_class_page
+
+                refresh_class_page(str(project_id), class_name)
+            except Exception:
+                pass
         rows.append(f"- [{str(group['zh'])}](teaching/{folder}/index.md) (`{group_name}`)")
     root = teaching / "index.md"
     if root.exists():
@@ -249,12 +276,15 @@ def _migrate_managed_teaching_pages(
             body,
             flags=re.DOTALL,
         ).strip()
+        # Legacy bodies are pure stubs when only the pre-automation sentences
+        # remain; those carry nothing to migrate. The retire helper drops the
+        # stub sentence itself, so authored content still migrates intact.
+        migrated_body = _retire_legacy_teaching_stub(migrated_body).strip()
         generated_stub = (
             f"# {labels[class_name]}\n\n"
-            f"本页对应 EDU-ONTO v2 的 `{class_name}` 类。\n\n"
-            "页面内容可由教师继续补充；系统只维护结构化元数据和事件投影。"
-        )
-        if migrated_body == generated_stub:
+            f"本页对应 EDU-ONTO v2 的 `{class_name}` 类。"
+        ).strip()
+        if migrated_body == generated_stub or not migrated_body:
             migrated_body = ""
         migration_marker = f"<!-- ontology-migration:{class_name} -->"
         if migrated_body and migration_marker not in target_body:
@@ -290,7 +320,7 @@ def ensure_dirs(project_id: str = "default"):
     for d in dirs:
         (wp / d).mkdir(parents=True, exist_ok=True)
     sources_path(project_id).mkdir(parents=True, exist_ok=True)
-    _ensure_teaching_index(wp)
+    _ensure_teaching_index(wp, project_id=project_id)
 
     # Create purpose.md if not exists
     purpose = wp / "purpose.md"

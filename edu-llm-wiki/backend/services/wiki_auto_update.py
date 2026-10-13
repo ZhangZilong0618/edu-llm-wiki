@@ -16,10 +16,11 @@ import os
 import re
 import threading
 from collections import defaultdict
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from services.graph_store import connect
 from storage.wiki_store import (
@@ -975,6 +976,12 @@ def _render_event(
         pages.append(str(payload["related_page"]))
     pages.extend(_teaching_page_paths(_TEACHING_CLASSES.get(event_type, ())))
     for page in dict.fromkeys(pages):
+        if not page.startswith("teaching/"):
+            # Knowledge pages stay clean: learning-event projections live on
+            # the TeachingObject class pages and the learner's own activity
+            # pages, never on authored knowledge content. The cited/
+            # related-page entries are routed to their KC node ids instead.
+            continue
         _update_page_summary(project_id, page, line)
         _update_semantic_snapshot(
             project_id,
@@ -992,6 +999,19 @@ def _render_event(
             event_id,
             at=event_at,
         )
+
+    # System-maintained class semantics: an event changes the operational
+    # statistics of every TeachingObject class it routes to, so re-render
+    # those pages' ontology-semantic blocks here. Best-effort; a rendering
+    # failure must never block the event projection.
+    try:
+        from services.teaching_semantic import refresh_classes
+
+        routed = [ref.split("/", 1)[1] for ref in _TEACHING_CLASSES.get(event_type, ())]
+        if routed:
+            refresh_classes(project_id, routed)
+    except Exception:
+        pass
 
 
 def _clear_generated_projection(project_id: str) -> None:
@@ -1048,6 +1068,51 @@ def _clear_generated_projection(project_id: str) -> None:
                 path.unlink(missing_ok=True)
 
 
+def strip_projection_blocks_from_knowledge_pages(project_id: str) -> int:
+    """Remove learning-event projection blocks from authored knowledge pages.
+
+    Knowledge-unit pages (concepts/facts/formulas/principles/…) stay clean:
+    event projections belong on ``teaching/`` class pages and the learner's
+    own ``learning/`` pages. New events no longer write these blocks onto
+    knowledge pages; this pass retires the ones written by older versions.
+    Returns the number of cleaned pages.
+    """
+    root = wiki_path(project_id).resolve()
+    cleaned = 0
+    for path in root.rglob("*.md"):
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith("teaching/") or rel.startswith("learning/"):
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(raw)
+        except (OSError, UnicodeError, ValueError):
+            continue
+        if not any(marker in body for marker in (_START_MARK, _SEMANTIC_START, _INSIGHT_START)):
+            continue
+        body = re.sub(
+            rf"\n?{re.escape(_START_MARK)}.*?{re.escape(_END_MARK)}\n?",
+            "\n",
+            body,
+            flags=re.DOTALL,
+        )
+        body = re.sub(
+            rf"\n?{re.escape(_SEMANTIC_START)}.*?{re.escape(_SEMANTIC_END)}\n?",
+            "\n",
+            body,
+            flags=re.DOTALL,
+        )
+        body = re.sub(
+            rf"\n?{re.escape(_INSIGHT_START)}.*?{re.escape(_INSIGHT_END)}\n?",
+            "\n",
+            body,
+            flags=re.DOTALL,
+        )
+        _atomic_write(path, make_frontmatter(fm) + "\n" + body.strip() + "\n")
+        cleaned += 1
+    return cleaned
+
+
 def rebuild_projection(
     project_id: str = "default",
     *,
@@ -1065,41 +1130,40 @@ def rebuild_projection(
     ensure_dirs(project_id=project_id)
     statuses = ("complete", "failed", "pending") if include_failed else ("complete",)
     placeholders = ",".join("?" for _ in statuses)
-    with _LOCKS[f"{project_id}:__rebuild__"]:
-        with _file_lock(wiki_path(project_id) / ".wiki-auto-update.lock"):
-            with connect(project_id) as conn:
-                # Older projects predate the retry ledger columns.  Apply the
-                # additive migration before filtering by projection status so
-                # a rebuild remains safe when the user switches projects.
-                _ensure_ledger_schema(conn)
-                rows = conn.execute(
-                    f"""SELECT user_id,event_id,event_type,payload_json,created_at
+    with _LOCKS[f"{project_id}:__rebuild__"], _file_lock(wiki_path(project_id) / ".wiki-auto-update.lock"):
+        with connect(project_id) as conn:
+            # Older projects predate the retry ledger columns.  Apply the
+            # additive migration before filtering by projection status so
+            # a rebuild remains safe when the user switches projects.
+            _ensure_ledger_schema(conn)
+            rows = conn.execute(
+                f"""SELECT user_id,event_id,event_type,payload_json,created_at
                         FROM wiki_update_events
                         WHERE project_id=? AND projection_status IN ({placeholders})
                         ORDER BY created_at ASC,event_id ASC""",
-                    (project_id, *statuses),
-                ).fetchall()
-            _clear_generated_projection(project_id)
-            rendered = 0
-            skipped = 0
-            for row in rows:
-                try:
-                    payload = json.loads(row[3] or "{}")
-                    if not isinstance(payload, dict):
-                        raise ValueError("payload is not an object")
-                    _render_event(
-                        project_id,
-                        str(row[0] or "default"),
-                        str(row[2]),
-                        payload,
-                        str(row[1]),
-                        at=float(row[4]),
-                    )
-                    rendered += 1
-                except (ValueError, TypeError, OSError, UnicodeError, KeyError):
-                    # One malformed historical row must not prevent the rest
-                    # of the project from being reconstructed.
-                    skipped += 1
+                (project_id, *statuses),
+            ).fetchall()
+        _clear_generated_projection(project_id)
+        rendered = 0
+        skipped = 0
+        for row in rows:
+            try:
+                payload = json.loads(row[3] or "{}")
+                if not isinstance(payload, dict):
+                    raise ValueError("payload is not an object")
+                _render_event(
+                    project_id,
+                    str(row[0] or "default"),
+                    str(row[2]),
+                    payload,
+                    str(row[1]),
+                    at=float(row[4]),
+                )
+                rendered += 1
+            except (ValueError, TypeError, OSError, UnicodeError, KeyError):
+                # One malformed historical row must not prevent the rest
+                # of the project from being reconstructed.
+                skipped += 1
     return {"status": "rebuilt", "events": rendered, "skipped": skipped}
 
 
@@ -1119,57 +1183,56 @@ def replay_failed_events(
         user_clause = " AND user_id=?"
         params.append(str(user_id))
     params.append(limit)
-    with _LOCKS[f"{project_id}:__replay__"]:
-        with _file_lock(wiki_path(project_id) / ".wiki-auto-update.lock"):
-            with connect(project_id) as conn:
-                # The replay endpoint is also used for projects created by an
-                # earlier release, where the status/lease columns do not yet
-                # exist.  The migration is additive and idempotent.
-                _ensure_ledger_schema(conn)
-                rows = conn.execute(
-                    """SELECT user_id,event_id,event_type,payload_json,created_at
+    with _LOCKS[f"{project_id}:__replay__"], _file_lock(wiki_path(project_id) / ".wiki-auto-update.lock"):
+        with connect(project_id) as conn:
+            # The replay endpoint is also used for projects created by an
+            # earlier release, where the status/lease columns do not yet
+            # exist.  The migration is additive and idempotent.
+            _ensure_ledger_schema(conn)
+            rows = conn.execute(
+                """SELECT user_id,event_id,event_type,payload_json,created_at
                        FROM wiki_update_events
                        WHERE project_id=?"""
-                    + user_clause
-                    + " AND (projection_status='failed' OR "
-                    + "(projection_status='pending' AND "
-                    + "(claimed_at IS NULL OR claimed_at < ?)))"
-                    + " ORDER BY created_at ASC LIMIT ?",
-                    tuple(params[:-1] + [_now() - _CLAIM_LEASE, params[-1]]),
-                ).fetchall()
-            replayed = 0
-            skipped = 0
-            for row in rows:
-                try:
-                    payload = json.loads(row[3] or "{}")
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    skipped += 1
-                    continue
-                if not isinstance(payload, dict):
-                    skipped += 1
-                    continue
-                try:
-                    with connect(project_id) as conn:
-                        conn.execute(
-                            """UPDATE wiki_update_events
+                + user_clause
+                + " AND (projection_status='failed' OR "
+                + "(projection_status='pending' AND "
+                + "(claimed_at IS NULL OR claimed_at < ?)))"
+                + " ORDER BY created_at ASC LIMIT ?",
+                tuple(params[:-1] + [_now() - _CLAIM_LEASE, params[-1]]),
+            ).fetchall()
+        replayed = 0
+        skipped = 0
+        for row in rows:
+            try:
+                payload = json.loads(row[3] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                skipped += 1
+                continue
+            if not isinstance(payload, dict):
+                skipped += 1
+                continue
+            try:
+                with connect(project_id) as conn:
+                    conn.execute(
+                        """UPDATE wiki_update_events
                                SET projection_status='pending',
                                    attempt_count=COALESCE(attempt_count,0)+1,
                                    claimed_at=?, last_error=NULL
                                WHERE project_id=? AND user_id=? AND event_id=?""",
-                            (_now(), project_id, str(row[0] or "default"), str(row[1])),
-                        )
-                    _render_event(
-                        project_id,
-                        str(row[0] or "default"),
-                        str(row[2]),
-                        payload,
-                        str(row[1]),
-                        at=float(row[4]),
+                        (_now(), project_id, str(row[0] or "default"), str(row[1])),
                     )
-                    _finish(project_id, str(row[0] or "default"), str(row[1]))
-                    replayed += 1
-                except Exception as error:
-                    _fail(project_id, str(row[0] or "default"), str(row[1]), error)
+                _render_event(
+                    project_id,
+                    str(row[0] or "default"),
+                    str(row[2]),
+                    payload,
+                    str(row[1]),
+                    at=float(row[4]),
+                )
+                _finish(project_id, str(row[0] or "default"), str(row[1]))
+                replayed += 1
+            except Exception as error:
+                _fail(project_id, str(row[0] or "default"), str(row[1]), error)
     return {"status": "replayed", "events": replayed, "skipped": skipped}
 
 
